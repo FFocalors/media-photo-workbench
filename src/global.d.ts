@@ -7,7 +7,7 @@ interface MediaPhotoWorkbenchBridge {
   platform: string;
   apiBaseUrl: string;
   selectDirectory: () => Promise<string | null>;
-  openPath: (path: string) => Promise<void>;
+  openPath: (path: string) => Promise<string>;
 }
 
 interface Window {

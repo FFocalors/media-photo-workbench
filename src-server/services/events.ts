@@ -4,6 +4,7 @@ import fs from "fs-extra";
 import { getDatabase } from "../db/database";
 import { getConfig } from "../config/config";
 import { getLogger } from "../utils/logger";
+import { checkRepository } from "./repository";
 
 export interface EventRow {
   id: string;
@@ -35,17 +36,17 @@ export interface UpdateEventInput {
  * 活动仓库工作目录结构（依据 AGENTS.md 定义）
  */
 const EVENT_SUBDIRS = [
-  "original/host_import",
-  "original/client_upload",
-  "original/remote_import",
-  "thumbs",
-  "previews",
-  "edit_queue",
-  "edited",
-  "export/publish",
-  "export/compressed",
-  "export/zip",
-  "manifests"
+  "原图/主机导入",
+  "原图/客户端上传",
+  "原图/远程导入",
+  "缩略图",
+  "预览图",
+  "待修图",
+  "已修图",
+  "导出/发布图",
+  "导出/压缩图",
+  "导出/压缩包",
+  "清单"
 ];
 
 /**
@@ -75,21 +76,25 @@ function nowTimestamp(): string {
 
 /**
  * 在仓库中为活动创建工作目录结构。
- * 如果仓库路径未设置或不存在，跳过。
+ * 仓库未配置或不可写时直接抛错，避免创建没有物理工作区的活动记录。
  */
 function ensureEventWorkingDirs(eventSlug: string): { created: boolean; path: string } {
   const logger = getLogger();
   const config = getConfig();
   const repoPath = config.repository.path;
 
-  if (!repoPath) {
-    logger.info("仓库路径未设置，跳过创建活动工作目录");
-    return { created: false, path: "" };
+  const repositoryStatus = checkRepository(repoPath);
+  if (!repositoryStatus.path) {
+    throw { code: "REPOSITORY_NOT_READY", message: "请先在系统设置中配置仓库路径" };
   }
-
-  if (!fs.existsSync(repoPath)) {
-    logger.warn({ repoPath }, "仓库路径不存在，跳过创建活动工作目录");
-    return { created: false, path: "" };
+  if (!repositoryStatus.exists) {
+    throw { code: "REPOSITORY_NOT_READY", message: `仓库路径不存在：${repositoryStatus.path}` };
+  }
+  if (!repositoryStatus.readable) {
+    throw { code: "REPOSITORY_NOT_READY", message: `仓库路径不可读：${repositoryStatus.path}` };
+  }
+  if (!repositoryStatus.writable) {
+    throw { code: "REPOSITORY_NOT_READY", message: `仓库路径不可写：${repositoryStatus.path}` };
   }
 
   const eventDir = path.join(repoPath, "working", eventSlug);
@@ -102,7 +107,7 @@ function ensureEventWorkingDirs(eventSlug: string): { created: boolean; path: st
     return { created: true, path: eventDir };
   } catch (err) {
     logger.error({ err, eventDir }, "创建活动工作目录失败");
-    return { created: false, path: eventDir };
+    throw { code: "CREATE_EVENT_DIR_FAILED", message: `创建活动工作目录失败：${eventDir}` };
   }
 }
 
@@ -141,15 +146,15 @@ export function createEvent(input: CreateEventInput): { event: EventRow; working
     throw { code: "SLUG_CONFLICT", message: `slug "${slug}" 已被使用` };
   }
 
-  db.prepare(`
-    INSERT INTO events (id, name, slug, date, location, status, total_images, selected_images, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, 'draft', 0, 0, ?, ?)
-  `).run(id, input.name, slug, input.date, input.location || "", now, now);
-
-  logger.info({ id, slug }, "新活动已创建");
-
   // 尝试创建工作目录
   const workingDir = ensureEventWorkingDirs(slug);
+
+  db.prepare(`
+    INSERT INTO events (id, name, slug, date, location, status, total_images, selected_images, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, 'active', 0, 0, ?, ?)
+  `).run(id, input.name, slug, input.date, input.location || "", now, now);
+
+  logger.info({ id, slug, workingDir }, "新活动已创建");
 
   const event = getEventById(id)!;
   return { event, workingDir };

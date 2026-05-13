@@ -27,7 +27,7 @@ Media Photo Workbench 是面向校园融媒体中心、新闻中心及影像部�
 - 统一前后端通信规范（严格的 `{ok, data, error}` 响应处理）。
 - SQLite 数据库与 8 张核心结构表的初始化，启用 WAL 高性能模式。
 - 基于本地真实数据库的活动 (Events) CRUD 管理。
-- 创建新活动时，自动在宿主机本地进行物理工作区（Repository）的挂载及标准化目录树构建。
+- 创建新活动时，自动在宿主机本地进行物理工作区（Repository）的挂载及中文标准目录树构建。
 - `config.json` 系统参数配置与 `pino` 日志系统接入。
 
 ## 技术栈
@@ -91,6 +91,7 @@ MediaPhotoWorkbench/
 ├── API_SPEC.md         # 后端 API 接口设计文档
 ├── DATABASE_SCHEMA.md  # 数据库结构与枚举值参考文档
 ├── DEVELOPMENT_LOG.md  # 开发阶段记录日志
+├── ROADMAP.md          # 阶段路线图
 └── CHANGELOG.md        # 语义化版本变更日志
 ```
 

@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS events (
   slug          TEXT NOT NULL UNIQUE,
   date          TEXT NOT NULL,
   location      TEXT NOT NULL DEFAULT '',
-  status        TEXT NOT NULL DEFAULT 'draft'
+  status        TEXT NOT NULL DEFAULT 'active'
                 CHECK (status IN ('draft', 'active', 'reviewing', 'archived', 'deleted')),
   total_images  INTEGER NOT NULL DEFAULT 0,
   selected_images INTEGER NOT NULL DEFAULT 0,

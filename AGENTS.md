@@ -42,21 +42,21 @@ MediaPhotoWorkbench/
 ```text
 MediaPhotoWorkspace/
 ├── working/event_slug/
-│   ├── original/host_import/
-│   ├── original/client_upload/
-│   ├── original/remote_import/
-│   ├── thumbs/
-│   ├── previews/
-│   ├── edit_queue/
-│   ├── edited/
-│   ├── export/publish/
-│   ├── export/compressed/
-│   ├── export/zip/
-│   └── manifests/
+│   ├── 原图/主机导入/
+│   ├── 原图/客户端上传/
+│   ├── 原图/远程导入/
+│   ├── 缩略图/
+│   ├── 预览图/
+│   ├── 待修图/
+│   ├── 已修图/
+│   ├── 导出/发布图/
+│   ├── 导出/压缩图/
+│   ├── 导出/压缩包/
+│   └── 清单/
 ├── archive/event_slug/
-│   ├── original/
-│   ├── edited/
-│   ├── export/
+│   ├── 原图/
+│   ├── 已修图/
+│   ├── 导出/
 │   └── metadata/event.db
 ├── temp/
 └── logs/
@@ -200,7 +200,7 @@ archive-updated
 
 已修图回传优先按 `edit_manifest.json` 匹配，失败时按文件名兜底。成功后写入 `edited_path`，状态改为 `edited`，记录日志并广播。
 
-禁止覆盖原图，已修图单独保存到 `edited` 目录。
+禁止覆盖原图，已修图单独保存到 `已修图` 目录；数据库字段仍使用 `edited_path` 记录路径。
 
 下载是用户个人取文件；导出是系统生成正式结果。两者必须分开记录日志。
 

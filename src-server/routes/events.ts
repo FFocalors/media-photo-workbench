@@ -53,6 +53,8 @@ router.post("/", (req, res) => {
   } catch (err: any) {
     if (err?.code === "SLUG_CONFLICT") {
       sendError(res, err.code, err.message, 409);
+    } else if (err?.code === "REPOSITORY_NOT_READY" || err?.code === "CREATE_EVENT_DIR_FAILED") {
+      sendError(res, err.code, err.message, 400);
     } else {
       logger.error({ err }, "创建活动失败");
       sendError(res, "CREATE_EVENT_FAILED", "创建活动失败", 500);

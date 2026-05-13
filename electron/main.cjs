@@ -150,8 +150,8 @@ app.whenReady().then(async () => {
     }
   });
 
-  ipcMain.handle("shell:open-path", async (event, fullPath) => {
-    await shell.openPath(fullPath);
+  ipcMain.handle("shell:open-path", async (_event, fullPath) => {
+    return shell.openPath(fullPath);
   });
 
   // 启动后端服务

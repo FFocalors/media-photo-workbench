@@ -66,7 +66,8 @@
     "ok": true,
     "data": {
       "server": { "port": 3030 },
-      "repository": { "path": "D:\\photos" }
+      "repository": { "path": "D:\\photos" },
+      "database": { "path": "D:\\project\\Image Workspace\\data\\app.db" }
     },
     "error": null
   }
@@ -74,11 +75,10 @@
 - **备注**：无
 
 ### [已实现] 检查仓库路径
-- **用途**：验证特定路径作为图片仓库的可行性（是否存在、可读写）。
+- **用途**：验证当前已保存仓库路径的可行性（是否存在、可读写）。
 - **请求方法**：`GET`
 - **路径**：`/api/repository/check`
-- **请求参数示例**：
-  - `path` (Query): 需要检查的绝对路径，例如 `?path=D:\photos`
+- **请求参数示例**：无
 - **响应示例**：
   ```json
   {
@@ -87,13 +87,13 @@
       "exists": true,
       "readable": true,
       "writable": true,
-      "freeSpace": 1024000000,
+      "freeSpace": null,
       "path": "D:\\photos"
     },
     "error": null
   }
   ```
-- **备注**：无
+- **备注**：当前实现只检查 `config/config.json` 中已保存的 `repository.path`。Windows 剩余空间暂返回 `null`。
 
 ### [已实现] 更新仓库路径
 - **用途**：修改系统使用的全局图片仓库路径。
@@ -109,11 +109,21 @@
   ```json
   {
     "ok": true,
-    "data": { "success": true },
+    "data": {
+      "saved": true,
+      "exists": true,
+      "readable": true,
+      "writable": true,
+      "freeSpace": null,
+      "path": "D:\\new_photos_folder"
+    },
     "error": null
   }
   ```
-- **备注**：无
+- **错误码**：
+  - `INVALID_PATH`：`path` 不是字符串或为空字符串。
+  - `SAVE_CONFIG_FAILED`：配置文件写入失败。
+- **备注**：该接口会保存 trim 后的路径并返回检查结果，但不会自动创建仓库根目录。
 
 ---
 
@@ -132,7 +142,7 @@
     "error": null
   }
   ```
-- **备注**：目前只返回空数组作为占位。
+- **备注**：返回 SQLite 中真实活动数据；支持 `?status=active|archived|draft|reviewing|all`。
 
 ### [已实现] 创建新活动
 - **用途**：新建一个活动，并在本地仓库下生成对应的目录结构。
@@ -144,18 +154,57 @@
     "name": "2026毕业典礼",
     "slug": "2026-graduation",
     "date": "2026-06-20",
-    "photographers": ["张三", "李四"]
+    "location": "学校礼堂"
   }
   ```
 - **响应示例**：
   ```json
   {
     "ok": true,
-    "data": { "id": "evt_xxx", "slug": "2026-graduation" },
+    "data": {
+      "event": {
+        "id": "evt_xxx",
+        "name": "2026毕业典礼",
+        "slug": "2026-graduation",
+        "date": "2026-06-20",
+        "location": "学校礼堂",
+        "status": "active",
+        "total_images": 0,
+        "selected_images": 0,
+        "created_at": "2026-05-13 18:49:07",
+        "updated_at": "2026-05-13 18:49:07"
+      },
+      "workingDir": {
+        "created": true,
+        "path": "E:\\MediaPhotoWorkspace\\working\\2026-graduation"
+      }
+    },
     "error": null
   }
   ```
-- **备注**：无
+- **错误码**：
+  - `MISSING_NAME`：活动名称为空。
+  - `MISSING_DATE`：活动日期为空。
+  - `SLUG_CONFLICT`：slug 已存在。
+  - `REPOSITORY_NOT_READY`：仓库路径未配置、不存在、不可读或不可写。
+  - `CREATE_EVENT_DIR_FAILED`：活动工作目录创建失败。
+- **备注**：当前实现会先创建完整 `working/{event_slug}` 中文业务目录，再写入活动记录。新建活动默认状态为 `active`。
+
+创建的活动业务目录为：
+
+```text
+working/{event_slug}/原图/主机导入
+working/{event_slug}/原图/客户端上传
+working/{event_slug}/原图/远程导入
+working/{event_slug}/缩略图
+working/{event_slug}/预览图
+working/{event_slug}/待修图
+working/{event_slug}/已修图
+working/{event_slug}/导出/发布图
+working/{event_slug}/导出/压缩图
+working/{event_slug}/导出/压缩包
+working/{event_slug}/清单
+```
 
 ### [已实现] 获取活动详情
 - **用途**：获取单个活动的信息及统计数据。
@@ -408,7 +457,7 @@
 ## 九、Export 导出发布
 
 ### [计划中] 触发系统导出
-- **用途**：将满足发布条件的图片，按配置规格批量压缩导出到 publish 目录。
+- **用途**：将满足发布条件的图片，按配置规格批量压缩导出到 `导出/发布图` 目录。
 - **请求方法**：`POST`
 - **路径**：`/api/events/:eventId/export`
 - **请求参数示例**：

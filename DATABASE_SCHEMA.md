@@ -30,7 +30,7 @@
 | `slug` | TEXT | URL友好标识（拼音/英文） | NOT NULL, UNIQUE |
 | `date` | TEXT | 活动日期 (YYYY-MM-DD) | NOT NULL |
 | `location` | TEXT | 拍摄地点 | NOT NULL, DEFAULT '' |
-| `status` | TEXT | 活动状态 | NOT NULL, DEFAULT 'draft', 取值见枚举 |
+| `status` | TEXT | 活动状态 | NOT NULL, DEFAULT 'active', 取值见枚举 |
 | `total_images` | INTEGER | 图片总数统计 | NOT NULL, DEFAULT 0 |
 | `selected_images`| INTEGER | 选入修图或发布的数量 | NOT NULL, DEFAULT 0 |
 | `created_at` | TEXT | 创建时间 | NOT NULL, DEFAULT `now` |
@@ -147,11 +147,13 @@
 ## 核心枚举值参考
 
 ### `events.status`
-- `draft`：草稿/未开始
-- `active`：进行中（可导入、上传）
+- `draft`：草稿/未开始（保留状态，当前新建活动不默认使用）
+- `active`：进行中（新建活动默认状态，可导入、上传）
 - `reviewing`：选片修图流转中
 - `archived`：已归档完毕（主库中可能已清理至 archived_events）
 - `deleted`：逻辑删除
+
+> 当前实现约束：创建活动前必须已经保存可读写的仓库路径。后端会先创建 `working/{event_slug}` 中文业务目录结构，再向 `events` 表写入活动记录，避免出现没有物理工作区的活动。
 
 ### `images.source_type` (对应 `images.source`)
 - `host_import`：主机端直接扫描本地文件夹导入

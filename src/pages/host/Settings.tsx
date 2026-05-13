@@ -1,8 +1,8 @@
-import { CheckCircle2, FolderOpen, HardDrive, Info, Keyboard, Network, RotateCcw, Save, AlertTriangle, XCircle } from "lucide-react";
+import { FolderOpen, HardDrive, Info, Keyboard, Network, RotateCcw, Save } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Notice, StatusPill } from "../../components/ui/States";
 import { cn } from "../../lib/cn";
-import { fetchSettings, updateRepositoryPath, checkRepository, type RepositoryCheckResponse } from "../../lib/api";
+import { fetchSettings, updateRepositoryPath, checkRepository, type RepositoryCheckData } from "../../lib/api";
 
 type SettingsTab = "general" | "repository" | "network" | "import" | "export" | "shortcuts" | "about";
 
@@ -18,75 +18,137 @@ const tabs: Array<{ id: SettingsTab; label: string }> = [
 
 export function SettingsPage() {
   const [activeTab, setActiveTab] = useState<SettingsTab>("repository");
-  const [repositoryPath, setRepositoryPath] = useState("D:\\MediaPhoto\\Repository");
+  const [repositoryPath, setRepositoryPath] = useState("");
+  const [savedRepositoryPath, setSavedRepositoryPath] = useState("");
   const [databasePath, setDatabasePath] = useState("./data/app.db");
   const [port, setPort] = useState("3030");
   const [jpegQuality, setJpegQuality] = useState(90);
   const [keepDuplicates, setKeepDuplicates] = useState(false);
   const [checkResult, setCheckResult] = useState<"idle" | "loading" | "ok" | "error">("idle");
-  const [repoCheck, setRepoCheck] = useState<RepositoryCheckResponse | null>(null);
+  const [repoCheck, setRepoCheck] = useState<RepositoryCheckData | null>(null);
   const [apiAvailable, setApiAvailable] = useState<boolean | null>(null);
   const [saving, setSaving] = useState(false);
+  const [repositoryMessage, setRepositoryMessage] = useState<{ tone: "success" | "warning" | "danger"; title: string; body: string } | null>(null);
 
   const title = useMemo(() => tabs.find((tab) => tab.id === activeTab)?.label ?? "系统设置", [activeTab]);
+  const trimmedRepositoryPath = repositoryPath.trim();
+  const hasUnsavedRepositoryPath = trimmedRepositoryPath !== savedRepositoryPath.trim();
 
-  // 页面加载时尝试从后端获取真实配置
+  // 页面加载时从后端获取真实配置；失败时明确显示错误，不伪装成 mock 成功。
   useEffect(() => {
     let cancelled = false;
-    fetchSettings().then((res) => {
-      if (cancelled) return;
-      if (res && res.ok && res.data) {
-        setApiAvailable(true);
-        setRepositoryPath(res.data.repository.path || "");
-        setPort(String(res.data.server.port));
-        setDatabasePath(res.data.database.path);
-      } else {
-        setApiAvailable(false);
+
+    async function loadSettings() {
+      try {
+        const res = await fetchSettings();
+        if (cancelled) return;
+        if (res.ok && res.data) {
+          const path = res.data.repository.path || "";
+          setApiAvailable(true);
+          setRepositoryPath(path);
+          setSavedRepositoryPath(path);
+          setPort(String(res.data.server.port));
+          setDatabasePath(res.data.database.path);
+          setRepositoryMessage(null);
+        } else {
+          setApiAvailable(false);
+          setRepositoryMessage({ tone: "danger", title: "设置读取失败", body: res.error?.message || "无法读取后端配置。" });
+        }
+      } catch {
+        if (!cancelled) {
+          setApiAvailable(false);
+          setRepositoryMessage({ tone: "danger", title: "后端服务未连接", body: "无法连接后端 API，请确认 Electron 后端服务已启动。" });
+        }
       }
-    });
+    }
+
+    loadSettings();
     return () => { cancelled = true; };
   }, []);
 
   const handleCheckRepository = async () => {
-    setCheckResult("loading");
-    const res = await checkRepository();
-    if (res && res.ok && res.data) {
-      setRepoCheck(res.data);
-      setCheckResult(res.data.exists && res.data.readable && res.data.writable ? "ok" : "error");
-    } else {
+    if (!savedRepositoryPath.trim()) {
       setCheckResult("error");
       setRepoCheck(null);
-      alert(res?.error?.message || "请求失败，请确保后端服务正常运行");
+      setRepositoryMessage({ tone: "warning", title: "请先设置仓库路径", body: "当前没有已保存的仓库路径。请选择文件夹并点击保存后再检查。" });
+      return;
+    }
+
+    setCheckResult("loading");
+    setRepositoryMessage(null);
+    try {
+      const res = await checkRepository();
+      if (res.ok && res.data) {
+        setRepoCheck(res.data);
+        const ok = res.data.exists && res.data.readable && res.data.writable;
+        setCheckResult(ok ? "ok" : "error");
+        if (!ok) {
+          setRepositoryMessage({ tone: "warning", title: "仓库检查异常", body: buildRepositoryCheckMessage(res.data) });
+        }
+      } else {
+        setCheckResult("error");
+        setRepoCheck(null);
+        setRepositoryMessage({ tone: "danger", title: "仓库检查失败", body: res.error?.message || "请求失败，请确保后端服务正常运行。" });
+      }
+    } catch {
+      setCheckResult("error");
+      setRepoCheck(null);
+      setRepositoryMessage({ tone: "danger", title: "仓库检查失败", body: "请求失败，请确保后端服务正常运行。" });
     }
   };
 
   const handleSaveRepository = async () => {
-    setSaving(true);
-    const res = await updateRepositoryPath(repositoryPath);
-    if (res && res.ok && res.data) {
-      setRepoCheck(res.data);
-      setCheckResult(res.data.exists && res.data.readable && res.data.writable ? "ok" : "error");
-      alert("保存成功");
-    } else {
+    if (!trimmedRepositoryPath) {
       setCheckResult("error");
-      alert(res?.error?.message || "保存失败");
+      setRepositoryMessage({ tone: "warning", title: "请先设置仓库路径", body: "仓库路径不能为空。请选择一个本地文件夹后再保存。" });
+      return;
     }
-    setSaving(false);
+
+    setSaving(true);
+    setRepositoryMessage(null);
+    try {
+      const res = await updateRepositoryPath(trimmedRepositoryPath);
+      if (res.ok && res.data) {
+        setApiAvailable(true);
+        setSavedRepositoryPath(res.data.path);
+        setRepositoryPath(res.data.path);
+        setRepoCheck(res.data);
+        const ok = res.data.exists && res.data.readable && res.data.writable;
+        setCheckResult(ok ? "ok" : "error");
+        setRepositoryMessage({
+          tone: ok ? "success" : "warning",
+          title: ok ? "仓库路径已保存" : "仓库路径已保存，但检查异常",
+          body: ok ? `已写入配置文件：${res.data.path}` : buildRepositoryCheckMessage(res.data)
+        });
+      } else {
+        setCheckResult("error");
+        setRepositoryMessage({ tone: "danger", title: "保存失败", body: res.error?.message || "保存配置失败。" });
+      }
+    } catch {
+      setCheckResult("error");
+      setRepositoryMessage({ tone: "danger", title: "保存失败", body: "请求失败，请确保后端服务正常运行。" });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleBrowse = async () => {
     const path = await window.mediaPhotoWorkbench?.selectDirectory();
     if (path) {
       setRepositoryPath(path);
+      setRepositoryMessage({ tone: "warning", title: "路径尚未保存", body: "已选择新的仓库路径。点击右上角保存后，切换页面和重启软件才会保留。" });
     }
   };
 
   const handleOpenFolder = async () => {
-    if (!repositoryPath) {
-      alert("请先设置仓库路径");
+    if (!trimmedRepositoryPath) {
+      setRepositoryMessage({ tone: "warning", title: "无法打开文件夹", body: "请先设置仓库路径。" });
       return;
     }
-    await window.mediaPhotoWorkbench?.openPath(repositoryPath);
+    const result = await window.mediaPhotoWorkbench?.openPath(trimmedRepositoryPath);
+    if (result) {
+      setRepositoryMessage({ tone: "danger", title: "无法打开文件夹", body: result });
+    }
   };
 
   return (
@@ -144,8 +206,14 @@ export function SettingsPage() {
           {activeTab === "repository" && (
             <div className="space-y-8">
               {apiAvailable === false && (
-                <Notice tone="warning" title="后端服务未连接">
-                  无法连接后端 API，当前显示为本地状态。启动 Electron 后端口 3030 可用时将自动加载真实数据。
+                <Notice tone="danger" title="后端服务未连接">
+                  无法连接后端 API。仓库路径保存、检查和打开文件夹都需要 Electron 后端服务。
+                </Notice>
+              )}
+
+              {repositoryMessage && (
+                <Notice tone={repositoryMessage.tone} title={repositoryMessage.title}>
+                  {repositoryMessage.body}
                 </Notice>
               )}
 
@@ -165,6 +233,10 @@ export function SettingsPage() {
                     浏览...
                   </button>
                   <button className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50" type="button" onClick={handleOpenFolder}>打开文件夹</button>
+                </div>
+                <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
+                  <span>已保存路径：{savedRepositoryPath || "未设置"}</span>
+                  {hasUnsavedRepositoryPath && <StatusPill tone="warning">有未保存更改</StatusPill>}
                 </div>
               </div>
 
@@ -200,10 +272,7 @@ export function SettingsPage() {
 
                 {checkResult === "error" && repoCheck && (
                   <Notice className="mt-3" tone="warning" title="仓库检查异常">
-                    {!repoCheck.exists && "路径不存在。"}
-                    {repoCheck.exists && !repoCheck.readable && "路径不可读。"}
-                    {repoCheck.exists && !repoCheck.writable && "路径不可写。"}
-                    {` 路径：${repoCheck.path}`}
+                    {buildRepositoryCheckMessage(repoCheck)}
                   </Notice>
                 )}
               </div>
@@ -362,4 +431,12 @@ function SpecCard({ label, active = false }: { label: string; active?: boolean }
       {label}
     </div>
   );
+}
+
+function buildRepositoryCheckMessage(result: RepositoryCheckData): string {
+  if (!result.path) return "当前没有已保存的仓库路径。";
+  if (!result.exists) return `路径不存在：${result.path}`;
+  if (!result.readable) return `路径不可读：${result.path}`;
+  if (!result.writable) return `路径不可写：${result.path}`;
+  return `仓库路径可读写：${result.path}`;
 }
