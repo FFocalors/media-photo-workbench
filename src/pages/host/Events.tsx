@@ -1,20 +1,23 @@
-import { MoreHorizontal, Plus, X } from "lucide-react";
+import { Archive, FileText, MoreHorizontal, PlayCircle, Plus, Trash2, X } from "lucide-react";
 import { useState, useEffect } from "react";
 import { cn } from "../../lib/cn";
-import { fetchEvents, createEvent, EventData } from "../../lib/api";
+import { createEvent, deleteEvent, EventData, EventStatus, eventStatusLabels, fetchEvents, updateEventStatus } from "../../lib/api";
+import { Notice } from "../../components/ui/States";
 
-const statusLabelMap: Record<string, string> = {
-  draft: "草稿",
-  active: "进行中",
-  reviewing: "选片中",
-  archived: "已归档",
-  deleted: "已删除"
-};
+const statusActions: Array<{ status: EventStatus; label: string; icon: typeof PlayCircle }> = [
+  { status: "active", label: "设为进行中", icon: PlayCircle },
+  { status: "reviewing", label: "设为选片中", icon: FileText },
+  { status: "draft", label: "设为草稿", icon: FileText },
+  { status: "archived", label: "标记已归档", icon: Archive }
+];
 
 export function EventsPage() {
   const [activeTab, setActiveTab] = useState("全部");
   const [events, setEvents] = useState<EventData[]>([]);
   const [loading, setLoading] = useState(true);
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [isMutating, setIsMutating] = useState(false);
+  const [message, setMessage] = useState<{ tone: "success" | "warning" | "danger" | "info"; title: string; body: string } | null>(null);
 
   const loadEvents = async (tab: string) => {
     setLoading(true);
@@ -22,11 +25,15 @@ export function EventsPage() {
     if (tab === "进行中") statusFilter = "active";
     if (tab === "已归档") statusFilter = "archived";
 
-    const res = await fetchEvents(statusFilter);
-    if (res && res.ok && res.data) {
-      setEvents(res.data);
-    } else {
-      alert(res?.error?.message || "获取活动列表失败");
+    try {
+      const res = await fetchEvents(statusFilter);
+      if (res && res.ok && res.data) {
+        setEvents(res.data);
+      } else {
+        setMessage({ tone: "danger", title: "活动读取失败", body: res?.error?.message || "获取活动列表失败" });
+      }
+    } catch {
+      setMessage({ tone: "danger", title: "后端服务未连接", body: "无法读取活动列表，请确认本地后端服务已启动。" });
     }
     setLoading(false);
   };
@@ -34,6 +41,12 @@ export function EventsPage() {
   useEffect(() => {
     loadEvents(activeTab);
   }, [activeTab]);
+
+  useEffect(() => {
+    const closeMenu = () => setOpenMenuId(null);
+    window.addEventListener("click", closeMenu);
+    return () => window.removeEventListener("click", closeMenu);
+  }, []);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [formData, setFormData] = useState({ name: "", date: new Date().toISOString().split("T")[0], location: "", description: "" });
@@ -60,10 +73,55 @@ export function EventsPage() {
       setIsModalOpen(false);
       setFormData({ name: "", date: new Date().toISOString().split("T")[0], location: "", description: "" });
       loadEvents(activeTab);
+      setMessage({ tone: "success", title: "活动已创建", body: "活动记录和工作目录已创建。" });
     } else {
-      alert(res?.error?.message || "创建活动失败，请检查设置。");
+      setMessage({ tone: "danger", title: "创建活动失败", body: res?.error?.message || "创建活动失败，请检查设置。" });
     }
     setIsSubmitting(false);
+  };
+
+  const handleChangeStatus = async (event: EventData, status: EventStatus) => {
+    if (event.status === status) {
+      setOpenMenuId(null);
+      return;
+    }
+
+    setIsMutating(true);
+    setOpenMenuId(null);
+    try {
+      const res = await updateEventStatus(event.id, status);
+      if (res.ok && res.data) {
+        await loadEvents(activeTab);
+        setMessage({ tone: "success", title: "活动状态已更新", body: `${event.name} 已更新为${eventStatusLabels[status]}。` });
+      } else {
+        setMessage({ tone: "danger", title: "状态更新失败", body: res.error?.message || "无法更新活动状态。" });
+      }
+    } catch {
+      setMessage({ tone: "danger", title: "状态更新失败", body: "请求失败，请确认本地后端服务已启动。" });
+    } finally {
+      setIsMutating(false);
+    }
+  };
+
+  const handleDeleteEvent = async (event: EventData) => {
+    const confirmed = window.confirm(`确定删除活动“${event.name}”？\n\n这只会把活动标记为已删除，不会删除仓库中的图片文件。`);
+    if (!confirmed) return;
+
+    setIsMutating(true);
+    setOpenMenuId(null);
+    try {
+      const res = await deleteEvent(event.id);
+      if (res.ok && res.data) {
+        await loadEvents(activeTab);
+        setMessage({ tone: "success", title: "活动已删除", body: `${event.name} 已标记为已删除，图片文件未被删除。` });
+      } else {
+        setMessage({ tone: "danger", title: "删除失败", body: res.error?.message || "无法删除活动。" });
+      }
+    } catch {
+      setMessage({ tone: "danger", title: "删除失败", body: "请求失败，请确认本地后端服务已启动。" });
+    } finally {
+      setIsMutating(false);
+    }
   };
 
   return (
@@ -99,6 +157,12 @@ export function EventsPage() {
           </button>
         </div>
       </div>
+
+      {message && (
+        <Notice className="mb-5" tone={message.tone} title={message.title}>
+          {message.body}
+        </Notice>
+      )}
 
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
@@ -183,7 +247,7 @@ export function EventsPage() {
       ) : (
         <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {events.map((event) => (
-            <div className="group flex flex-col overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm transition-shadow hover:shadow-md" key={event.id}>
+            <div className="group flex flex-col rounded-2xl border border-slate-100 bg-white shadow-sm transition-shadow hover:shadow-md" key={event.id}>
               <div className="relative h-40 overflow-hidden bg-slate-100 flex items-center justify-center">
                 {/* 第一版暂无真实的活动封面图，使用纯色占位 */}
                 <div className="absolute inset-0 bg-gradient-to-br from-blue-50 to-slate-100" />
@@ -194,10 +258,10 @@ export function EventsPage() {
                   <span
                     className={cn(
                       "rounded-md px-2.5 py-1 text-xs font-medium shadow-sm backdrop-blur-md",
-                      event.status === "active" ? "bg-blue-500/90 text-white" : "bg-white/90 text-slate-600"
+                      statusBadgeClass(event.status)
                     )}
                   >
-                    {statusLabelMap[event.status] || event.status}
+                    {eventStatusLabels[event.status as EventStatus] || event.status}
                   </span>
                 </div>
               </div>
@@ -207,9 +271,48 @@ export function EventsPage() {
                   <h3 className="truncate pr-4 font-semibold text-slate-900" title={event.name}>
                     {event.name}
                   </h3>
-                  <button className="rounded-md p-0.5 text-slate-400 hover:bg-slate-50 hover:text-slate-600" type="button">
-                    <MoreHorizontal size={18} />
-                  </button>
+                  <div className="relative">
+                    <button
+                      className="rounded-md p-0.5 text-slate-400 hover:bg-slate-50 hover:text-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={isMutating}
+                      onClick={(clickEvent) => {
+                        clickEvent.stopPropagation();
+                        setOpenMenuId((current) => current === event.id ? null : event.id);
+                      }}
+                      type="button"
+                    >
+                      <MoreHorizontal size={18} />
+                    </button>
+                    {openMenuId === event.id && (
+                      <div className="absolute right-0 top-7 z-20 w-40 rounded-xl border border-slate-100 bg-white p-1 shadow-lg" onClick={(clickEvent) => clickEvent.stopPropagation()}>
+                        {statusActions
+                          .filter((action) => action.status !== event.status)
+                          .map((action) => {
+                            const Icon = action.icon;
+                            return (
+                              <button
+                                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
+                                key={action.status}
+                                onClick={() => handleChangeStatus(event, action.status)}
+                                type="button"
+                              >
+                                <Icon size={15} />
+                                {action.label}
+                              </button>
+                            );
+                          })}
+                        <div className="my-1 h-px bg-slate-100" />
+                        <button
+                          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+                          onClick={() => handleDeleteEvent(event)}
+                          type="button"
+                        >
+                          <Trash2 size={15} />
+                          删除活动
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
                 <p className="mb-5 text-xs text-slate-500">{event.date} {event.location ? `· ${event.location}` : ""}</p>
 
@@ -233,4 +336,12 @@ function Stat({ label, value, color = "text-slate-900" }: { label: string; value
       <p className={cn("text-sm font-medium", color)}>{value}</p>
     </div>
   );
+}
+
+function statusBadgeClass(status: string): string {
+  if (status === "active") return "bg-blue-500/90 text-white";
+  if (status === "reviewing") return "bg-amber-500/90 text-white";
+  if (status === "archived") return "bg-slate-700/90 text-white";
+  if (status === "draft") return "bg-white/90 text-slate-600";
+  return "bg-white/90 text-slate-500";
 }

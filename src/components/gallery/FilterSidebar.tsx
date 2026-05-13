@@ -1,30 +1,35 @@
-import type { GalleryStatus } from "../../data/figmaMock";
-import { photographerOptions, statusOptions } from "../../data/figmaMock";
+import { EventData, ImageStatus, imageStatusLabels, imageStatusOptions } from "../../lib/api";
 
 export function FilterSidebar({
+  events,
+  selectedEventId,
   search,
-  photographer,
   minRating,
   statusFilter,
+  sourceType,
   statusCounts,
+  onEventChange,
   onSearchChange,
-  onPhotographerChange,
   onMinRatingChange,
-  onToggleStatus,
+  onStatusChange,
+  onSourceTypeChange,
   onReset
 }: {
+  events: EventData[];
+  selectedEventId: string;
   search: string;
-  photographer: string;
   minRating: number;
-  statusFilter: GalleryStatus[];
-  statusCounts: Record<GalleryStatus, number>;
+  statusFilter: ImageStatus | "all";
+  sourceType: string;
+  statusCounts: Record<ImageStatus, number>;
+  onEventChange: (eventId: string) => void;
   onSearchChange: (value: string) => void;
-  onPhotographerChange: (value: string) => void;
   onMinRatingChange: (value: number) => void;
-  onToggleStatus: (status: GalleryStatus) => void;
+  onStatusChange: (status: ImageStatus | "all") => void;
+  onSourceTypeChange: (value: string) => void;
   onReset: () => void;
 }) {
-  const allSelected = statusFilter.length === statusOptions.length;
+  const total = Object.values(statusCounts).reduce((sum, count) => sum + count, 0);
 
   return (
     <div className="flex w-64 flex-col overflow-y-auto border-r border-slate-100 bg-white">
@@ -35,8 +40,13 @@ export function FilterSidebar({
 
       <div className="space-y-6 p-4">
         <FilterSection title="活动">
-          <select className="w-full rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm text-slate-700">
-            <option>2026 春季运动会</option>
+          <select
+            className="w-full rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm text-slate-700"
+            onChange={(event) => onEventChange(event.target.value)}
+            value={selectedEventId}
+          >
+            {events.length === 0 && <option value="">暂无进行中活动</option>}
+            {events.map((event) => <option key={event.id} value={event.id}>{event.name}</option>)}
           </select>
         </FilterSection>
 
@@ -44,18 +54,22 @@ export function FilterSidebar({
           <input
             className="w-full rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm text-slate-700 outline-none focus:border-blue-500"
             onChange={(event) => onSearchChange(event.target.value)}
-            placeholder="文件名 / 标签 / 分类"
+            placeholder="文件名 / 分类 / 备注"
             value={search}
           />
         </FilterSection>
 
-        <FilterSection title="摄影师">
+        <FilterSection title="来源">
           <select
             className="w-full rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm text-slate-700"
-            onChange={(event) => onPhotographerChange(event.target.value)}
-            value={photographer}
+            onChange={(event) => onSourceTypeChange(event.target.value)}
+            value={sourceType}
           >
-            {photographerOptions.map((option) => <option key={option}>{option}</option>)}
+            <option value="all">全部来源</option>
+            <option value="host_import">主机导入</option>
+            <option value="client_upload">客户端上传</option>
+            <option value="remote_import">远程导入</option>
+            <option value="manual_import">手动导入</option>
           </select>
         </FilterSection>
 
@@ -89,19 +103,24 @@ export function FilterSidebar({
         <FilterSection title="状态">
           <div className="space-y-2">
             <label className="flex items-center gap-2 text-sm text-slate-700">
-              <input checked={allSelected} className="rounded border-slate-300 text-blue-600 focus:ring-blue-600" readOnly type="checkbox" />
+              <input
+                checked={statusFilter === "all"}
+                className="rounded border-slate-300 text-blue-600 focus:ring-blue-600"
+                onChange={() => onStatusChange("all")}
+                type="radio"
+              />
               全部
-              <span className="ml-auto text-xs text-slate-400">{Object.values(statusCounts).reduce((sum, count) => sum + count, 0).toLocaleString()}</span>
+              <span className="ml-auto text-xs text-slate-400">{total.toLocaleString()}</span>
             </label>
-            {statusOptions.map((status) => (
+            {imageStatusOptions.map((status) => (
               <label className="flex items-center gap-2 text-sm text-slate-700" key={status}>
                 <input
-                  checked={statusFilter.includes(status)}
+                  checked={statusFilter === status}
                   className="rounded border-slate-300 text-blue-600 focus:ring-blue-600"
-                  onChange={() => onToggleStatus(status)}
-                  type="checkbox"
+                  onChange={() => onStatusChange(status)}
+                  type="radio"
                 />
-                {status}
+                {imageStatusLabels[status]}
                 <span className="ml-auto text-xs text-slate-400">{statusCounts[status] ?? 0}</span>
               </label>
             ))}

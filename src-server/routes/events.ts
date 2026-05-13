@@ -6,9 +6,11 @@ import {
   createEvent,
   updateEvent,
   updateEventStatus,
+  deleteEvent,
   CreateEventInput
 } from "../services/events";
 import { importImages, scanImportFolder } from "../services/imageImport";
+import { listEventImages } from "../services/images";
 import { getLogger } from "../utils/logger";
 
 const router = Router();
@@ -59,6 +61,31 @@ router.post("/", (req, res) => {
     } else {
       logger.error({ err }, "创建活动失败");
       sendError(res, "CREATE_EVENT_FAILED", "创建活动失败", 500);
+    }
+  }
+});
+
+/**
+ * GET /api/events/:id/images
+ * 查询活动下的真实图片列表。
+ */
+router.get("/:id/images", (req, res) => {
+  try {
+    const result = listEventImages(req.params.id, {
+      page: req.query.page ? Number(req.query.page) : undefined,
+      pageSize: req.query.pageSize ? Number(req.query.pageSize) : undefined,
+      rating: req.query.rating ? Number(req.query.rating) : undefined,
+      status: typeof req.query.status === "string" ? req.query.status : undefined,
+      sourceType: typeof req.query.source_type === "string" ? req.query.source_type : undefined,
+      keyword: typeof req.query.keyword === "string" ? req.query.keyword : undefined
+    }, `${req.protocol}://${req.get("host")}`);
+    sendSuccess(res, result);
+  } catch (err: any) {
+    if (err?.code) {
+      sendError(res, err.code, err.message, 400);
+    } else {
+      getLogger().error({ err }, "查询活动图片失败");
+      sendError(res, "LIST_IMAGES_FAILED", "查询活动图片失败", 500);
     }
   }
 });
@@ -181,6 +208,24 @@ router.patch("/:id/status", (req, res) => {
       getLogger().error({ err }, "更新活动状态失败");
       sendError(res, "UPDATE_STATUS_FAILED", "更新活动状态失败", 500);
     }
+  }
+});
+
+/**
+ * DELETE /api/events/:id
+ * 逻辑删除活动，只标记 status = deleted，不删除文件。
+ */
+router.delete("/:id", (req, res) => {
+  try {
+    const event = deleteEvent(req.params.id);
+    if (!event) {
+      sendError(res, "EVENT_NOT_FOUND", "活动不存在", 404);
+      return;
+    }
+    sendSuccess(res, event);
+  } catch (err) {
+    getLogger().error({ err }, "删除活动失败");
+    sendError(res, "DELETE_EVENT_FAILED", "删除活动失败", 500);
   }
 });
 

@@ -110,6 +110,16 @@ export interface EventData {
   updated_at: string;
 }
 
+export const eventStatusLabels = {
+  draft: "草稿",
+  active: "进行中",
+  reviewing: "选片中",
+  archived: "已归档",
+  deleted: "已删除"
+} as const;
+
+export type EventStatus = keyof typeof eventStatusLabels;
+
 export interface CreateEventData {
   event: EventData;
   workingDir: { created: boolean; path: string };
@@ -150,12 +160,18 @@ export async function updateEvent(
 
 export async function updateEventStatus(
   id: string,
-  status: string
+  status: EventStatus
 ): Promise<ApiResponse<EventData>> {
   return request<EventData>(`/api/events/${id}/status`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ status })
+  });
+}
+
+export async function deleteEvent(id: string): Promise<ApiResponse<EventData>> {
+  return request<EventData>(`/api/events/${id}`, {
+    method: "DELETE"
   });
 }
 
@@ -216,5 +232,102 @@ export async function startImport(eventId: string, folderPath: string): Promise<
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ folderPath })
+  });
+}
+
+// ---------- Images ----------
+
+export const imageStatusLabels = {
+  unselected: "未筛选",
+  rejected: "废片",
+  archive: "留档",
+  edit: "待修图",
+  edited: "已修图",
+  publish: "可发布",
+  published: "已发布"
+} as const;
+
+export type ImageStatus = keyof typeof imageStatusLabels;
+
+export const imageStatusOptions = Object.keys(imageStatusLabels) as ImageStatus[];
+
+export interface EventImageData {
+  id: string;
+  event_id: string;
+  original_filename: string;
+  stored_filename: string;
+  thumb_url: string;
+  preview_url: string;
+  file_size: number;
+  width: number;
+  height: number;
+  shot_at: string;
+  imported_at: string;
+  rating: number;
+  status: ImageStatus;
+  category: string;
+  remark: string;
+  photographer: string;
+  camera_model: string;
+  lens_model: string;
+  source_type: string;
+}
+
+export interface EventImagesParams {
+  page?: number;
+  pageSize?: number;
+  rating?: number;
+  status?: ImageStatus | "all";
+  source_type?: string;
+  keyword?: string;
+}
+
+export interface EventImagesData {
+  items: EventImageData[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export async function fetchEventImages(eventId: string, params: EventImagesParams = {}): Promise<ApiResponse<EventImagesData>> {
+  const searchParams = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== "" && value !== "all") {
+      searchParams.set(key, String(value));
+    }
+  }
+  const query = searchParams.toString();
+  return request<EventImagesData>(`/api/events/${eventId}/images${query ? `?${query}` : ""}`);
+}
+
+export async function updateImageRating(id: string, rating: number): Promise<ApiResponse<EventImageData>> {
+  return request<EventImageData>(`/api/images/${id}/rating`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ rating })
+  });
+}
+
+export async function updateImageStatus(id: string, status: ImageStatus): Promise<ApiResponse<EventImageData>> {
+  return request<EventImageData>(`/api/images/${id}/status`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status })
+  });
+}
+
+export async function updateImageCategory(id: string, category: string): Promise<ApiResponse<EventImageData>> {
+  return request<EventImageData>(`/api/images/${id}/category`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ category })
+  });
+}
+
+export async function updateImageRemark(id: string, remark: string): Promise<ApiResponse<EventImageData>> {
+  return request<EventImageData>(`/api/images/${id}/remark`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ remark })
   });
 }

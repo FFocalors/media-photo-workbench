@@ -147,3 +147,12 @@ export function updateEventStatus(id: string, status: string): EventRow | undefi
   logger.info({ id, from: existing.status, to: status }, "活动状态已更新");
   return getEventById(id);
 }
+
+/**
+ * 逻辑删除活动。
+ *
+ * 第一版不删除数据库记录、不删除工作区、不删除图片文件，只把活动状态标记为 deleted。
+ */
+export function deleteEvent(id: string): EventRow | undefined {
+  return updateEventStatus(id, "deleted");
+}

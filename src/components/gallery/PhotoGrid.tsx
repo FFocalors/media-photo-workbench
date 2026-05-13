@@ -1,19 +1,23 @@
 import { Check, ImageOff, Star } from "lucide-react";
 import { EmptyState } from "../ui/States";
-import type { GalleryPhoto } from "../../data/figmaMock";
+import { EventImageData, imageStatusLabels } from "../../lib/api";
 import { cn } from "../../lib/cn";
 
 export function PhotoGrid({
   photos,
   activeId,
   selectedIds,
+  emptyTitle = "暂无图片",
+  emptyBody = "暂无图片，请先导入图片。",
   onActivate,
   onToggleSelected,
   onOpenPreview
 }: {
-  photos: GalleryPhoto[];
+  photos: EventImageData[];
   activeId: string | null;
   selectedIds: string[];
+  emptyTitle?: string;
+  emptyBody?: string;
   onActivate: (id: string) => void;
   onToggleSelected: (id: string) => void;
   onOpenPreview: (id: string) => void;
@@ -21,9 +25,9 @@ export function PhotoGrid({
   if (photos.length === 0) {
     return (
       <EmptyState
-        body="当前筛选条件下没有可显示的图片。可以清空筛选、降低星级条件，或切换到全部状态。"
+        body={emptyBody}
         icon={<ImageOff size={22} />}
-        title="当前筛选没有图片"
+        title={emptyTitle}
       />
     );
   }
@@ -53,7 +57,7 @@ function PhotoCard({
   onToggleSelected,
   onOpenPreview
 }: {
-  photo: GalleryPhoto;
+  photo: EventImageData;
   selected: boolean;
   active: boolean;
   onActivate: (id: string) => void;
@@ -79,27 +83,37 @@ function PhotoCard({
       role="button"
       tabIndex={0}
     >
-      <img alt={photo.name} className="h-full w-full object-cover" src={photo.url} />
-      <div className="absolute left-0 right-0 top-0 flex items-start justify-between bg-gradient-to-b from-black/50 to-transparent p-2 opacity-0 transition-opacity group-hover:opacity-100">
+      <img alt={photo.original_filename} className="h-full w-full object-cover" src={photo.thumb_url} />
+      <div className="absolute inset-x-0 top-0 z-20 flex items-start justify-between gap-2 bg-gradient-to-b from-black/55 to-transparent p-2">
         <button
-          className={cn("flex h-5 w-5 items-center justify-center rounded border", selected ? "border-blue-500 bg-blue-500 text-white" : "border-white/70 text-transparent hover:border-white")}
+          aria-pressed={selected}
+          className={cn(
+            "flex h-7 w-7 shrink-0 items-center justify-center rounded-md border shadow-sm transition-colors",
+            selected
+              ? "border-blue-500 bg-blue-500 text-white"
+              : "border-white/80 bg-black/20 text-transparent hover:bg-white/20 hover:text-white"
+          )}
           onClick={(event) => {
             event.stopPropagation();
             onToggleSelected(photo.id);
           }}
+          onDoubleClick={(event) => event.stopPropagation()}
+          onMouseDown={(event) => event.stopPropagation()}
+          onPointerDown={(event) => event.stopPropagation()}
+          title={selected ? "取消选择" : "选择图片"}
           type="button"
         >
-          <Check size={14} />
+          <Check size={16} />
         </button>
+        <span className={cn("max-w-[calc(100%-2.75rem)] shrink-0 truncate whitespace-nowrap rounded-md px-2 py-1 text-[11px] font-medium leading-none shadow-sm", statusClass(photo.status))}>
+          {imageStatusLabels[photo.status]}
+        </span>
       </div>
       <div className="absolute bottom-0 left-0 right-0 flex flex-col justify-end bg-gradient-to-t from-black/70 via-black/30 to-transparent p-2">
-        <div className="mb-1 flex items-center justify-between">
-          <span className="truncate pr-2 text-xs font-medium text-white">{photo.name}</span>
-          <span className={cn("rounded px-1.5 py-0.5 text-[10px] shadow-sm", statusClass(photo.status))}>{photo.status}</span>
-        </div>
+        <span className="mb-1 truncate pr-2 text-xs font-medium text-white">{photo.original_filename}</span>
         <div className="flex items-center gap-0.5 text-yellow-400">
           {Array.from({ length: 5 }).map((_, index) => (
-            <Star className={index >= photo.stars ? "text-white/30" : ""} fill={index < photo.stars ? "currentColor" : "none"} key={index} size={10} />
+            <Star className={index >= photo.rating ? "text-white/30" : ""} fill={index < photo.rating ? "currentColor" : "none"} key={index} size={10} />
           ))}
         </div>
       </div>
@@ -107,10 +121,11 @@ function PhotoCard({
   );
 }
 
-function statusClass(status: GalleryPhoto["status"]) {
-  if (status === "待修图") return "bg-amber-500 text-white";
-  if (status === "已修图") return "bg-emerald-500 text-white";
-  if (status === "可发布") return "bg-blue-500 text-white";
-  if (status === "废片") return "bg-red-500 text-white";
+function statusClass(status: EventImageData["status"]) {
+  if (status === "edit") return "bg-amber-500 text-white";
+  if (status === "edited") return "bg-emerald-500 text-white";
+  if (status === "publish") return "bg-blue-500 text-white";
+  if (status === "published") return "bg-indigo-500 text-white";
+  if (status === "rejected") return "bg-red-500 text-white";
   return "bg-slate-500/80 text-white";
 }

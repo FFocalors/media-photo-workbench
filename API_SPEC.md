@@ -238,7 +238,52 @@ working/{event_slug}/清单
   }
   ```
 - **响应示例**：略
-- **备注**：无
+- **错误码**：
+  - `MISSING_STATUS`：`status` 为空。
+  - `INVALID_STATUS`：状态不在 `draft | active | reviewing | archived | deleted` 中。
+  - `EVENT_NOT_FOUND`：活动不存在。
+- **备注**：该接口只修改活动状态，不移动或删除工作区文件。
+
+### [已实现] 逻辑删除活动
+- **用途**：把活动标记为已删除，使其不再出现在默认活动列表中。
+- **请求方法**：`DELETE`
+- **路径**：`/api/events/:id`
+- **请求参数示例**：无
+- **响应示例**：返回状态为 `deleted` 的活动对象。
+- **错误码**：
+  - `EVENT_NOT_FOUND`：活动不存在。
+  - `DELETE_EVENT_FAILED`：删除失败。
+- **备注**：这是逻辑删除，只写入 `status = deleted`，不删除 SQLite 记录、不删除原图、不删除缩略图/预览图、不清理活动工作区。
+
+### [计划中] 获取活动回收站列表
+- **用途**：查看已逻辑删除的活动，后续支持恢复或永久删除。
+- **请求方法**：`GET`
+- **路径**：`/api/events/trash`
+- **请求参数示例**：无
+- **响应示例**：略
+- **备注**：只返回 `status = deleted` 的活动。
+
+### [计划中] 恢复已删除活动
+- **用途**：将回收站中的活动恢复为可用状态。
+- **请求方法**：`PATCH`
+- **路径**：`/api/events/:id/restore`
+- **请求参数示例**：
+  ```json
+  { "status": "active" }
+  ```
+- **响应示例**：略
+- **备注**：图片仍通过 `event_id` 归属该活动，恢复时不需要移动图片文件。
+
+### [计划中] 永久删除活动及工作区
+- **用途**：彻底删除活动记录、图片记录和对应工作区文件。
+- **请求方法**：`DELETE`
+- **路径**：`/api/events/:id/purge`
+- **请求参数示例**：
+  ```json
+  { "confirmName": "2026毕业典礼" }
+  ```
+- **响应示例**：略
+- **备注**：仅允许对 `status = deleted` 的活动执行。必须二次确认，删除前应展示图片数量和工作区路径，失败时返回明确错误并记录日志。
 
 ### [计划中] 触发活动归档
 - **用途**：执行活动归档流程。
@@ -260,23 +305,80 @@ working/{event_slug}/清单
 
 ## 四、Images 图片管理
 
-### [计划中] 获取活动下的图片列表
+### [已实现] 获取活动下的图片列表
 - **用途**：获取某活动下的图片库，支持筛选和分页。
 - **请求方法**：`GET`
 - **路径**：`/api/events/:eventId/images`
-- **请求参数示例**：`?status=publish&rating_min=4`
-- **响应示例**：略
-- **备注**：无
+- **查询参数**：
+  - `page`：页码，默认 `1`。
+  - `pageSize`：每页数量，默认 `80`，最大 `200`。
+  - `rating`：最低星级，例如 `4` 表示查询星级大于等于 4 的图片。
+  - `status`：图片状态，支持 `unselected | rejected | archive | edit | edited | publish | published`。
+  - `source_type`：图片来源，第一版常用 `host_import`。
+  - `keyword`：关键字，匹配文件名、分类、备注、摄影师、相机和镜头字段。
+- **请求参数示例**：`?page=1&pageSize=80&rating=4&status=publish&source_type=host_import&keyword=现场`
+- **响应示例**：
+  ```json
+  {
+    "ok": true,
+    "data": {
+      "items": [
+        {
+          "id": "img_xxx",
+          "event_id": "evt_xxx",
+          "original_filename": "IMG_0001.JPG",
+          "stored_filename": "event_20260513_200000_img_xxx_IMG_0001.JPG",
+          "thumb_url": "http://localhost:3030/api/images/img_xxx/thumb",
+          "preview_url": "http://localhost:3030/api/images/img_xxx/preview",
+          "file_size": 7280010,
+          "width": 6000,
+          "height": 4000,
+          "shot_at": "2026-05-13 19:30:00",
+          "imported_at": "2026-05-13 20:00:00",
+          "rating": 4,
+          "status": "publish",
+          "category": "现场",
+          "remark": "可发布",
+          "photographer": "",
+          "camera_model": "NIKON Z 6_3",
+          "lens_model": "",
+          "source_type": "host_import"
+        }
+      ],
+      "total": 1,
+      "page": 1,
+      "pageSize": 80
+    },
+    "error": null
+  }
+  ```
+- **错误码**：
+  - `INVALID_STATUS`：传入的状态不在允许范围内。
+- **备注**：当前未实现标签筛选；图片 URL 只返回缩略图和预览图，不返回原图下载地址。
 
-### [计划中] 获取单张图片详情
-- **用途**：获取单张图片的 EXIF 和元数据。
+### [已实现] 获取缩略图
+- **用途**：按图片 ID 获取长边 400px 的 WebP 缩略图。
 - **请求方法**：`GET`
-- **路径**：`/api/images/:id`
+- **路径**：`/api/images/:id/thumb`
 - **请求参数示例**：无
-- **响应示例**：略
-- **备注**：无
+- **响应示例**：返回 WebP 文件流。
+- **错误码**：
+  - `IMAGE_NOT_FOUND`：图片记录不存在。
+  - `IMAGE_FILE_NOT_FOUND`：缩略图文件不存在。
+- **备注**：后端按 `image.id` 查询 `thumb_path` 后 `sendFile`，不会直接暴露整个仓库目录。
 
-### [计划中] 修改图片星级
+### [已实现] 获取预览图
+- **用途**：按图片 ID 获取长边 1600px 的 WebP 预览图。
+- **请求方法**：`GET`
+- **路径**：`/api/images/:id/preview`
+- **请求参数示例**：无
+- **响应示例**：返回 WebP 文件流。
+- **错误码**：
+  - `IMAGE_NOT_FOUND`：图片记录不存在。
+  - `IMAGE_FILE_NOT_FOUND`：预览图文件不存在。
+- **备注**：暂不实现原图下载接口。
+
+### [已实现] 修改图片星级
 - **用途**：打星 (0-5)。
 - **请求方法**：`PATCH`
 - **路径**：`/api/images/:id/rating`
@@ -284,10 +386,13 @@ working/{event_slug}/清单
   ```json
   { "rating": 5 }
   ```
-- **响应示例**：略
-- **备注**：无
+- **响应示例**：返回更新后的图片对象。
+- **错误码**：
+  - `IMAGE_NOT_FOUND`：图片不存在。
+  - `INVALID_RATING`：`rating` 不是 0-5 的整数。
+- **备注**：更新 `images.updated_at`，并写入 `operation_logs`。
 
-### [计划中] 修改图片状态
+### [已实现] 修改图片状态
 - **用途**：修改图片流转状态 (unselected, rejected, edit, publish 等)。
 - **请求方法**：`PATCH`
 - **路径**：`/api/images/:id/status`
@@ -295,10 +400,13 @@ working/{event_slug}/清单
   ```json
   { "status": "publish" }
   ```
-- **响应示例**：略
-- **备注**：无
+- **响应示例**：返回更新后的图片对象。
+- **错误码**：
+  - `IMAGE_NOT_FOUND`：图片不存在。
+  - `INVALID_STATUS`：状态不在允许范围内。
+- **备注**：允许状态为 `unselected | rejected | archive | edit | edited | publish | published`。更新 `images.updated_at`，并写入 `operation_logs`。
 
-### [计划中] 修改图片分类
+### [已实现] 修改图片分类
 - **用途**：更改图片的主分类。
 - **请求方法**：`PATCH`
 - **路径**：`/api/images/:id/category`
@@ -306,8 +414,10 @@ working/{event_slug}/清单
   ```json
   { "category": "现场特写" }
   ```
-- **响应示例**：略
-- **备注**：无
+- **响应示例**：返回更新后的图片对象。
+- **错误码**：
+  - `IMAGE_NOT_FOUND`：图片不存在。
+- **备注**：分类会 trim 后保存；允许保存为空字符串。更新 `images.updated_at`，并写入 `operation_logs`。
 
 ### [计划中] 修改图片标签
 - **用途**：为图片增减多维度标签。
@@ -320,7 +430,7 @@ working/{event_slug}/清单
 - **响应示例**：略
 - **备注**：无
 
-### [计划中] 修改图片备注
+### [已实现] 修改图片备注
 - **用途**：为图片添加修图意见等备注说明。
 - **请求方法**：`PATCH`
 - **路径**：`/api/images/:id/remark`
@@ -328,8 +438,10 @@ working/{event_slug}/清单
   ```json
   { "remark": "注意提亮暗部" }
   ```
-- **响应示例**：略
-- **备注**：无
+- **响应示例**：返回更新后的图片对象。
+- **错误码**：
+  - `IMAGE_NOT_FOUND`：图片不存在。
+- **备注**：备注会 trim 后保存；允许保存为空字符串。更新 `images.updated_at`，并写入 `operation_logs`。
 
 ---
 

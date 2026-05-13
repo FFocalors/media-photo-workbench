@@ -1,6 +1,6 @@
-import { Download, X } from "lucide-react";
-import type { GalleryPhoto, GalleryStatus } from "../../data/figmaMock";
-import { categoryOptions, statusOptions } from "../../data/figmaMock";
+import { X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { EventImageData, ImageStatus, imageStatusLabels, imageStatusOptions } from "../../lib/api";
 import { cn } from "../../lib/cn";
 import { RatingStars } from "./RatingStars";
 
@@ -13,25 +13,35 @@ export function PreviewModal({
   onPrevious,
   onRatingChange,
   onStatusChange,
-  onCategoryChange
+  onCategoryChange,
+  onRemarkChange
 }: {
-  photo: GalleryPhoto;
-  photos: GalleryPhoto[];
+  photo: EventImageData;
+  photos: EventImageData[];
   onClose: () => void;
   onSelectPhoto: (id: string) => void;
   onNext: () => void;
   onPrevious: () => void;
   onRatingChange: (id: string, rating: number) => void;
-  onStatusChange: (id: string, status: GalleryStatus) => void;
+  onStatusChange: (id: string, status: ImageStatus) => void;
   onCategoryChange: (id: string, category: string) => void;
+  onRemarkChange: (id: string, remark: string) => void;
 }) {
+  const [categoryDraft, setCategoryDraft] = useState(photo.category);
+  const [remarkDraft, setRemarkDraft] = useState(photo.remark);
+
+  useEffect(() => {
+    setCategoryDraft(photo.category);
+    setRemarkDraft(photo.remark);
+  }, [photo.id, photo.category, photo.remark]);
+
   return (
     <div className="fixed inset-0 z-50 flex bg-slate-950/90 text-white">
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex h-14 shrink-0 items-center justify-between border-b border-white/10 px-5">
           <div>
-            <p className="text-sm font-medium">{photo.name}</p>
-            <p className="text-xs text-white/50">← / → 切换，Esc 关闭，1-5 打星，X/E/P 改状态</p>
+            <p className="text-sm font-medium">{photo.original_filename}</p>
+            <p className="text-xs text-white/50">{photo.width && photo.height ? `${photo.width} x ${photo.height}` : "尺寸未知"}</p>
           </div>
           <button className="rounded-lg p-2 text-white/70 hover:bg-white/10 hover:text-white" onClick={onClose} type="button">
             <X size={20} />
@@ -40,7 +50,7 @@ export function PreviewModal({
 
         <div className="flex min-h-0 flex-1 items-center justify-center p-6">
           <button className="mr-4 rounded-lg px-3 py-2 text-sm text-white/70 hover:bg-white/10" onClick={onPrevious} type="button">上一张</button>
-          <img alt={photo.name} className="max-h-full max-w-full rounded-lg object-contain shadow-2xl" src={photo.previewUrl} />
+          <img alt={photo.original_filename} className="max-h-full max-w-full rounded-lg object-contain shadow-2xl" src={photo.preview_url} />
           <button className="ml-4 rounded-lg px-3 py-2 text-sm text-white/70 hover:bg-white/10" onClick={onNext} type="button">下一张</button>
         </div>
 
@@ -52,7 +62,7 @@ export function PreviewModal({
               onClick={() => onSelectPhoto(item.id)}
               type="button"
             >
-              <img alt={item.name} className="h-full w-full object-cover" src={item.url} />
+              <img alt={item.original_filename} className="h-full w-full object-cover" src={item.thumb_url} />
             </button>
           ))}
         </div>
@@ -61,54 +71,55 @@ export function PreviewModal({
       <aside className="w-80 shrink-0 overflow-y-auto border-l border-white/10 bg-slate-900 p-5">
         <h2 className="mb-5 text-base font-semibold">图片操作</h2>
         <div className="space-y-5">
-          <InfoRow label="摄影师" value={photo.photographer} />
-          <InfoRow label="拍摄时间" value={photo.shotAt} />
-          <InfoRow label="相机" value={photo.camera} />
-          <InfoRow label="镜头" value={photo.lens} />
+          <InfoRow label="拍摄时间" value={photo.shot_at || "未知"} />
+          <InfoRow label="相机" value={photo.camera_model || "未知"} />
+          <InfoRow label="镜头" value={photo.lens_model || "未知"} />
+          <InfoRow label="尺寸" value={photo.width && photo.height ? `${photo.width} x ${photo.height}` : "未知"} />
 
           <div className="border-t border-white/10 pt-5">
             <div className="mb-4 flex items-center justify-between">
               <span className="text-sm text-white/70">星级</span>
-              <RatingStars interactive rating={photo.stars} onChange={(rating) => onRatingChange(photo.id, rating)} />
+              <RatingStars interactive rating={photo.rating} onChange={(rating) => onRatingChange(photo.id, rating)} />
             </div>
 
             <label className="mb-4 block">
               <span className="mb-2 block text-sm text-white/70">状态</span>
               <select
                 className="w-full rounded-lg border border-white/10 bg-slate-800 px-3 py-2 text-sm text-white outline-none focus:border-blue-400"
-                onChange={(event) => onStatusChange(photo.id, event.target.value as GalleryStatus)}
+                onChange={(event) => onStatusChange(photo.id, event.target.value as ImageStatus)}
                 value={photo.status}
               >
-                {statusOptions.map((status) => <option key={status}>{status}</option>)}
+                {imageStatusOptions.map((status) => <option key={status} value={status}>{imageStatusLabels[status]}</option>)}
               </select>
             </label>
 
             <label className="mb-4 block">
               <span className="mb-2 block text-sm text-white/70">分类</span>
-              <select
+              <input
                 className="w-full rounded-lg border border-white/10 bg-slate-800 px-3 py-2 text-sm text-white outline-none focus:border-blue-400"
-                onChange={(event) => onCategoryChange(photo.id, event.target.value)}
-                value={photo.category}
-              >
-                {categoryOptions.map((category) => <option key={category}>{category}</option>)}
-              </select>
+                onBlur={() => categoryDraft !== photo.category && onCategoryChange(photo.id, categoryDraft)}
+                onChange={(event) => setCategoryDraft(event.target.value)}
+                placeholder="输入分类"
+                value={categoryDraft}
+              />
             </label>
 
-            <div>
-              <span className="mb-2 block text-sm text-white/70">标签</span>
-              <div className="flex flex-wrap gap-2">
-                {photo.tags.map((tag) => <span className="rounded bg-white/10 px-2 py-1 text-xs text-white/80" key={tag}>{tag}</span>)}
-              </div>
-            </div>
+            <label>
+              <span className="mb-2 block text-sm text-white/70">备注</span>
+              <textarea
+                className="min-h-24 w-full resize-none rounded-lg border border-white/10 bg-slate-800 px-3 py-2 text-sm text-white outline-none focus:border-blue-400"
+                onBlur={() => remarkDraft !== photo.remark && onRemarkChange(photo.id, remarkDraft)}
+                onChange={(event) => setRemarkDraft(event.target.value)}
+                placeholder="暂无备注"
+                value={remarkDraft}
+              />
+            </label>
           </div>
 
           <div className="space-y-2 border-t border-white/10 pt-5">
-            <button className="w-full rounded-lg bg-amber-500 py-2 text-sm font-medium text-white hover:bg-amber-600" onClick={() => onStatusChange(photo.id, "待修图")} type="button">加入待修图</button>
-            <button className="w-full rounded-lg bg-blue-600 py-2 text-sm font-medium text-white hover:bg-blue-700" onClick={() => onStatusChange(photo.id, "可发布")} type="button">标记可发布</button>
-            <button className="w-full rounded-lg bg-red-500 py-2 text-sm font-medium text-white hover:bg-red-600" onClick={() => onStatusChange(photo.id, "废片")} type="button">标记废片</button>
-            <button className="flex w-full items-center justify-center gap-2 rounded-lg border border-white/10 py-2 text-sm font-medium text-white/80 hover:bg-white/10" type="button">
-              <Download size={14} /> 下载原图
-            </button>
+            <button className="w-full rounded-lg bg-amber-500 py-2 text-sm font-medium text-white hover:bg-amber-600" onClick={() => onStatusChange(photo.id, "edit")} type="button">加入待修图</button>
+            <button className="w-full rounded-lg bg-blue-600 py-2 text-sm font-medium text-white hover:bg-blue-700" onClick={() => onStatusChange(photo.id, "publish")} type="button">标记可发布</button>
+            <button className="w-full rounded-lg bg-red-500 py-2 text-sm font-medium text-white hover:bg-red-600" onClick={() => onStatusChange(photo.id, "rejected")} type="button">标记废片</button>
           </div>
         </div>
       </aside>

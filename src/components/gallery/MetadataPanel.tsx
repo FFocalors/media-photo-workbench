@@ -1,6 +1,6 @@
-import { Download, Info, X } from "lucide-react";
-import type { GalleryPhoto, GalleryStatus } from "../../data/figmaMock";
-import { categoryOptions, statusOptions } from "../../data/figmaMock";
+import { Info, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { EventImageData, ImageStatus, imageStatusLabels, imageStatusOptions } from "../../lib/api";
 import { RatingStars } from "./RatingStars";
 
 export function MetadataPanel({
@@ -9,17 +9,27 @@ export function MetadataPanel({
   onRatingChange,
   onStatusChange,
   onCategoryChange,
+  onRemarkChange,
   onOpenPreview,
   onClearActive
 }: {
-  photo: GalleryPhoto | null;
+  photo: EventImageData | null;
   selectedCount: number;
   onRatingChange: (rating: number) => void;
-  onStatusChange: (status: GalleryStatus) => void;
+  onStatusChange: (status: ImageStatus) => void;
   onCategoryChange: (category: string) => void;
+  onRemarkChange: (remark: string) => void;
   onOpenPreview: () => void;
   onClearActive: () => void;
 }) {
+  const [categoryDraft, setCategoryDraft] = useState("");
+  const [remarkDraft, setRemarkDraft] = useState("");
+
+  useEffect(() => {
+    setCategoryDraft(photo?.category ?? "");
+    setRemarkDraft(photo?.remark ?? "");
+  }, [photo?.id, photo?.category, photo?.remark]);
+
   return (
     <div className="flex w-72 flex-col overflow-y-auto border-l border-slate-100 bg-white">
       <div className="flex items-center justify-between border-b border-slate-50 p-4">
@@ -35,60 +45,55 @@ export function MetadataPanel({
         </div>
       ) : (
         <div className="space-y-5 p-4">
-          <Meta label="文件名" value={photo.name} strong />
-          <Meta label="拍摄时间" value={photo.shotAt} />
-          <Meta label="摄影师" value={photo.photographer} />
-          <Meta label="相机型号" value={photo.camera} />
-          <Meta label="镜头" value={photo.lens} />
+          <Meta label="文件名" value={photo.original_filename} strong />
+          <Meta label="尺寸" value={photo.width && photo.height ? `${photo.width} x ${photo.height}` : "未知"} />
+          <Meta label="文件大小" value={formatBytes(photo.file_size)} />
+          <Meta label="拍摄时间" value={photo.shot_at || "未知"} />
+          <Meta label="导入时间" value={photo.imported_at || "未知"} />
+          <Meta label="摄影师" value={photo.photographer || "未填写"} />
+          <Meta label="相机型号" value={photo.camera_model || "未知"} />
+          <Meta label="镜头" value={photo.lens_model || "未知"} />
           <Meta label="已选择" value={`${selectedCount} 张`} />
 
           <div className="border-t border-slate-100 pt-5">
             <div className="mb-4 flex items-center justify-between">
               <span className="text-sm font-medium text-slate-700">星级</span>
-              <RatingStars interactive rating={photo.stars} onChange={onRatingChange} />
+              <RatingStars interactive rating={photo.rating} onChange={onRatingChange} />
             </div>
             <div className="mb-4">
               <span className="mb-2 block text-sm font-medium text-slate-700">状态</span>
               <select
                 className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-slate-700 focus:border-blue-500 focus:outline-none"
-                onChange={(event) => onStatusChange(event.target.value as GalleryStatus)}
+                onChange={(event) => onStatusChange(event.target.value as ImageStatus)}
                 value={photo.status}
               >
-                {statusOptions.map((status) => <option key={status}>{status}</option>)}
+                {imageStatusOptions.map((status) => <option key={status} value={status}>{imageStatusLabels[status]}</option>)}
               </select>
             </div>
-            <div className="mb-4">
+            <label className="mb-4 block">
               <span className="mb-2 block text-sm font-medium text-slate-700">分类</span>
-              <select
+              <input
                 className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-slate-700 focus:border-blue-500 focus:outline-none"
-                onChange={(event) => onCategoryChange(event.target.value)}
-                value={photo.category}
-              >
-                {categoryOptions.map((category) => <option key={category}>{category}</option>)}
-              </select>
-            </div>
-            <div className="mb-4">
-              <span className="mb-2 block text-sm font-medium text-slate-700">标签</span>
-              <div className="flex flex-wrap gap-2">
-                {photo.tags.map((tag) => (
-                  <span className="rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-600" key={tag}>{tag}</span>
-                ))}
-                <button className="flex items-center gap-1 rounded-md border border-dashed border-slate-300 bg-white px-2 py-1 text-xs text-slate-400 hover:text-slate-600" type="button">
-                  + 添加
-                </button>
-              </div>
-            </div>
-            <div>
+                onBlur={() => categoryDraft !== photo.category && onCategoryChange(categoryDraft)}
+                onChange={(event) => setCategoryDraft(event.target.value)}
+                placeholder="输入分类"
+                value={categoryDraft}
+              />
+            </label>
+            <label>
               <span className="mb-2 block text-sm font-medium text-slate-700">备注</span>
-              <p className="min-h-10 rounded-lg bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-500">{photo.remark || "暂无备注"}</p>
-            </div>
+              <textarea
+                className="min-h-20 w-full resize-none rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-700 focus:border-blue-500 focus:outline-none"
+                onBlur={() => remarkDraft !== photo.remark && onRemarkChange(remarkDraft)}
+                onChange={(event) => setRemarkDraft(event.target.value)}
+                placeholder="暂无备注"
+                value={remarkDraft}
+              />
+            </label>
           </div>
 
           <div className="space-y-2 border-t border-slate-100 pt-5">
             <button className="w-full rounded-lg bg-blue-50 py-2 text-sm font-medium text-blue-600 transition-colors hover:bg-blue-100" onClick={onOpenPreview} type="button">打开预览</button>
-            <button className="flex w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50" type="button">
-              <Download size={14} /> 下载原图
-            </button>
           </div>
         </div>
       )}
@@ -103,4 +108,11 @@ function Meta({ label, value, strong = false }: { label: string; value: string; 
       <p className={`break-all text-sm ${strong ? "font-medium text-slate-900" : "text-slate-700"}`}>{value}</p>
     </div>
   );
+}
+
+function formatBytes(bytes: number): string {
+  if (!bytes) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return `${(bytes / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
 }

@@ -28,6 +28,87 @@
 
 ## 开发记录
 
+### 修复：图片墙预览与批量操作菜单
+- **日期**：2026-05-13
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - 修复批量操作菜单使用 hover 展开导致菜单项难以点击的问题，改为点击展开、点击外部关闭。
+  - 保持图片墙交互为单击缩略图打开预览弹窗。
+  - 取消双击打开预览的交互分支。
+  - 保留多选能力：可通过图片左上角勾选框或“全选当前”进行批量选择，右侧元数据跟随当前活动图片显示。
+  - 优化图片卡片左上角选择框：已选中时持续显示对勾，并阻止选择点击冒泡触发预览。
+  - 优化图片状态标签显示：固定在右上角单行显示，避免窗口较窄时被挤压或显示不全。
+  - 修复右侧元数据面板在没有当前图片时仍兜底显示第一张图片的问题。
+  - 修复元数据面板右上角关闭按钮点击后看似无效的问题。
+- **修改文件**：
+  - `src/components/gallery/GalleryToolbar.tsx`
+  - `src/components/gallery/PhotoGrid.tsx`
+  - `src/pages/host/PhotoWall.tsx`
+- **验证方式**：
+  - `pnpm build` 通过。
+- **未完成事项**：
+  - 暂未加入 Shift 连续选择、Ctrl 多选等高级选片交互。
+
+### 修复：活动管理状态切换与逻辑删除
+- **日期**：2026-05-13
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - 为活动管理卡片的“...”按钮接入操作菜单。
+  - 支持将活动切换为 `active`、`reviewing`、`draft`、`archived`。
+  - 新增活动逻辑删除接口 `DELETE /api/events/:id`，只把状态标记为 `deleted`，不删除数据库记录、图片文件或活动工作目录。
+  - 前端删除活动会二次确认，删除后刷新当前活动列表。
+- **修改文件**：
+  - `src/pages/host/Events.tsx`
+  - `src/lib/api.ts`
+  - `src-server/services/events.ts`
+  - `src-server/routes/events.ts`
+  - `DEVELOPMENT_LOG.md`
+  - `API_SPEC.md`
+  - `CHANGELOG.md`
+- **验证方式**：
+  - `pnpm build` 通过。
+  - 使用 Electron Node 运行时启动临时后端，创建活动后调用 `PATCH /api/events/:id/status` 改为 `reviewing`，再调用 `DELETE /api/events/:id` 标记为 `deleted`。
+  - 验证删除后的活动不会出现在默认 `GET /api/events` 列表中。
+- **未完成事项**：
+  - 本次只做逻辑删除，不做物理清理；工作区清理仍属于后续归档流程。
+  - 待完善单独的“回收站/永久删除”功能：已删除活动应可在回收站查看、恢复，并在二次确认后永久删除活动记录、图片记录和对应工作区文件。
+
+### Phase 4：真实图片墙与图片查询
+- **日期**：2026-05-13
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - 新增真实图片查询服务，支持按活动分页读取 `images` 表，并按星级、状态、来源和关键字筛选。
+  - 新增缩略图与预览图访问接口：`GET /api/images/:id/thumb`、`GET /api/images/:id/preview`，按图片 ID 查询文件路径后返回 WebP 文件，不暴露整个仓库目录。
+  - 新增基础选片更新接口：星级、状态、分类、备注；所有更新都会刷新 `updated_at` 并写入 `operation_logs`。
+  - 前端 `api.ts` 增加真实图片查询与更新方法，并统一维护图片状态的中英文映射。
+  - 图片墙从 mock 数据切换到真实活动图片，展示 `thumb_url`，预览弹窗展示 `preview_url`。
+  - 图片墙支持真实打星、状态修改、分类和备注修改，失败时显示明确错误提示。
+  - 预览弹窗保留快捷键：`1-5` 打星、`0` 清除星级、`X` 废片、`E` 待修图、`P` 可发布、方向键切换、`Esc` 关闭。
+- **修改文件**：
+  - `src-server/services/images.ts`
+  - `src-server/routes/images.ts`
+  - `src-server/routes/events.ts`
+  - `src-server/app.ts`
+  - `src/lib/api.ts`
+  - `src/pages/host/PhotoWall.tsx`
+  - `src/components/gallery/FilterSidebar.tsx`
+  - `src/components/gallery/GalleryToolbar.tsx`
+  - `src/components/gallery/PhotoGrid.tsx`
+  - `src/components/gallery/MetadataPanel.tsx`
+  - `src/components/gallery/PreviewModal.tsx`
+- **验证方式**：
+  - `pnpm build` 通过。
+  - 使用 Electron Node 运行时启动后端，创建临时仓库、活动和 2 张 JPG/JPEG 测试图。
+  - 完整验证导入、重复导入跳过、`GET /api/events/:eventId/images` 查询、缩略图/预览图 200 返回、星级/状态/分类/备注更新和筛选。
+- **遇到的问题**：
+  - 普通 `node` 无法直接运行后端集成脚本，因为 `better-sqlite3` 当前按 Electron ABI 编译。
+- **解决方案**：
+  - 使用 `ELECTRON_RUN_AS_NODE=1` 执行端到端后端检查，与桌面应用实际运行时保持一致。
+- **未完成事项**：
+  - 本阶段未实现客户端上传、Socket.IO、原图下载、ZIP、修图回传、导出发布、活动归档和远程传输。
+- **下一步计划**：
+  - 进入局域网协作前，先补齐图片详情/标签能力或按实际使用优先级开始客户端上传与实时广播。
+
 ### Phase 3：主机本地图片导入与处理管线
 - **日期**：2026-05-13
 - **开发者 / 工具**：Codex
@@ -54,18 +135,19 @@
   - `pnpm build` 通过。
   - 使用 Electron Node 运行时启动后端，创建临时仓库和活动。
   - 调用 `POST /api/events/:eventId/import/scan`，确认只统计当前文件夹第一层的 JPG/JPEG，并忽略 PNG。
+  - 安装 `sharp` / `exifr` 后，使用真实 JPG/JPEG 完整验证原图复制、WebP 缩略图/预览图生成、`images` 表写入和重复导入跳过。
 - **遇到的问题**：
-  - 当前环境网络权限限制导致 `pnpm add sharp exifr` 未能完成，权限审批两次超时。
-  - 因 `sharp` 尚未实际安装到 `node_modules`，本轮只能验证扫描 API 和构建，完整缩略图/预览图生成需要安装依赖后再跑端到端导入验证。
+  - 当前环境网络权限限制一度导致 `pnpm add sharp exifr` 未能完成，权限审批两次超时。
+  - `better-sqlite3` 在普通 Node 与 Electron Node 之间存在 ABI 差异，后端端到端检查需要使用 Electron Node 运行时。
 - **解决方案**：
-  - 先在 `package.json` 中声明 `sharp` 与 `exifr`，并将 `sharp` 加入 `pnpm.onlyBuiltDependencies`。
+  - 先在 `package.json` 中声明 `sharp` 与 `exifr`，并将 `sharp` 加入 `pnpm.onlyBuiltDependencies`；依赖安装成功后完成真实导入验证。
   - 后端导入管线对缺少 `sharp` 返回明确错误 `MISSING_IMAGE_PROCESSOR`，不会静默假装成功。
+  - 使用 `ELECTRON_RUN_AS_NODE=1` 执行后端集成检查。
 - **未完成事项**：
   - 未实现递归扫描、任务队列、任务轮询、客户端上传、Socket.IO、ZIP、修图回传、归档和远程传输。
-  - `pnpm-lock.yaml` 尚未写入 `sharp/exifr`，需在网络允许后运行依赖安装命令更新。
+  - 后续可按活动规模把同步导入升级为任务队列。
 - **下一步计划**：
-  - 运行 `pnpm add sharp exifr`，必要时执行 `pnpm rebuild sharp` 或按 Electron 环境重建原生依赖。
-  - 使用真实 JPG/JPEG 样张完整验证：复制原图、生成 WebP 缩略图/预览图、写入 `images` 表、重复导入跳过。
+  - 进入真实图片墙与基础选片阶段。
 
 ### Phase 2 修复：仓库路径持久化与活动工作目录约束
 - **日期**：2026-05-13
