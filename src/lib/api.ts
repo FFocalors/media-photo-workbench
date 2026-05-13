@@ -158,3 +158,63 @@ export async function updateEventStatus(
     body: JSON.stringify({ status })
   });
 }
+
+// ---------- Import ----------
+
+export interface ImportScanFile {
+  filename: string;
+  path: string;
+  size: number;
+  extension: string;
+}
+
+export interface ImportScanData {
+  eventId: string;
+  folderPath: string;
+  count: number;
+  totalSize: number;
+  files: ImportScanFile[];
+}
+
+export interface ImportErrorItem {
+  filename: string;
+  path: string;
+  reason: string;
+}
+
+export interface ImportedImageSummary {
+  id: string;
+  originalFilename: string;
+  storedFilename: string;
+  originalPath: string;
+  thumbPath: string;
+  previewPath: string;
+}
+
+export interface ImportStartData {
+  eventId: string;
+  folderPath: string;
+  sourceType: "host_import";
+  total: number;
+  success: number;
+  failed: number;
+  skipped: number;
+  imported: ImportedImageSummary[];
+  errors: ImportErrorItem[];
+}
+
+export async function scanImportFolder(eventId: string, folderPath: string): Promise<ApiResponse<ImportScanData>> {
+  return request<ImportScanData>(`/api/events/${eventId}/import/scan`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ folderPath })
+  });
+}
+
+export async function startImport(eventId: string, folderPath: string): Promise<ApiResponse<ImportStartData>> {
+  return request<ImportStartData>(`/api/events/${eventId}/import/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ folderPath })
+  });
+}

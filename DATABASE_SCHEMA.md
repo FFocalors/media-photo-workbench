@@ -146,6 +146,13 @@
 
 ## 核心枚举值参考
 
+## 索引与去重
+
+- `idx_images_event_id`：按活动查询图片。
+- `idx_images_status`：按图片状态筛选。
+- `idx_images_rating`：按星级筛选。
+- `idx_images_file_hash`：Phase 3 主机本地导入按 sha256 `file_hash` 去重；发现已有相同 hash 时跳过导入。
+
 ### `events.status`
 - `draft`：草稿/未开始（保留状态，当前新建活动不默认使用）
 - `active`：进行中（新建活动默认状态，可导入、上传）

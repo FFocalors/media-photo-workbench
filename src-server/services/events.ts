@@ -1,10 +1,7 @@
 import crypto from "crypto";
-import path from "path";
-import fs from "fs-extra";
 import { getDatabase } from "../db/database";
-import { getConfig } from "../config/config";
 import { getLogger } from "../utils/logger";
-import { checkRepository } from "./repository";
+import { ensureEventWorkingDirs } from "./eventWorkspace";
 
 export interface EventRow {
   id: string;
@@ -33,23 +30,6 @@ export interface UpdateEventInput {
 }
 
 /**
- * 活动仓库工作目录结构（依据 AGENTS.md 定义）
- */
-const EVENT_SUBDIRS = [
-  "原图/主机导入",
-  "原图/客户端上传",
-  "原图/远程导入",
-  "缩略图",
-  "预览图",
-  "待修图",
-  "已修图",
-  "导出/发布图",
-  "导出/压缩图",
-  "导出/压缩包",
-  "清单"
-];
-
-/**
  * 生成活动 ID
  */
 function generateEventId(): string {
@@ -72,43 +52,6 @@ function nameToSlug(name: string): string {
  */
 function nowTimestamp(): string {
   return new Date().toISOString().replace("T", " ").replace(/\.\d+Z$/, "");
-}
-
-/**
- * 在仓库中为活动创建工作目录结构。
- * 仓库未配置或不可写时直接抛错，避免创建没有物理工作区的活动记录。
- */
-function ensureEventWorkingDirs(eventSlug: string): { created: boolean; path: string } {
-  const logger = getLogger();
-  const config = getConfig();
-  const repoPath = config.repository.path;
-
-  const repositoryStatus = checkRepository(repoPath);
-  if (!repositoryStatus.path) {
-    throw { code: "REPOSITORY_NOT_READY", message: "请先在系统设置中配置仓库路径" };
-  }
-  if (!repositoryStatus.exists) {
-    throw { code: "REPOSITORY_NOT_READY", message: `仓库路径不存在：${repositoryStatus.path}` };
-  }
-  if (!repositoryStatus.readable) {
-    throw { code: "REPOSITORY_NOT_READY", message: `仓库路径不可读：${repositoryStatus.path}` };
-  }
-  if (!repositoryStatus.writable) {
-    throw { code: "REPOSITORY_NOT_READY", message: `仓库路径不可写：${repositoryStatus.path}` };
-  }
-
-  const eventDir = path.join(repoPath, "working", eventSlug);
-
-  try {
-    for (const subdir of EVENT_SUBDIRS) {
-      fs.ensureDirSync(path.join(eventDir, subdir));
-    }
-    logger.info({ eventDir }, "活动工作目录已创建");
-    return { created: true, path: eventDir };
-  } catch (err) {
-    logger.error({ err, eventDir }, "创建活动工作目录失败");
-    throw { code: "CREATE_EVENT_DIR_FAILED", message: `创建活动工作目录失败：${eventDir}` };
-  }
 }
 
 /**

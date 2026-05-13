@@ -335,27 +335,94 @@ working/{event_slug}/清单
 
 ## 五、Import 图片导入
 
-### [计划中] 扫描待导入目录
-- **用途**：扫描主机本地目录，返回可导入的 JPG 文件数量及重名情况。
+### [已实现] 扫描待导入目录
+- **用途**：扫描主机本地目录，返回可导入的 JPG/JPEG 文件数量、总大小和文件列表摘要。
 - **请求方法**：`POST`
 - **路径**：`/api/events/:eventId/import/scan`
 - **请求参数示例**：
   ```json
-  { "sourcePath": "E:\\SD_Card\\DCIM" }
+  { "folderPath": "E:\\SD_Card\\DCIM" }
   ```
-- **响应示例**：略
-- **备注**：无
+- **响应示例**：
+  ```json
+  {
+    "ok": true,
+    "data": {
+      "eventId": "evt_xxx",
+      "folderPath": "E:\\SD_Card\\DCIM",
+      "count": 2,
+      "totalSize": 14583210,
+      "files": [
+        {
+          "filename": "IMG_0001.JPG",
+          "path": "E:\\SD_Card\\DCIM\\IMG_0001.JPG",
+          "size": 7280010,
+          "extension": ".jpg"
+        }
+      ]
+    },
+    "error": null
+  }
+  ```
+- **错误码**：
+  - `EVENT_NOT_FOUND`：活动不存在。
+  - `EVENT_NOT_IMPORTABLE`：活动已归档或删除，不能导入。
+  - `INVALID_FOLDER_PATH`：`folderPath` 为空或不是字符串。
+  - `FOLDER_NOT_FOUND`：源文件夹不存在。
+  - `NOT_A_DIRECTORY`：路径不是文件夹。
+- **备注**：第一版只扫描当前文件夹第一层，不递归子目录。只识别 `.jpg` / `.jpeg`。
 
-### [计划中] 开始导入任务
-- **用途**：触发耗时导入任务（复制文件、生成缩略图、写入数据库）。
+### [已实现] 开始导入任务
+- **用途**：同步导入主机本地 JPG/JPEG 文件，复制原图、生成缩略图和预览图、读取 EXIF、写入数据库。
 - **请求方法**：`POST`
 - **路径**：`/api/events/:eventId/import/start`
 - **请求参数示例**：
   ```json
-  { "sourcePath": "E:\\SD_Card\\DCIM", "photographer": "张三" }
+  { "folderPath": "E:\\SD_Card\\DCIM" }
   ```
-- **响应示例**：略
-- **备注**：返回 taskId 用于轮询。
+- **响应示例**：
+  ```json
+  {
+    "ok": true,
+    "data": {
+      "eventId": "evt_xxx",
+      "folderPath": "E:\\SD_Card\\DCIM",
+      "sourceType": "host_import",
+      "total": 2,
+      "success": 1,
+      "failed": 0,
+      "skipped": 1,
+      "imported": [
+        {
+          "id": "img_xxx",
+          "originalFilename": "IMG_0001.JPG",
+          "storedFilename": "event_20260513_190000_img_xxx_IMG_0001.JPG",
+          "originalPath": "E:\\MediaPhotoWorkspace\\working\\event\\原图\\主机导入\\...",
+          "thumbPath": "E:\\MediaPhotoWorkspace\\working\\event\\缩略图\\img_xxx.webp",
+          "previewPath": "E:\\MediaPhotoWorkspace\\working\\event\\预览图\\img_xxx.webp"
+        }
+      ],
+      "errors": []
+    },
+    "error": null
+  }
+  ```
+- **错误码**：
+  - `EVENT_NOT_FOUND`：活动不存在。
+  - `EVENT_NOT_IMPORTABLE`：活动已归档或删除，不能导入。
+  - `INVALID_FOLDER_PATH`：`folderPath` 为空或不是字符串。
+  - `FOLDER_NOT_FOUND`：源文件夹不存在。
+  - `NOT_A_DIRECTORY`：路径不是文件夹。
+  - `REPOSITORY_NOT_READY`：仓库路径未配置、不存在、不可读或不可写。
+  - `MISSING_IMAGE_PROCESSOR`：缺少 `sharp` 依赖。
+- **备注**：
+  - 第一版同步执行，不返回 `taskId`。
+  - 不移动、不删除、不覆盖源文件。
+  - 原图复制到 `working/{event_slug}/原图/主机导入`。
+  - 缩略图写入 `working/{event_slug}/缩略图/{imageId}.webp`，长边 400px。
+  - 预览图写入 `working/{event_slug}/预览图/{imageId}.webp`，长边 1600px。
+  - 通过 sha256 `file_hash` 去重，重复图片计入 `skipped`。
+  - EXIF 读取失败不会导致导入失败。
 
 ### [计划中] 获取任务进度
 - **用途**：轮询获取长时间任务的进度。

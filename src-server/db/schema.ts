@@ -129,6 +129,7 @@ CREATE TABLE IF NOT EXISTS archived_events (
 CREATE INDEX IF NOT EXISTS idx_images_event_id ON images(event_id);
 CREATE INDEX IF NOT EXISTS idx_images_status ON images(status);
 CREATE INDEX IF NOT EXISTS idx_images_rating ON images(rating);
+CREATE INDEX IF NOT EXISTS idx_images_file_hash ON images(file_hash);
 CREATE INDEX IF NOT EXISTS idx_operation_logs_target ON operation_logs(target_type, target_id);
 CREATE INDEX IF NOT EXISTS idx_download_logs_image ON download_logs(image_id);
 CREATE INDEX IF NOT EXISTS idx_export_jobs_event ON export_jobs(event_id);

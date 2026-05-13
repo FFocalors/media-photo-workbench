@@ -8,6 +8,7 @@ import {
   updateEventStatus,
   CreateEventInput
 } from "../services/events";
+import { importImages, scanImportFolder } from "../services/imageImport";
 import { getLogger } from "../utils/logger";
 
 const router = Router();
@@ -58,6 +59,60 @@ router.post("/", (req, res) => {
     } else {
       logger.error({ err }, "创建活动失败");
       sendError(res, "CREATE_EVENT_FAILED", "创建活动失败", 500);
+    }
+  }
+});
+
+/**
+ * POST /api/events/:id/import/scan
+ * 扫描本地文件夹中的 JPG/JPEG 文件。
+ */
+router.post("/:id/import/scan", async (req, res) => {
+  const { folderPath } = req.body;
+
+  if (!folderPath || typeof folderPath !== "string") {
+    sendError(res, "INVALID_FOLDER_PATH", "folderPath 字段必须是非空字符串");
+    return;
+  }
+
+  try {
+    const result = await scanImportFolder(req.params.id, folderPath);
+    sendSuccess(res, result);
+  } catch (err: any) {
+    if (err?.code) {
+      sendError(res, err.code, err.message, err.code === "EVENT_NOT_FOUND" ? 404 : 400);
+    } else {
+      getLogger().error({ err }, "扫描导入文件夹失败");
+      sendError(res, "SCAN_IMPORT_FAILED", "扫描导入文件夹失败", 500);
+    }
+  }
+});
+
+/**
+ * POST /api/events/:id/import/start
+ * 同步导入本地文件夹中的 JPG/JPEG 文件。
+ */
+router.post("/:id/import/start", async (req, res) => {
+  const { folderPath } = req.body;
+
+  if (!folderPath || typeof folderPath !== "string") {
+    sendError(res, "INVALID_FOLDER_PATH", "folderPath 字段必须是非空字符串");
+    return;
+  }
+
+  try {
+    const result = await importImages({
+      eventId: req.params.id,
+      folderPath,
+      sourceType: "host_import"
+    });
+    sendSuccess(res, result);
+  } catch (err: any) {
+    if (err?.code) {
+      sendError(res, err.code, err.message, err.code === "EVENT_NOT_FOUND" ? 404 : 400);
+    } else {
+      getLogger().error({ err }, "图片导入失败");
+      sendError(res, "IMPORT_IMAGES_FAILED", "图片导入失败", 500);
     }
   }
 });

@@ -28,6 +28,45 @@
 
 ## 开发记录
 
+### Phase 3：主机本地图片导入与处理管线
+- **日期**：2026-05-13
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - 新增 `src-server/services/imageImport.ts`，实现主机本地文件夹非递归扫描，只识别 `.jpg` / `.jpeg`。
+  - 新增图片导入管线：按 `eventId` 查询活动，定位仓库 `working/{event_slug}`，复制原图到 `原图/主机导入`，并准备生成缩略图与预览图。
+  - 新增 `src-server/services/eventWorkspace.ts`，集中管理活动中文工作目录，避免活动创建和导入逻辑重复维护目录名。
+  - 导入时使用 sha256 `file_hash` 去重；数据库中已有相同 hash 时跳过并计入 `skipped`。
+  - 导入记录写入 `images` 表，默认 `rating = 0`、`status = unselected`、`source = host_import`。
+  - 通过 `sharp` 生成 WebP 资源：`缩略图/{imageId}.webp` 长边 400px，`预览图/{imageId}.webp` 长边 1600px。
+  - 通过 `exifr` 尝试读取拍摄时间、相机型号、镜头信息；EXIF 读取失败不会阻断导入。
+  - 新增 API：`POST /api/events/:eventId/import/scan` 和 `POST /api/events/:eventId/import/start`。
+  - 前端图片导入页接入真实活动、文件夹选择、扫描结果、导入结果和错误提示。
+- **修改文件**：
+  - `src-server/services/imageImport.ts`
+  - `src-server/services/eventWorkspace.ts`
+  - `src-server/services/events.ts`
+  - `src-server/routes/events.ts`
+  - `src-server/db/schema.ts`
+  - `src/lib/api.ts`
+  - `src/pages/host/Import.tsx`
+  - `package.json`
+- **验证方式**：
+  - `pnpm build` 通过。
+  - 使用 Electron Node 运行时启动后端，创建临时仓库和活动。
+  - 调用 `POST /api/events/:eventId/import/scan`，确认只统计当前文件夹第一层的 JPG/JPEG，并忽略 PNG。
+- **遇到的问题**：
+  - 当前环境网络权限限制导致 `pnpm add sharp exifr` 未能完成，权限审批两次超时。
+  - 因 `sharp` 尚未实际安装到 `node_modules`，本轮只能验证扫描 API 和构建，完整缩略图/预览图生成需要安装依赖后再跑端到端导入验证。
+- **解决方案**：
+  - 先在 `package.json` 中声明 `sharp` 与 `exifr`，并将 `sharp` 加入 `pnpm.onlyBuiltDependencies`。
+  - 后端导入管线对缺少 `sharp` 返回明确错误 `MISSING_IMAGE_PROCESSOR`，不会静默假装成功。
+- **未完成事项**：
+  - 未实现递归扫描、任务队列、任务轮询、客户端上传、Socket.IO、ZIP、修图回传、归档和远程传输。
+  - `pnpm-lock.yaml` 尚未写入 `sharp/exifr`，需在网络允许后运行依赖安装命令更新。
+- **下一步计划**：
+  - 运行 `pnpm add sharp exifr`，必要时执行 `pnpm rebuild sharp` 或按 Electron 环境重建原生依赖。
+  - 使用真实 JPG/JPEG 样张完整验证：复制原图、生成 WebP 缩略图/预览图、写入 `images` 表、重复导入跳过。
+
 ### Phase 2 修复：仓库路径持久化与活动工作目录约束
 - **日期**：2026-05-13
 - **开发者 / 工具**：Codex
