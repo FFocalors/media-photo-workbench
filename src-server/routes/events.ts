@@ -14,6 +14,7 @@ import { getImageDtoById, listEventImages } from "../services/images";
 import { getLogger } from "../utils/logger";
 import { emitImageCreated } from "../realtime/socket";
 import { parseMultipartForm } from "../utils/multipart";
+import { createEditPackage, uploadEditedImages } from "../services/editWorkflow";
 
 const router = Router();
 
@@ -213,6 +214,68 @@ router.post("/:id/upload", async (req, res) => {
     } else {
       getLogger().error({ err }, "客户端上传图片失败");
       sendError(res, "CLIENT_UPLOAD_FAILED", "客户端上传图片失败", 500);
+    }
+  } finally {
+    await form?.cleanup();
+  }
+});
+
+/**
+ * POST /api/events/:id/edit-package
+ * 将当前活动 status = edit 的图片打包为待修包。
+ */
+router.post("/:id/edit-package", async (req, res) => {
+  try {
+    const result = await createEditPackage(req.params.id, getBaseUrl(req));
+    sendSuccess(res, result);
+  } catch (err: any) {
+    if (err?.code) {
+      const status = err.code === "EVENT_NOT_FOUND" ? 404 : 400;
+      sendError(res, err.code, err.message, status);
+    } else {
+      getLogger().error({ err }, "生成待修包失败");
+      sendError(res, "CREATE_EDIT_PACKAGE_FAILED", "生成待修包失败", 500);
+    }
+  }
+});
+
+/**
+ * POST /api/events/:id/edited/upload
+ * 上传已修图，并按 edit_manifest.json 或文件名匹配原图。
+ */
+router.post("/:id/edited/upload", async (req, res) => {
+  let form: Awaited<ReturnType<typeof parseMultipartForm>> | null = null;
+
+  try {
+    form = await parseMultipartForm(req, {
+      maxFiles: 500,
+      maxBytes: 512 * 1024 * 1024
+    });
+
+    const manifestFile = form.files.find((file) =>
+      file.fieldName === "manifest" || file.originalFilename.toLowerCase() === "edit_manifest.json"
+    );
+    const imageFiles = form.files.filter((file) => file !== manifestFile);
+    if (imageFiles.length === 0) {
+      sendError(res, "NO_EDITED_FILES", "请至少选择一个 JPG/JPEG 已修图文件");
+      return;
+    }
+
+    const result = await uploadEditedImages({
+      eventId: req.params.id,
+      files: imageFiles,
+      manifestFile,
+      baseUrl: getBaseUrl(req)
+    });
+
+    const { images: _images, ...responseData } = result;
+    sendSuccess(res, responseData);
+  } catch (err: any) {
+    if (err?.code) {
+      sendError(res, err.code, err.message, err.code === "EVENT_NOT_FOUND" ? 404 : 400);
+    } else {
+      getLogger().error({ err }, "上传已修图失败");
+      sendError(res, "UPLOAD_EDITED_IMAGES_FAILED", "上传已修图失败", 500);
     }
   } finally {
     await form?.cleanup();

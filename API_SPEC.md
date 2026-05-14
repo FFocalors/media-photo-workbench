@@ -665,7 +665,7 @@ working/{event_slug}/清单
   - `IMAGE_NOT_FOUND`：图片记录不存在。
   - `EDITED_IMAGE_NOT_AVAILABLE`：`edited_path` 为空，暂无已修图。
   - `IMAGE_FILE_NOT_FOUND`：已修图文件不存在。
-- **备注**：当前只预留单图已修图下载能力；已修图上传与匹配流程仍未实现。下载成功后写入 `download_logs` 和 `operation_logs`。
+- **备注**：后端按 `image.id` 查询 `edited_path` 后下载，不暴露仓库目录。下载成功后写入 `download_logs` 和 `operation_logs`。
 
 ### [计划中] 生成 ZIP 下载包
 - **用途**：将选中的多张图打包成 ZIP 下载。
@@ -682,21 +682,132 @@ working/{event_slug}/清单
 
 ## 八、Edit Workflow 修图流转
 
-### [计划中] 生成待修包
+### [已实现] 生成待修包
 - **用途**：将状态为 edit 的图片原图及 manifest 打包。
 - **请求方法**：`POST`
 - **路径**：`/api/events/:eventId/edit-package`
 - **请求参数示例**：无
-- **响应示例**：略
-- **备注**：无
+- **响应示例**：
+  ```json
+  {
+    "ok": true,
+    "data": {
+      "packageId": "pkg_xxx",
+      "packagePath": "E:\\MediaPhotoWorkspace\\working\\event\\导出\\压缩包\\待修包_event_20260514_120000_pkg_xxx.zip",
+      "downloadUrl": "http://localhost:3030/api/edit-packages/pkg_xxx/download",
+      "total": 12,
+      "success": 11,
+      "skipped": 1,
+      "errors": [
+        {
+          "imageId": "img_xxx",
+          "filename": "IMG_0001.JPG",
+          "reason": "原图文件不存在，已跳过"
+        }
+      ]
+    },
+    "error": null
+  }
+  ```
+- **ZIP 内容**：
+  ```text
+  edit_manifest.json
+  待修原图/IMG_0001.JPG
+  待修原图/IMG_0002.JPG
+  已修图回传/edit_manifest.json
+  已修图回传/请把修好的JPG放在这里.txt
+  ```
+- **edit_manifest.json 示例**：
+  ```json
+  [
+    {
+      "image_id": "img_xxx",
+      "event_id": "evt_xxx",
+      "original_filename": "IMG_0001.JPG",
+      "export_filename": "IMG_0001.JPG",
+      "stored_filename": "event_20260514_img_xxx_IMG_0001.JPG",
+      "file_hash": "sha256...",
+      "original_path": "E:\\MediaPhotoWorkspace\\working\\event\\原图\\主机导入\\..."
+    }
+  ]
+  ```
+- **错误码**：
+  - `EVENT_NOT_FOUND`：活动不存在。
+  - `EVENT_NOT_EDITABLE`：活动已归档或删除，不能执行修图流转。
+  - `NO_EDIT_IMAGES`：没有 `status = edit` 的待修图。
+- **备注**：
+  - 只查询 `status = edit` 且 `is_deleted = 0` 的图片。
+  - 原图缺失的图片会跳过并写入 `errors`。
+  - 待修包保存到 `working/{event_slug}/导出/压缩包`。
+  - 待修包 ZIP 文件名使用中文前缀 `待修包_...zip`。
+  - ZIP 内预置 `已修图回传` 文件夹，文件夹内包含一份同内容的 `edit_manifest.json`，修图人员可把修好的 JPG/JPEG 放入该目录后直接拖入整个文件夹回传。
+  - ZIP 不额外生成逐图标记文件；图片对应关系以 `edit_manifest.json` 为准，缺失 manifest 时只做文件名兜底。
+  - 当前同步生成 ZIP，后续大批量活动应改为任务队列。
 
-### [计划中] 批量回传已修图
+### [已实现] 下载待修包
+- **用途**：下载已经生成的待修包 ZIP。
+- **请求方法**：`GET`
+- **路径**：`/api/edit-packages/:packageId/download`
+- **请求参数示例**：无
+- **响应示例**：返回 ZIP 文件流，并带 `Content-Disposition` 下载头。
+- **错误码**：
+  - `EDIT_PACKAGE_NOT_FOUND`：待修包记录不存在。
+  - `EDIT_PACKAGE_FILE_NOT_FOUND`：待修包 ZIP 文件不存在。
+- **备注**：待修包记录复用 `export_jobs`，`type = edit_package`。下载成功后写入 `download_logs.type = zip` 和 `operation_logs.type = edit_package_downloaded`。
+
+### [已实现] 批量回传已修图
 - **用途**：修片师将修好的 JPG 连同 manifest 一起上传。
 - **请求方法**：`POST`
 - **路径**：`/api/events/:eventId/edited/upload`
-- **请求参数示例**：`multipart/form-data`
-- **响应示例**：略
-- **备注**：无
+- **请求类型**：`multipart/form-data`
+- **字段**：
+  - `manifest`：`edit_manifest.json`，可选。
+  - `files`：一个或多个 JPG/JPEG 已修图文件。
+- **响应示例**：
+  ```json
+  {
+    "ok": true,
+    "data": {
+      "total": 3,
+      "matched": 2,
+      "unmatched": 1,
+      "errors": [
+        {
+          "filename": "unknown_final.jpg",
+          "reason": "未能匹配到原图"
+        }
+      ],
+      "items": [
+        {
+          "imageId": "img_xxx",
+          "originalFilename": "IMG_0001.JPG",
+          "uploadedFilename": "IMG_0001_final.jpg",
+          "editedPath": "E:\\MediaPhotoWorkspace\\working\\event\\已修图\\...",
+          "matchedBy": "filename",
+          "status": "edited"
+        }
+      ]
+    },
+    "error": null
+  }
+  ```
+- **匹配规则**：
+  - 优先读取 `edit_manifest.json`，按上传文件名匹配 manifest 中的 `export_filename` / `original_filename`，再取 `image_id` 更新对应图片。
+  - manifest 缺失或未匹配时，按活动内图片 `original_filename` 兜底匹配。
+  - 文件名兜底会去除 `_edit`、`-edit`、`_已修`、`-已修`、`_final`、`-final` 等常见后缀后比较。
+  - 完全无关的任意改名无法可靠自动匹配；这种情况必须同时上传 `edit_manifest.json`，或保留原文件名主体。
+- **错误码**：
+  - `EVENT_NOT_FOUND`：活动不存在。
+  - `EVENT_NOT_EDITABLE`：活动已归档或删除，不能执行修图流转。
+  - `NO_EDITED_FILES`：没有收到 JPG/JPEG 已修图文件。
+  - `INVALID_EDIT_MANIFEST`：`edit_manifest.json` 解析失败。
+- **备注**：
+  - 前端回传页支持拖拽 `已修图回传` 文件夹，并会递归读取其中的 JPG/JPEG 和 `edit_manifest.json`；API 本身仍使用 `multipart/form-data`。
+  - 已修图保存到 `working/{event_slug}/已修图`，不覆盖原图。
+  - 同一张图片重复回传时，会删除该图片旧的已修图文件并保存最新版本，避免 `已修图` 目录产生重复副本。
+  - 成功回传后会用最新已修图重新生成该图片的 `缩略图` 和 `预览图` WebP，因此图片墙和预览弹窗显示最新已修版本。
+  - 成功匹配后更新 `images.edited_path`、`images.status = edited`、`images.updated_at`。
+  - 成功匹配后写入 `operation_logs.type = edited_image_uploaded`，并广播 `image-updated`。
 
 ### [计划中] 获取回传匹配结果
 - **用途**：查看已修图通过 manifest 匹配原图的成功与失败记录。

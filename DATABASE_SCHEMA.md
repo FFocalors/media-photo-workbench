@@ -111,7 +111,7 @@
 | `created_at`| TEXT | 记录时间 | NOT NULL, DEFAULT `now` |
 
 ### 7. `export_jobs` (导出任务表)
-**用途**：记录正式发布、批量打包等后台长耗时任务的状态信息。
+**用途**：记录正式发布、待修包、批量打包等后台长耗时任务或生成物状态信息。
 | 字段名 | 类型 | 含义 | 约束 |
 |---|---|---|---|
 | `id` | TEXT | 任务ID | PRIMARY KEY |
@@ -128,6 +128,9 @@
 | `operator` | TEXT | 触发人 | NOT NULL, DEFAULT '' |
 | `created_at`| TEXT | 任务创建时间 | NOT NULL, DEFAULT `now` |
 | `updated_at`| TEXT | 最后更新时间 | NOT NULL, DEFAULT `now` |
+
+当前已使用的 `type`：
+- `edit_package`：Phase 6 待修包 ZIP 记录，`output_path` 指向 ZIP 文件。
 
 ### 8. `archived_events` (归档活动摘要表)
 **用途**：当原活动归档并清出主库后，在此留下不可修改的摘要索引，供主页展示历史。

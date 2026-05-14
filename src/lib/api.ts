@@ -524,3 +524,100 @@ export async function downloadImageFile(id: string, type: ImageDownloadType, fal
   anchor.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
+// ---------- Edit Workflow ----------
+
+export interface EditPackageError {
+  imageId?: string;
+  filename: string;
+  reason: string;
+}
+
+export interface EditPackageData {
+  packageId: string;
+  packagePath: string;
+  downloadUrl: string;
+  total: number;
+  success: number;
+  skipped: number;
+  errors: EditPackageError[];
+}
+
+export async function createEditPackage(eventId: string): Promise<ApiResponse<EditPackageData>> {
+  return request<EditPackageData>(`/api/events/${eventId}/edit-package`, {
+    method: "POST"
+  });
+}
+
+export function getEditPackageDownloadUrl(packageId: string): string {
+  return `${getApiBase()}/api/edit-packages/${encodeURIComponent(packageId)}/download`;
+}
+
+export async function downloadEditPackage(packageId: string, fallbackFilename = "待修包.zip"): Promise<void> {
+  const res = await fetch(getEditPackageDownloadUrl(packageId));
+
+  if (!res.ok) {
+    let message = "待修包下载失败";
+    try {
+      const json = await res.json();
+      message = json?.error?.message || message;
+    } catch {
+      // keep default message
+    }
+    throw new Error(message);
+  }
+
+  const blob = await res.blob();
+  const filename = getFilenameFromDisposition(res.headers.get("Content-Disposition"), fallbackFilename);
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export interface EditedUploadError {
+  filename: string;
+  reason: string;
+}
+
+export interface EditedUploadItem {
+  imageId: string;
+  originalFilename: string;
+  uploadedFilename: string;
+  editedPath: string;
+  matchedBy: "manifest" | "filename";
+  status: "edited";
+}
+
+export interface EditedUploadData {
+  total: number;
+  matched: number;
+  unmatched: number;
+  errors: EditedUploadError[];
+  items: EditedUploadItem[];
+}
+
+export async function uploadEditedImages(
+  eventId: string,
+  input: {
+    files: File[];
+    manifestFile?: File | null;
+  }
+): Promise<ApiResponse<EditedUploadData>> {
+  const formData = new FormData();
+  if (input.manifestFile) {
+    formData.append("manifest", input.manifestFile);
+  }
+  for (const file of input.files) {
+    formData.append("files", file);
+  }
+
+  return request<EditedUploadData>(`/api/events/${eventId}/edited/upload`, {
+    method: "POST",
+    body: formData
+  });
+}

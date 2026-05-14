@@ -28,6 +28,50 @@
 
 ## 开发记录
 
+### Phase 6：修图流转
+- **日期**：2026-05-14
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - 新增待修包生成接口 `POST /api/events/:eventId/edit-package`。
+  - 待修包会查询 `status = edit` 且 `is_deleted = 0` 的图片，跳过原图缺失项并记录 errors。
+  - 生成 `edit_manifest.json`，并与待修原图一起打包为 ZIP，保存到 `working/{event_slug}/导出/压缩包`。
+  - 待修包 ZIP 文件名使用中文前缀 `待修包_...zip`，包内目录使用 `待修原图` 和 `已修图回传`。
+  - 待修包内新增 `已修图回传/edit_manifest.json` 和 `已修图回传/请把修好的JPG放在这里.txt`，修图人员可把修好的 JPG/JPEG 放入该文件夹后直接拖入整文件夹回传。
+  - 新增项目内轻量 ZIP 写入工具，不额外引入外部压缩依赖。
+  - 复用 `export_jobs` 记录待修包，`type = edit_package`。
+  - 新增待修包下载接口 `GET /api/edit-packages/:packageId/download`，下载成功写入 `download_logs` 和 `operation_logs`。
+  - 新增已修图回传接口 `POST /api/events/:eventId/edited/upload`。
+  - 已修图回传支持可选 `edit_manifest.json`，优先按 manifest 匹配，失败时按文件名兜底匹配。
+  - 文件名兜底匹配会去除 `_edit`、`-edit`、`_已修`、`-已修`、`_final`、`-final` 等常见后缀。
+  - 不生成额外逐图标记文件；完全无关改名不保证匹配，需依赖 `edit_manifest.json` 或保留原文件名主体。
+  - 已修图保存到 `working/{event_slug}/已修图`，成功后更新 `images.edited_path` 和 `images.status = edited`。
+  - 同一张图片重复回传时，会清理旧已修图并保存最新版本，避免 `已修图` 目录重复累积。
+  - 已修图回传成功后会重新生成该图片的缩略图和预览图，让图片墙和预览弹窗显示最新已修版本。
+  - 已修图回传成功写入 `operation_logs`，并广播 `image-updated`。
+  - 改造修图流转页，支持活动选择、待修/已修数量、原图缺失数量、生成待修包、下载待修包、拖拽上传 `已修图回传` 文件夹和匹配结果展示。
+- **修改文件**：
+  - `src-server/utils/zip.ts`
+  - `src-server/services/editWorkflow.ts`
+  - `src-server/routes/editPackages.ts`
+  - `src-server/routes/events.ts`
+  - `src-server/app.ts`
+  - `src/lib/api.ts`
+  - `src/pages/host/Retouch.tsx`
+  - `API_SPEC.md`
+  - `DATABASE_SCHEMA.md`
+  - `README.md`
+  - `ROADMAP.md`
+  - `CHANGELOG.md`
+  - `DEVELOPMENT_LOG.md`
+- **验证方式**：
+  - `pnpm build` 通过。
+  - 推荐手工验证：在图片墙将图片标记为“待修图”，进入修图流转页生成待修包，下载 ZIP 并确认包含 `edit_manifest.json`、`待修原图` 和 `已修图回传/edit_manifest.json`；把修好的 JPG 放进 `已修图回传` 后拖入整个文件夹，确认图片状态变为 `edited`，图片墙通过 Socket.IO 实时更新；重复回传同一张图，确认 `已修图` 目录只保留该图最新版本。
+- **未完成事项**：
+  - 未实现导出发布、活动归档、回收站、永久删除、远程传输、复杂账号权限、RAW/HEIC/视频支持。
+  - 待修包生成当前为同步任务，后续大批量活动应改为任务队列和进度轮询。
+- **下一步计划**：
+  - 建议进入 Phase 7：导出发布，先实现按当前筛选、4 星以上、可发布、已修图生成发布包。
+
 ### Phase 5C：局域网客户端协作闭环
 - **日期**：2026-05-14
 - **开发者 / 工具**：Codex

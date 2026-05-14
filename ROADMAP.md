@@ -2,7 +2,7 @@
 
 ## 当前阶段状态
 
-项目已完成 Phase 5C：局域网客户端协作闭环。当前代码已经支持主机本地导入、真实图片墙、基础选片、单图下载、图片逻辑删除、Socket.IO 实时同步，以及客户端连接主机、读取活动、上传 JPG/JPEG、查看/打星/改状态/下载的最小协作闭环。
+项目已完成 Phase 6：修图流转。当前代码已经支持主机本地导入、真实图片墙、基础选片、单图下载、Socket.IO 实时同步、客户端上传协作，以及待修包生成、`edit_manifest.json`、已修图拖拽回传、manifest/文件名匹配和已修图状态实时同步。
 
 ## 已完成
 
@@ -78,13 +78,18 @@
 - 客户端上传复用图片导入管线，保存到 `原图/客户端上传`，生成缩略图/预览图，写入 `images`，`source = client_upload`。
 - 客户端上传使用 `file_hash` 去重，重复计入 `skipped`，成功后广播 `image-created`。
 
-## 下一步
-
 ### Phase 6：修图流转
-- 待修包生成。
-- `edit_manifest.json`。
-- 已修图回传。
-- manifest 优先匹配，文件名兜底匹配。
+- `POST /api/events/:eventId/edit-package` 生成待修包。
+- 待修包包含待修原图、根目录 `edit_manifest.json` 和内置同名 manifest 的 `已修图回传` 文件夹，保存到 `导出/压缩包`。
+- `GET /api/edit-packages/:packageId/download` 下载待修包，并写入下载日志和操作日志。
+- `POST /api/events/:eventId/edited/upload` 上传已修图。
+- 已修图回传优先按 `edit_manifest.json` 匹配，失败时按文件名兜底匹配。
+- 成功匹配后保存到 `已修图`，更新 `edited_path` 和 `status = edited`，并广播 `image-updated`。
+- 同一图片重复回传时，旧已修图会被清理并由最新版本覆盖；回传成功后同步刷新缩略图和预览图。
+- 修图流转页接入真实数据，支持生成、下载、拖拽上传 `已修图回传` 文件夹和匹配结果展示。
+- 不生成额外逐图标记文件；完全无关改名不保证匹配，需依赖 `edit_manifest.json` 或保留原文件名主体。
+
+## 下一步
 
 ### Phase 7：导出与归档
 - 发布导出规格：原尺寸、长边 3000px、长边 1920px。
