@@ -7,6 +7,7 @@ import eventsRouter from "./routes/events";
 import imagesRouter from "./routes/images";
 import editPackagesRouter from "./routes/editPackages";
 import exportsRouter from "./routes/exports";
+import archivedEventsRouter from "./routes/archivedEvents";
 
 /**
  * 创建 Express 应用实例。
@@ -26,6 +27,7 @@ export function createApp(): express.Application {
   app.use("/api/images", imagesRouter);
   app.use("/api/edit-packages", editPackagesRouter);
   app.use("/api/exports", exportsRouter);
+  app.use("/api/archived-events", archivedEventsRouter);
 
   return app;
 }

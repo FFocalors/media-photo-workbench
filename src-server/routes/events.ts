@@ -16,6 +16,7 @@ import { emitImageCreated } from "../realtime/socket";
 import { parseMultipartForm } from "../utils/multipart";
 import { createEditPackage, uploadEditedImages } from "../services/editWorkflow";
 import { createPublishExport } from "../services/publishExport";
+import { cleanupEventArchive, prepareEventArchive, verifyEventArchive } from "../services/archive";
 
 const router = Router();
 
@@ -297,6 +298,7 @@ router.post("/:id/export", async (req, res) => {
       size: req.body.size,
       quality: Number(req.body.quality ?? 90),
       filenameMode: req.body.filenameMode,
+      limitFileSize10Mb: req.body.limitFileSize10Mb === true,
       baseUrl: getBaseUrl(req)
     });
     sendSuccess(res, result);
@@ -308,6 +310,69 @@ router.post("/:id/export", async (req, res) => {
       getLogger().error({ err }, "发布导出失败");
       sendError(res, "PUBLISH_EXPORT_FAILED", "发布导出失败", 500);
     }
+  }
+});
+
+/**
+ * POST /api/events/:id/archive/prepare
+ * 生成活动归档目录、清单、CSV 和独立 event.db。
+ */
+router.post("/:id/archive/prepare", async (req, res) => {
+  try {
+    const result = await prepareEventArchive(req.params.id);
+    sendSuccess(res, result);
+  } catch (err: any) {
+    if (err?.code) {
+      const status = err.code === "EVENT_NOT_FOUND" ? 404 : 400;
+      sendError(res, err.code, err.message, status);
+      return;
+    }
+    getLogger().error({ err }, "生成活动归档失败");
+    sendError(res, "ARCHIVE_PREPARE_FAILED", "生成活动归档失败", 500);
+  }
+});
+
+/**
+ * POST /api/events/:id/archive/verify
+ * 验证活动归档完整性。
+ */
+router.post("/:id/archive/verify", async (req, res) => {
+  try {
+    const result = await verifyEventArchive(
+      req.params.id,
+      typeof req.body?.archivePath === "string" ? req.body.archivePath : undefined
+    );
+    sendSuccess(res, result);
+  } catch (err: any) {
+    if (err?.code) {
+      const status = err.code === "EVENT_NOT_FOUND" || err.code === "ARCHIVE_NOT_FOUND" ? 404 : 400;
+      sendError(res, err.code, err.message, status);
+      return;
+    }
+    getLogger().error({ err }, "验证活动归档失败");
+    sendError(res, "ARCHIVE_VERIFY_FAILED", "验证活动归档失败", 500);
+  }
+});
+
+/**
+ * POST /api/events/:id/archive/cleanup
+ * 归档验证通过后清理 working 工作区。
+ */
+router.post("/:id/archive/cleanup", async (req, res) => {
+  try {
+    const result = await cleanupEventArchive(req.params.id, {
+      confirm: req.body?.confirm === true,
+      archivePath: typeof req.body?.archivePath === "string" ? req.body.archivePath : undefined
+    });
+    sendSuccess(res, result);
+  } catch (err: any) {
+    if (err?.code) {
+      const status = err.code === "EVENT_NOT_FOUND" || err.code === "ARCHIVE_NOT_FOUND" ? 404 : 400;
+      sendError(res, err.code, err.message, status);
+      return;
+    }
+    getLogger().error({ err }, "清理归档工作区失败");
+    sendError(res, "ARCHIVE_CLEANUP_FAILED", "清理归档工作区失败", 500);
   }
 });
 

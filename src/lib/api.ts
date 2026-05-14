@@ -706,3 +706,79 @@ export async function downloadPublishExport(jobId: string, fallbackFilename = "p
   anchor.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
+// ---------- Archive ----------
+
+export interface ArchiveMissingFile {
+  imageId?: string;
+  type: "original" | "edited" | "export";
+  sourcePath: string;
+  reason: string;
+}
+
+export interface ArchivePrepareData {
+  archivePath: string;
+  totalImages: number;
+  originalCopied: number;
+  editedCopied: number;
+  exportCopied: number;
+  missingFiles: ArchiveMissingFile[];
+  manifestPath: string;
+  eventDbPath: string;
+}
+
+export interface ArchiveVerifyData {
+  archivePath: string;
+  verified: boolean;
+  missingFiles: string[];
+  mismatchedFiles: Array<{ path: string; expectedHash: string; actualHash: string }>;
+  checkedAt: string;
+}
+
+export interface ArchivedEventData {
+  id: string;
+  event_id: string;
+  event_name: string;
+  event_slug: string;
+  event_date: string;
+  total_images: number;
+  edited_images: number;
+  published_images: number;
+  archive_path: string;
+  archived_at: string;
+}
+
+export interface ArchiveCleanupData {
+  eventId: string;
+  status: "archived";
+  workingDir: string;
+  archivePath: string;
+  cleaned: boolean;
+  archivedEvent: ArchivedEventData;
+}
+
+export async function prepareEventArchive(eventId: string): Promise<ApiResponse<ArchivePrepareData>> {
+  return request<ArchivePrepareData>(`/api/events/${eventId}/archive/prepare`, {
+    method: "POST"
+  });
+}
+
+export async function verifyEventArchive(eventId: string, archivePath?: string): Promise<ApiResponse<ArchiveVerifyData>> {
+  return request<ArchiveVerifyData>(`/api/events/${eventId}/archive/verify`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ archivePath })
+  });
+}
+
+export async function cleanupEventArchive(eventId: string, archivePath: string): Promise<ApiResponse<ArchiveCleanupData>> {
+  return request<ArchiveCleanupData>(`/api/events/${eventId}/archive/cleanup`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ confirm: true, archivePath })
+  });
+}
+
+export async function fetchArchivedEvents(): Promise<ApiResponse<ArchivedEventData[]>> {
+  return request<ArchivedEventData[]>("/api/archived-events");
+}

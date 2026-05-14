@@ -27,6 +27,15 @@ export interface RealtimeExportPayload {
   exportJob?: unknown;
 }
 
+export interface RealtimeArchivePayload {
+  eventId: string;
+  archivePath: string;
+  status: string;
+  action: string;
+  updatedAt: string;
+  archivedEvent?: unknown;
+}
+
 let realtime: SocketServer | null = null;
 
 export function initRealtime(server: http.Server): SocketServer {
@@ -89,4 +98,8 @@ export function emitTaskUpdated(payload: RealtimeTaskPayload): void {
 
 export function emitExportCreated(payload: RealtimeExportPayload): void {
   emit("export-created", payload);
+}
+
+export function emitArchiveUpdated(payload: RealtimeArchivePayload): void {
+  emit("archive-updated", payload);
 }
