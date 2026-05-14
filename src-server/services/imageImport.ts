@@ -7,13 +7,19 @@ import { getLogger } from "../utils/logger";
 import { getEventById } from "./events";
 import { ensureEventWorkingDirs, getEventWorkspacePaths } from "./eventWorkspace";
 
-export type ImportSourceType = "host_import";
+export type ImportSourceType = "host_import" | "client_upload";
 
 export interface ImportScanFile {
   filename: string;
   path: string;
   size: number;
   extension: string;
+}
+
+export interface ImportSourceFile {
+  filename: string;
+  path: string;
+  size: number;
 }
 
 export interface ImportScanResult {
@@ -43,6 +49,9 @@ export interface ImportStartResult {
   eventId: string;
   folderPath: string;
   sourceType: ImportSourceType;
+  photographer: string;
+  device: string;
+  remark: string;
   total: number;
   success: number;
   failed: number;
@@ -186,6 +195,36 @@ function ensureEventReady(eventId: string) {
   return event;
 }
 
+function getOriginalTargetDir(sourceType: ImportSourceType, workspace: ReturnType<typeof getEventWorkspacePaths>): string {
+  return sourceType === "client_upload" ? workspace.clientUploadOriginalDir : workspace.hostImportOriginalDir;
+}
+
+function writeImportLog(input: {
+  imageId: string;
+  eventId: string;
+  sourceType: ImportSourceType;
+  photographer: string;
+  device: string;
+  originalFilename: string;
+  storedFilename: string;
+}): void {
+  getDatabase().prepare(`
+    INSERT INTO operation_logs (type, target_type, target_id, operator, device, detail, created_at)
+    VALUES ('image_imported', 'image', ?, ?, ?, ?, ?)
+  `).run(
+    input.imageId,
+    input.photographer,
+    input.device,
+    JSON.stringify({
+      event_id: input.eventId,
+      source_type: input.sourceType,
+      original_filename: input.originalFilename,
+      stored_filename: input.storedFilename
+    }),
+    nowTimestamp()
+  );
+}
+
 export async function scanImportFolder(eventId: string, folderPath: string): Promise<ImportScanResult> {
   ensureEventReady(eventId);
   const files = await listJpegFiles(folderPath);
@@ -205,22 +244,48 @@ export async function importImages(input: {
 }): Promise<ImportStartResult> {
   const sourceType = input.sourceType ?? "host_import";
   if (sourceType !== "host_import") {
-    throw { code: "UNSUPPORTED_SOURCE_TYPE", message: "第一版只支持 host_import" };
+    throw { code: "UNSUPPORTED_SOURCE_TYPE", message: "文件夹导入只支持 host_import" };
   }
 
-  const event = ensureEventReady(input.eventId);
+  ensureEventReady(input.eventId);
   const files = await listJpegFiles(input.folderPath);
+  return importImageFiles({
+    eventId: input.eventId,
+    files,
+    folderPath: input.folderPath,
+    sourceType
+  });
+}
+
+export async function importImageFiles(input: {
+  eventId: string;
+  files: ImportSourceFile[];
+  folderPath?: string;
+  sourceType: ImportSourceType;
+  photographer?: string;
+  device?: string;
+  remark?: string;
+}): Promise<ImportStartResult> {
+  const sourceType = input.sourceType;
+  const event = ensureEventReady(input.eventId);
   const workingDir = ensureEventWorkingDirs(event.slug);
   const repositoryPath = getConfig().repository.path;
   const workspace = getEventWorkspacePaths(repositoryPath, event.slug);
+  const originalDir = getOriginalTargetDir(sourceType, workspace);
   const sharp = loadSharp();
   const db = getDatabase();
+  const photographer = input.photographer?.trim() ?? "";
+  const device = input.device?.trim() ?? "";
+  const remark = input.remark?.trim() ?? "";
 
   const result: ImportStartResult = {
     eventId: input.eventId,
-    folderPath: input.folderPath,
+    folderPath: input.folderPath ?? "",
     sourceType,
-    total: files.length,
+    photographer,
+    device,
+    remark,
+    total: input.files.length,
     success: 0,
     failed: 0,
     skipped: 0,
@@ -228,16 +293,27 @@ export async function importImages(input: {
     errors: []
   };
 
-  fs.ensureDirSync(workspace.hostImportOriginalDir);
+  fs.ensureDirSync(originalDir);
   fs.ensureDirSync(workspace.thumbsDir);
   fs.ensureDirSync(workspace.previewsDir);
 
-  for (const file of files) {
+  for (const file of input.files) {
     let originalTarget = "";
     let thumbPath = "";
     let previewPath = "";
 
     try {
+      const extension = path.extname(file.filename).toLowerCase();
+      if (!SUPPORTED_EXTENSIONS.has(extension)) {
+        result.failed += 1;
+        result.errors.push({
+          filename: file.filename,
+          path: file.path,
+          reason: "仅支持 JPG/JPEG 文件"
+        });
+        continue;
+      }
+
       const fileHash = await hashFile(file.path);
       const duplicate = db.prepare("SELECT id FROM images WHERE file_hash = ? LIMIT 1").get(fileHash);
       if (duplicate) {
@@ -248,7 +324,7 @@ export async function importImages(input: {
       const imageId = generateImageId();
       const safeOriginalName = sanitizeFilename(file.filename);
       const storedFilename = `${sanitizeFilename(event.slug)}_${formatDateForFilename()}_${imageId}_${safeOriginalName}`;
-      originalTarget = path.join(workspace.hostImportOriginalDir, storedFilename);
+      originalTarget = path.join(originalDir, storedFilename);
       thumbPath = path.join(workspace.thumbsDir, `${imageId}.webp`);
       previewPath = path.join(workspace.previewsDir, `${imageId}.webp`);
 
@@ -276,7 +352,7 @@ export async function importImages(input: {
           rating, status, category, remark, source, file_size, file_hash, exif_shot_at,
           width, height, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, ?, 0, 'unselected', '', '', ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, 0, 'unselected', '', ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         imageId,
         event.id,
@@ -285,9 +361,11 @@ export async function importImages(input: {
         thumbPath,
         previewPath,
         originalTarget,
+        photographer,
         exif.cameraModel,
         exif.lensModel,
         exif.shotAt,
+        remark,
         sourceType,
         file.size,
         fileHash,
@@ -297,6 +375,15 @@ export async function importImages(input: {
         now,
         now
       );
+      writeImportLog({
+        imageId,
+        eventId: event.id,
+        sourceType,
+        photographer,
+        device,
+        originalFilename: file.filename,
+        storedFilename
+      });
 
       result.success += 1;
       result.imported.push({

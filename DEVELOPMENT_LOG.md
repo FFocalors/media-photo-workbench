@@ -28,6 +28,49 @@
 
 ## 开发记录
 
+### Phase 5C：局域网客户端协作闭环
+- **日期**：2026-05-14
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - 客户端连接页接入真实 `GET /api/health`，支持输入主机地址、连接测试、连接失败提示和最近连接地址。
+  - 客户端连接成功后将 API Base URL 保存到 `localStorage`，客户端活动列表、图片墙、下载、上传和 Socket.IO 都使用当前主机地址。
+  - 新增客户端工作区布局，提供“图片墙”和“上传图片”入口；未连接主机时阻止进入客户端功能页。
+  - 客户端图片墙复用现有真实图片墙能力，支持查看缩略图/预览图、打星、改状态、分类、备注、单图下载和实时同步。
+  - 主机图片墙保留图片逻辑删除能力，客户端图片墙隐藏“删除所选”等主机专属操作。
+  - 新增 `POST /api/events/:eventId/upload`，支持客户端以 `multipart/form-data` 上传一个或多个 JPG/JPEG 文件。
+  - 新增轻量 multipart 解析工具，将上传文件暂存到系统临时目录，导入完成后自动清理。
+  - 客户端上传复用现有图片处理管线：复制到 `原图/客户端上传`，生成 400px WebP 缩略图和 1600px WebP 预览图，读取 EXIF，写入 `images` 表。
+  - 客户端上传写入 `source = client_upload`，支持摄影师、设备名和备注字段，使用 `file_hash` 去重，重复计入 `skipped`。
+  - 上传成功后广播 `image-created`，主机窗口和其他客户端窗口可实时看到新图。
+- **修改文件**：
+  - `src/lib/api.ts`
+  - `src/App.tsx`
+  - `src/layouts/ClientLayout.tsx`
+  - `src/pages/client/ClientConnect.tsx`
+  - `src/pages/client/ClientUpload.tsx`
+  - `src/pages/host/PhotoWall.tsx`
+  - `src/components/gallery/GalleryToolbar.tsx`
+  - `src-server/routes/events.ts`
+  - `src-server/services/imageImport.ts`
+  - `src-server/utils/multipart.ts`
+  - `API_SPEC.md`
+  - `README.md`
+  - `ROADMAP.md`
+  - `CHANGELOG.md`
+  - `DEVELOPMENT_LOG.md`
+- **验证方式**：
+  - `pnpm build` 通过。
+  - 建议单机双窗口验证：窗口 A 使用主机模式，窗口 B 使用客户端模式连接 `http://localhost:3030`；B 读取活动、打开图片墙、修改星级/状态、下载原图、上传 JPG，A 应实时同步。
+- **遇到的问题**：
+  - 当前环境无法新增 `multer` 依赖安装，因此没有引入新的上传中间件。
+- **解决方案**：
+  - 新增项目内轻量 multipart 解析工具，第一版用于局域网内 JPG/JPEG 客户端上传闭环；后续如需大文件流式上传和更强边界处理，可再替换为成熟中间件。
+- **未完成事项**：
+  - 未实现 ZIP 批量下载、修图回传、`edit_manifest.json`、导出发布、活动归档、回收站、永久删除和远程传输。
+  - 真实双设备局域网、防火墙和校园网隔离场景仍需线下补测。
+- **下一步计划**：
+  - 建议进入 Phase 6：修图流转，完成待修包、`edit_manifest.json` 和已修图回传。
+
 ### Phase 5B：Socket.IO 实时同步基础
 - **日期**：2026-05-14
 - **开发者 / 工具**：Codex

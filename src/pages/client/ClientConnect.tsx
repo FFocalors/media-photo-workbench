@@ -1,18 +1,59 @@
-import { ArrowLeft, CheckCircle2, Download, LinkIcon, QrCode, UploadCloud, Wifi } from "lucide-react";
-import { useState } from "react";
-import { Link } from "react-router-dom";
+import { ArrowLeft, CheckCircle2, LinkIcon, QrCode, Wifi } from "lucide-react";
+import type { ReactNode } from "react";
+import { useMemo, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { Notice } from "../../components/ui/States";
+import {
+  fetchHealthFrom,
+  getClientApiBase,
+  getRecentClientHosts,
+  HealthData,
+  normalizeApiBaseUrl,
+  setClientApiBase
+} from "../../lib/api";
 import { cn } from "../../lib/cn";
 
 const roles = ["编辑", "修图", "访客"];
 
 export function ClientConnectPage() {
-  const [hostAddress, setHostAddress] = useState("http://192.168.137.1:3030");
-  const [userName, setUserName] = useState("外拍同学");
-  const [role, setRole] = useState("编辑");
-  const [deviceName, setDeviceName] = useState("Client-A");
-  const [connected, setConnected] = useState(false);
+  const navigate = useNavigate();
+  const recentHosts = useMemo(() => getRecentClientHosts(), []);
+  const [hostAddress, setHostAddress] = useState(getClientApiBase() || recentHosts[0] || "http://192.168.137.1:3030");
+  const [userName, setUserName] = useState(localStorage.getItem("mediaPhotoWorkbench.clientUserName") || "外拍同学");
+  const [role, setRole] = useState(localStorage.getItem("mediaPhotoWorkbench.clientRole") || "编辑");
+  const [deviceName, setDeviceName] = useState(localStorage.getItem("mediaPhotoWorkbench.clientDevice") || "Client-A");
+  const [testing, setTesting] = useState(false);
+  const [health, setHealth] = useState<HealthData | null>(null);
+  const [message, setMessage] = useState<{ tone: "success" | "warning" | "danger"; title: string; body: string } | null>(null);
+
+  const connected = Boolean(health);
   const canConnect = hostAddress.trim().startsWith("http") && userName.trim().length > 0 && deviceName.trim().length > 0;
+
+  const handleConnect = async () => {
+    if (!canConnect) return;
+    setTesting(true);
+    setHealth(null);
+
+    try {
+      const normalized = normalizeApiBaseUrl(hostAddress);
+      const result = await fetchHealthFrom(normalized);
+      if (!result.ok || !result.data) {
+        setMessage({ tone: "danger", title: "连接失败", body: result.error?.message || "主机健康检查失败。" });
+        return;
+      }
+
+      const savedBase = setClientApiBase(normalized);
+      localStorage.setItem("mediaPhotoWorkbench.clientUserName", userName.trim());
+      localStorage.setItem("mediaPhotoWorkbench.clientRole", role);
+      localStorage.setItem("mediaPhotoWorkbench.clientDevice", deviceName.trim());
+      setHealth(result.data);
+      setMessage({ tone: "success", title: "连接测试通过", body: `已连接到 ${savedBase}。` });
+    } catch (err: any) {
+      setMessage({ tone: "danger", title: "连接失败", body: err?.message || "无法访问主机，请检查地址、网络和防火墙。" });
+    } finally {
+      setTesting(false);
+    }
+  };
 
   return (
     <main className="min-h-screen bg-[#F8F9FA] text-slate-900">
@@ -24,7 +65,7 @@ export function ClientConnectPage() {
             </Link>
             <div>
               <h1 className="text-2xl font-bold text-slate-900">连接到主机</h1>
-              <p className="mt-1 text-sm text-slate-500">上传、选片、下载待修包和回传已修图</p>
+              <p className="mt-1 text-sm text-slate-500">上传、选片、下载图片并参与局域网协作</p>
             </div>
           </div>
           <div className={cn("flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium", connected ? "bg-emerald-50 text-emerald-600" : "bg-slate-100 text-slate-500")}>
@@ -39,7 +80,7 @@ export function ClientConnectPage() {
               <div className="mb-6 flex items-start justify-between">
                 <div>
                   <h2 className="font-semibold text-slate-900">主机地址</h2>
-                  <p className="mt-1 text-sm text-slate-500">输入主机概览页显示的局域网地址或热点地址。</p>
+                  <p className="mt-1 text-sm text-slate-500">输入主机概览页显示的本机、局域网或热点地址。</p>
                 </div>
                 <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
                   <Wifi size={22} />
@@ -53,28 +94,39 @@ export function ClientConnectPage() {
                 />
                 <button
                   className={cn("rounded-lg px-5 py-2 text-sm font-medium text-white", canConnect ? "bg-blue-600 hover:bg-blue-700" : "cursor-not-allowed bg-slate-300")}
-                  disabled={!canConnect}
-                  onClick={() => setConnected(true)}
+                  disabled={!canConnect || testing}
+                  onClick={handleConnect}
                   type="button"
                 >
-                  连接测试
+                  {testing ? "连接中..." : "连接测试"}
                 </button>
               </div>
+
+              {recentHosts.length > 0 && (
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {recentHosts.map((host) => (
+                    <button
+                      className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-500 hover:border-blue-200 hover:text-blue-600"
+                      key={host}
+                      onClick={() => setHostAddress(host)}
+                      type="button"
+                    >
+                      {host}
+                    </button>
+                  ))}
+                </div>
+              )}
+
               {!canConnect && (
                 <Notice className="mt-4" tone="warning" title="连接信息不完整">
                   主机地址需要以 http 开头，并填写姓名和设备名后才能发起连接测试。
                 </Notice>
               )}
-              {connected && (
-                <Notice className="mt-4" tone="success" title="连接测试通过">
-                  已使用 {role} 身份连接到主机。上传、下载和实时同步入口已打开。
+              {message && (
+                <Notice className="mt-4" tone={message.tone} title={message.title}>
+                  {message.body}
                 </Notice>
               )}
-              <div className="mt-4 grid grid-cols-3 gap-3">
-                <InfoTile label="最近连接" value="http://192.168.1.108:3030" />
-                <InfoTile label="热点模式" value="192.168.137.1:3030" />
-                <InfoTile label="服务端口" value="3030" />
-              </div>
             </div>
 
             <div className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
@@ -91,22 +143,22 @@ export function ClientConnectPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-6">
-              <ClientActionCard
-                body="选择当前活动、摄影师和 JPG/JPEG 文件，上传后由主机统一入库并生成缩略图。"
-                disabled={!connected}
-                icon={<UploadCloud size={24} />}
-                meta={connected ? "当前活动：2026 春季运动会" : "连接主机后可用"}
-                title="上传图片"
-              />
-              <ClientActionCard
-                body="下载单张原图、当前筛选结果、待修包 ZIP 或发布包。批量下载由主机生成 ZIP。"
-                disabled={!connected}
-                icon={<Download size={24} />}
-                meta={connected ? "待修图：1,256 张" : "连接主机后可用"}
-                title="下载任务"
-              />
-            </div>
+            {health && (
+              <div className="grid grid-cols-2 gap-6">
+                <ClientActionCard
+                  body="查看缩略图、预览图，完成打星、状态流转、分类、备注和单图下载。"
+                  icon={<CheckCircle2 size={24} />}
+                  onClick={() => navigate("/client/photos")}
+                  title="进入图片墙"
+                />
+                <ClientActionCard
+                  body="选择 JPG/JPEG 文件上传到当前活动，由主机生成缩略图并实时广播。"
+                  icon={<Wifi size={24} />}
+                  onClick={() => navigate("/client/upload")}
+                  title="上传图片"
+                />
+              </div>
+            )}
           </section>
 
           <aside className="space-y-6">
@@ -124,17 +176,18 @@ export function ClientConnectPage() {
               </h2>
               <p className="text-sm leading-6 text-amber-800">
                 如果校园网无法连接，请让主机笔记本开启 Windows 热点，其他设备连接该热点后访问
-                <span className="font-medium"> 192.168.137.1:3030</span>。同时检查 Windows 防火墙是否允许访问。
+                <span className="font-medium"> 192.168.137.1:3030</span>，并检查 Windows 防火墙。
               </p>
             </div>
 
             <div className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
               <h2 className="mb-4 font-semibold text-slate-900">连接状态</h2>
               <div className="space-y-3">
-                <StatusLine active={connected} label="主机服务" />
-                <StatusLine active={connected} label="当前活动" />
-                <StatusLine active={connected} label="实时同步" />
+                <StatusLine active={health?.server.status === "running"} label="主机服务" />
+                <StatusLine active={health?.database.status === "connected"} label="数据库" />
+                <StatusLine active={Boolean(health?.repository.exists && health.repository.readable && health.repository.writable)} label="图片仓库" />
               </div>
+              {health && <p className="mt-4 truncate text-xs text-slate-400">{hostAddress}</p>}
             </div>
           </aside>
         </div>
@@ -156,23 +209,13 @@ function Field({ label, value, onChange }: { label: string; value: string; onCha
   );
 }
 
-function InfoTile({ label, value }: { label: string; value: string }) {
+function ClientActionCard({ icon, title, body, onClick }: { icon: ReactNode; title: string; body: string; onClick: () => void }) {
   return (
-    <div className="rounded-xl bg-slate-50 px-4 py-3">
-      <p className="text-xs text-slate-400">{label}</p>
-      <p className="mt-1 truncate text-sm font-medium text-slate-800">{value}</p>
-    </div>
-  );
-}
-
-function ClientActionCard({ icon, title, body, meta, disabled = false }: { icon: React.ReactNode; title: string; body: string; meta: string; disabled?: boolean }) {
-  return (
-    <div className={cn("rounded-2xl border border-slate-100 bg-white p-6 shadow-sm", disabled && "opacity-60")}>
-      <div className={cn("mb-5 flex h-12 w-12 items-center justify-center rounded-xl", disabled ? "bg-slate-100 text-slate-400" : "bg-blue-50 text-blue-600")}>{icon}</div>
+    <button className="rounded-2xl border border-slate-100 bg-white p-6 text-left shadow-sm transition-colors hover:border-blue-100 hover:bg-blue-50/30" onClick={onClick} type="button">
+      <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-xl bg-blue-50 text-blue-600">{icon}</div>
       <h2 className="font-semibold text-slate-900">{title}</h2>
       <p className="mt-3 text-sm leading-6 text-slate-500">{body}</p>
-      <div className="mt-5 rounded-lg bg-slate-50 px-3 py-2 text-xs font-medium text-slate-500">{meta}</div>
-    </div>
+    </button>
   );
 }
 

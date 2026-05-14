@@ -17,9 +17,9 @@ Media Photo Workbench 是面向校园融媒体中心、新闻中心及影像部�
 
 ## 当前开发状态
 
-**当前版本：0.2.0-dev（稳定性增强与活动管理阶段）**
+**当前版本：0.5.0-dev（局域网客户端协作闭环阶段）**
 
-项目已完成底层基础架构搭建、API 规范统一及原生活动管理的对接，暂未进入正式生产可用阶段。
+项目已打通从主机建活动、本地导入、真实图片墙、单图下载、Socket.IO 实时同步，到客户端连接主机并上传 JPG/JPEG 的最小协作闭环。当前仍处于开发阶段，尚未实现 ZIP 批量下载、修图回传、导出发布和活动归档。
 
 ### 当前已实现功能
 - Electron 桌面主进程与前端通信集成，实现原生弹窗（文件夹选择）与文件浏览器调用。
@@ -29,14 +29,18 @@ Media Photo Workbench 是面向校园融媒体中心、新闻中心及影像部�
 - 基于本地真实数据库的活动 (Events) CRUD 管理。
 - 创建新活动时，自动在宿主机本地进行物理工作区（Repository）的挂载及中文标准目录树构建。
 - `config.json` 系统参数配置与 `pino` 日志系统接入。
+- 主机本地 JPG/JPEG 导入，自动生成 WebP 缩略图和预览图，并读取 EXIF。
+- 真实图片墙：缩略图、预览弹窗、打星、状态、分类、备注、文件存在状态和图片逻辑删除。
+- 单图下载：原图、预览图，以及已修图下载预留接口。
+- Socket.IO 实时同步：图片新增、更新和逻辑删除可在多窗口之间同步。
+- 客户端模式：连接主机、读取活动、打开图片墙、下载图片、上传 JPG/JPEG 到主机。
 
 ## 技术栈
 
 - **构建工具**：Vite, pnpm
 - **桌面端容器**：Electron
 - **前端页面**：React 19, TypeScript, Tailwind CSS, Zustand, React Router
-- **本地后端**：Node.js, Express, better-sqlite3, pino, fs-extra
-- **规划中库**：sharp (缩略图处理), exifr (元数据解析), Socket.IO (局域网实时事件)
+- **本地后端**：Node.js, Express, better-sqlite3, pino, fs-extra, sharp, exifr, Socket.IO
 
 ## 开发环境要求
 
@@ -99,7 +103,8 @@ MediaPhotoWorkbench/
 
 详情请见 `CHANGELOG.md` 与 `AGENTS.md`。
 
-下阶段（v0.3.0）重点：
-- 图片本地文件夹扫描与大批量并发导入 (Import)。
-- 引入 `sharp` 在导入时自动生成符合规范的 WebP 缩略图与预览大图。
-- 使用 `exifr` 提取图片元数据并落库。
+下阶段重点：
+- 修图流转：待修包生成、`edit_manifest.json`、已修图回传和匹配。
+- 批量下载 / ZIP 包生成。
+- 发布导出与活动归档。
+- 真实局域网双设备、防火墙和校园网隔离场景补测。

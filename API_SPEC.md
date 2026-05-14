@@ -314,7 +314,7 @@ working/{event_slug}/清单
   - `pageSize`：每页数量，默认 `80`，最大 `200`。
   - `rating`：最低星级，例如 `4` 表示查询星级大于等于 4 的图片。
   - `status`：图片状态，支持 `unselected | rejected | archive | edit | edited | publish | published`。
-  - `source_type`：图片来源，第一版常用 `host_import`。
+  - `source_type`：图片来源，常用 `host_import` 或 `client_upload`。
   - `keyword`：关键字，匹配文件名、分类、备注、摄影师、相机和镜头字段。
 - **请求参数示例**：`?page=1&pageSize=80&rating=4&status=publish&source_type=host_import&keyword=现场`
 - **响应示例**：
@@ -565,13 +565,61 @@ working/{event_slug}/清单
 
 ## 六、Upload 客户端上传
 
-### [计划中] 客户端上传单图
-- **用途**：客户端通过局域网上传图片（流式）。
+### [已实现] 客户端上传 JPG/JPEG
+- **用途**：客户端通过局域网上传一个或多个 JPG/JPEG 文件到主机当前活动。
 - **请求方法**：`POST`
 - **路径**：`/api/events/:eventId/upload`
-- **请求参数示例**：`multipart/form-data`
-- **响应示例**：略
-- **备注**：无
+- **请求类型**：`multipart/form-data`
+- **字段**：
+  - `files`：一个或多个 JPG/JPEG 文件。
+  - `photographer`：摄影师，可选。
+  - `device`：设备名，可选。
+  - `remark`：备注，可选。
+- **响应示例**：
+  ```json
+  {
+    "ok": true,
+    "data": {
+      "eventId": "evt_xxx",
+      "folderPath": "",
+      "sourceType": "client_upload",
+      "photographer": "张三",
+      "device": "Client-A",
+      "remark": "外拍上传",
+      "total": 3,
+      "success": 2,
+      "failed": 0,
+      "skipped": 1,
+      "imported": [
+        {
+          "id": "img_xxx",
+          "originalFilename": "DSC_0001.JPG",
+          "storedFilename": "event_20260514_120000_img_xxx_DSC_0001.JPG",
+          "originalPath": "E:\\MediaPhotoWorkspace\\working\\event\\原图\\客户端上传\\...",
+          "thumbPath": "E:\\MediaPhotoWorkspace\\working\\event\\缩略图\\img_xxx.webp",
+          "previewPath": "E:\\MediaPhotoWorkspace\\working\\event\\预览图\\img_xxx.webp"
+        }
+      ],
+      "errors": []
+    },
+    "error": null
+  }
+  ```
+- **错误码**：
+  - `INVALID_MULTIPART_REQUEST`：请求不是有效的 multipart 上传请求。
+  - `UPLOAD_TOO_LARGE`：上传内容超过限制。
+  - `TOO_MANY_FILES`：一次上传文件数量超过限制。
+  - `NO_UPLOAD_FILES`：没有收到 `files` 文件。
+  - `EVENT_NOT_FOUND`：活动不存在。
+  - `EVENT_NOT_IMPORTABLE`：活动已归档或删除，不能上传。
+  - `MISSING_IMAGE_PROCESSOR`：缺少 `sharp` 依赖。
+- **备注**：
+  - 第一版只接受 `.jpg` / `.jpeg`，不接受 RAW、HEIC、PNG 或视频。
+  - 后端会先将上传文件写入系统临时目录，导入完成后清理临时文件。
+  - 原图复制到 `working/{event_slug}/原图/客户端上传`，不移动、不删除客户端源文件。
+  - 缩略图和预览图仍写入活动的 `缩略图`、`预览图` 目录。
+  - 使用 sha256 `file_hash` 去重，重复图片计入 `skipped`。
+  - 上传成功后广播 `image-created`。
 
 ### [计划中] 获取上传任务状态
 - **用途**：获取批量上传的整体统计。
@@ -754,7 +802,7 @@ working/{event_slug}/清单
 
 客户端（通过局域网或本机）通过 Socket.IO 连接到主机，可监听以下事件：
 
-- `image-created`：主机本地导入成功后广播。
+- `image-created`：主机本地导入或客户端上传成功后广播。
 - `image-updated`：图片星级、状态、分类或备注更新后广播。
 - `image-deleted-logical`：图片逻辑删除后广播。
 - `task-updated`：后台任务更新预留事件，目前未接入具体任务队列。

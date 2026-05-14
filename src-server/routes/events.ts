@@ -9,10 +9,11 @@ import {
   deleteEvent,
   CreateEventInput
 } from "../services/events";
-import { importImages, scanImportFolder } from "../services/imageImport";
+import { importImageFiles, importImages, scanImportFolder } from "../services/imageImport";
 import { getImageDtoById, listEventImages } from "../services/images";
 import { getLogger } from "../utils/logger";
 import { emitImageCreated } from "../realtime/socket";
+import { parseMultipartForm } from "../utils/multipart";
 
 const router = Router();
 
@@ -22,6 +23,19 @@ function getBaseUrl(req: Request): string {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function emitCreatedImages(importedIds: string[], baseUrl: string): void {
+  for (const imageId of importedIds) {
+    const image = getImageDtoById(imageId, baseUrl);
+    emitImageCreated({
+      eventId: image.event_id,
+      imageId: image.id,
+      image,
+      action: "image_created",
+      updatedAt: nowIso()
+    });
+  }
 }
 
 /**
@@ -142,17 +156,7 @@ router.post("/:id/import/start", async (req, res) => {
       folderPath,
       sourceType: "host_import"
     });
-    const baseUrl = getBaseUrl(req);
-    for (const imported of result.imported) {
-      const image = getImageDtoById(imported.id, baseUrl);
-      emitImageCreated({
-        eventId: image.event_id,
-        imageId: image.id,
-        image,
-        action: "image_created",
-        updatedAt: nowIso()
-      });
-    }
+    emitCreatedImages(result.imported.map((image) => image.id), getBaseUrl(req));
     sendSuccess(res, result);
   } catch (err: any) {
     if (err?.code) {
@@ -161,6 +165,57 @@ router.post("/:id/import/start", async (req, res) => {
       getLogger().error({ err }, "图片导入失败");
       sendError(res, "IMPORT_IMAGES_FAILED", "图片导入失败", 500);
     }
+  }
+});
+
+/**
+ * POST /api/events/:id/upload
+ * 客户端通过 multipart/form-data 上传 JPG/JPEG 文件。
+ */
+router.post("/:id/upload", async (req, res) => {
+  let form: Awaited<ReturnType<typeof parseMultipartForm>> | null = null;
+
+  try {
+    form = await parseMultipartForm(req, {
+      maxFiles: 500,
+      maxBytes: 512 * 1024 * 1024
+    });
+
+    const uploadFiles = form.files.filter((file) => file.fieldName === "files");
+    if (uploadFiles.length === 0) {
+      sendError(res, "NO_UPLOAD_FILES", "请至少选择一个 JPG/JPEG 文件");
+      return;
+    }
+
+    const result = await importImageFiles({
+      eventId: req.params.id,
+      files: uploadFiles.map((file) => ({
+        filename: file.originalFilename,
+        path: file.path,
+        size: file.size
+      })),
+      sourceType: "client_upload",
+      photographer: form.fields.photographer ?? "",
+      device: form.fields.device ?? "",
+      remark: form.fields.remark ?? ""
+    });
+
+    emitCreatedImages(result.imported.map((image) => image.id), getBaseUrl(req));
+    sendSuccess(res, {
+      ...result,
+      photographer: form.fields.photographer ?? "",
+      device: form.fields.device ?? "",
+      remark: form.fields.remark ?? ""
+    });
+  } catch (err: any) {
+    if (err?.code) {
+      sendError(res, err.code, err.message, err.code === "EVENT_NOT_FOUND" ? 404 : 400);
+    } else {
+      getLogger().error({ err }, "客户端上传图片失败");
+      sendError(res, "CLIENT_UPLOAD_FAILED", "客户端上传图片失败", 500);
+    }
+  } finally {
+    await form?.cleanup();
   }
 });
 

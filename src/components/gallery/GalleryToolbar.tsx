@@ -12,7 +12,8 @@ export function GalleryToolbar({
   onBatchStatus,
   search,
   onSearchChange,
-  realtimeStatus
+  realtimeStatus,
+  allowDelete = true
 }: {
   selectedCount: number;
   filteredCount: number;
@@ -23,6 +24,7 @@ export function GalleryToolbar({
   search: string;
   onSearchChange: (value: string) => void;
   realtimeStatus: RealtimeConnectionState;
+  allowDelete?: boolean;
 }) {
   const [batchMenuOpen, setBatchMenuOpen] = useState(false);
   const batchMenuRef = useRef<HTMLDivElement | null>(null);
@@ -72,15 +74,17 @@ export function GalleryToolbar({
         <div className="mx-1 h-6 w-px bg-slate-200" />
         <button className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50" onClick={onSelectAll} type="button">全选当前</button>
         <button className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50" disabled={selectedCount === 0} onClick={onClearSelection} type="button">清除选择</button>
-        <button
-          className="flex items-center gap-1.5 rounded-lg border border-red-100 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
-          disabled={selectedCount === 0}
-          onClick={onDeleteSelected}
-          type="button"
-        >
-          <Trash2 size={15} />
-          删除所选
-        </button>
+        {allowDelete && (
+          <button
+            className="flex items-center gap-1.5 rounded-lg border border-red-100 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={selectedCount === 0}
+            onClick={onDeleteSelected}
+            type="button"
+          >
+            <Trash2 size={15} />
+            删除所选
+          </button>
+        )}
         <div className="relative" ref={batchMenuRef}>
           <button
             aria-expanded={batchMenuOpen}

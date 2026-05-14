@@ -26,7 +26,7 @@ import {
 } from "../../lib/socket";
 import type { RealtimeConnectionState, RealtimeImagePayload } from "../../lib/socket";
 
-export function PhotoWallPage() {
+export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
   const [events, setEvents] = useState<EventData[]>([]);
   const [selectedEventId, setSelectedEventId] = useState("");
   const [photos, setPhotos] = useState<EventImageData[]>([]);
@@ -81,20 +81,23 @@ export function PhotoWallPage() {
 
   const loadEvents = useCallback(async () => {
     try {
-      const res = await fetchEvents("active");
+      const res = await fetchEvents(mode === "client" ? "all" : "active");
       if (res.ok && res.data) {
-        setEvents(res.data);
-        setSelectedEventId((current) => current || res.data[0]?.id || "");
-        if (res.data.length === 0) {
-          setMessage({ tone: "warning", title: "暂无进行中活动", body: "请先在活动管理中新建活动，再导入并查看图片。" });
+        const available = mode === "client"
+          ? res.data.filter((event) => ["active", "reviewing", "draft"].includes(event.status))
+          : res.data;
+        setEvents(available);
+        setSelectedEventId((current) => current || available[0]?.id || "");
+        if (available.length === 0) {
+          setMessage({ tone: "warning", title: "暂无可用活动", body: mode === "client" ? "主机当前没有可协作的活动。" : "请先在活动管理中新建活动，再导入并查看图片。" });
         }
       } else {
         setMessage({ tone: "danger", title: "活动读取失败", body: res.error?.message || "无法读取活动列表。" });
       }
     } catch {
-      setMessage({ tone: "danger", title: "后端服务未连接", body: "图片墙需要后端 API，请通过 pnpm dev 启动完整应用。" });
+      setMessage({ tone: "danger", title: "后端服务未连接", body: mode === "client" ? "请先在客户端连接页完成连接测试。" : "图片墙需要后端 API，请通过 pnpm dev 启动完整应用。" });
     }
-  }, []);
+  }, [mode]);
 
   const loadImages = useCallback(async () => {
     if (!selectedEventId) {
@@ -401,6 +404,7 @@ export function PhotoWallPage() {
             setSelectedIds([]);
             setActivePhotoId(null);
           }}
+          allowDelete={mode === "host"}
           onDeleteSelected={handleDeleteSelected}
           onSearchChange={setSearch}
           onSelectAll={selectAllFiltered}

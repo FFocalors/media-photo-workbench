@@ -5,7 +5,51 @@
  */
 
 // 声明全局类型已在 src/global.d.ts 中定义
+const CLIENT_API_BASE_KEY = "mediaPhotoWorkbench.clientApiBaseUrl";
+const CLIENT_RECENT_HOSTS_KEY = "mediaPhotoWorkbench.clientRecentHosts";
+
+export function normalizeApiBaseUrl(value: string): string {
+  const trimmed = value.trim().replace(/\/+$/, "");
+  if (!/^https?:\/\//i.test(trimmed)) {
+    throw new Error("主机地址必须以 http:// 或 https:// 开头");
+  }
+  return trimmed;
+}
+
+export function setClientApiBase(baseUrl: string): string {
+  const normalized = normalizeApiBaseUrl(baseUrl);
+  localStorage.setItem(CLIENT_API_BASE_KEY, normalized);
+  saveRecentClientHost(normalized);
+  return normalized;
+}
+
+export function getClientApiBase(): string {
+  return localStorage.getItem(CLIENT_API_BASE_KEY) ?? "";
+}
+
+export function clearClientApiBase(): void {
+  localStorage.removeItem(CLIENT_API_BASE_KEY);
+}
+
+export function getRecentClientHosts(): string[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(CLIENT_RECENT_HOSTS_KEY) ?? "[]");
+    return Array.isArray(parsed) ? parsed.filter((item) => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRecentClientHost(baseUrl: string): void {
+  const hosts = [baseUrl, ...getRecentClientHosts().filter((item) => item !== baseUrl)].slice(0, 6);
+  localStorage.setItem(CLIENT_RECENT_HOSTS_KEY, JSON.stringify(hosts));
+}
+
 export function getApiBase(): string {
+  if (window.location.pathname.startsWith("/client")) {
+    const clientBase = getClientApiBase();
+    if (clientBase) return clientBase;
+  }
   return (window as any).mediaPhotoWorkbench?.apiBaseUrl ?? "http://localhost:3030";
 }
 
@@ -26,6 +70,16 @@ async function request<T>(
   options?: RequestInit
 ): Promise<ApiResponse<T>> {
   const res = await fetch(`${getApiBase()}${path}`, options);
+  const json = await res.json();
+  return json as ApiResponse<T>;
+}
+
+async function requestFromBase<T>(
+  baseUrl: string,
+  path: string,
+  options?: RequestInit
+): Promise<ApiResponse<T>> {
+  const res = await fetch(`${normalizeApiBaseUrl(baseUrl)}${path}`, options);
   const json = await res.json();
   return json as ApiResponse<T>;
 }
@@ -53,6 +107,10 @@ export interface HealthData {
 
 export async function fetchHealth(): Promise<ApiResponse<HealthData>> {
   return request<HealthData>("/api/health");
+}
+
+export async function fetchHealthFrom(baseUrl: string): Promise<ApiResponse<HealthData>> {
+  return requestFromBase<HealthData>(baseUrl, "/api/health");
 }
 
 // ---------- Settings ----------
@@ -210,7 +268,7 @@ export interface ImportedImageSummary {
 export interface ImportStartData {
   eventId: string;
   folderPath: string;
-  sourceType: "host_import";
+  sourceType: "host_import" | "client_upload";
   total: number;
   success: number;
   failed: number;
@@ -232,6 +290,35 @@ export async function startImport(eventId: string, folderPath: string): Promise<
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ folderPath })
+  });
+}
+
+export interface ClientUploadData extends ImportStartData {
+  photographer: string;
+  device: string;
+  remark: string;
+}
+
+export async function uploadClientImages(
+  eventId: string,
+  input: {
+    files: File[];
+    photographer?: string;
+    device?: string;
+    remark?: string;
+  }
+): Promise<ApiResponse<ClientUploadData>> {
+  const formData = new FormData();
+  for (const file of input.files) {
+    formData.append("files", file);
+  }
+  formData.append("photographer", input.photographer ?? "");
+  formData.append("device", input.device ?? "");
+  formData.append("remark", input.remark ?? "");
+
+  return request<ClientUploadData>(`/api/events/${eventId}/upload`, {
+    method: "POST",
+    body: formData
   });
 }
 
