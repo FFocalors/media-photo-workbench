@@ -53,6 +53,8 @@ export function MetadataPanel({
           <Meta label="摄影师" value={photo.photographer || "未填写"} />
           <Meta label="相机型号" value={photo.camera_model || "未知"} />
           <Meta label="镜头" value={photo.lens_model || "未知"} />
+          <Meta label="原图文件" value={photo.original_exists ? "正常" : "缺失"} valueClassName={photo.original_exists ? "text-emerald-600" : "font-medium text-red-600"} />
+          <Meta label="预览图文件" value={photo.preview_exists ? "正常" : "缺失"} valueClassName={photo.preview_exists ? "text-emerald-600" : "font-medium text-red-600"} />
           <Meta label="已选择" value={`${selectedCount} 张`} />
 
           <div className="border-t border-slate-100 pt-5">
@@ -101,11 +103,11 @@ export function MetadataPanel({
   );
 }
 
-function Meta({ label, value, strong = false }: { label: string; value: string; strong?: boolean }) {
+function Meta({ label, value, strong = false, valueClassName = "" }: { label: string; value: string; strong?: boolean; valueClassName?: string }) {
   return (
     <div>
       <p className="mb-1 text-xs text-slate-400">{label}</p>
-      <p className={`break-all text-sm ${strong ? "font-medium text-slate-900" : "text-slate-700"}`}>{value}</p>
+      <p className={`break-all text-sm ${valueClassName || (strong ? "font-medium text-slate-900" : "text-slate-700")}`}>{value}</p>
     </div>
   );
 }

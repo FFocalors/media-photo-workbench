@@ -1,6 +1,6 @@
-import { X } from "lucide-react";
+import { Download, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { EventImageData, ImageStatus, imageStatusLabels, imageStatusOptions } from "../../lib/api";
+import { EventImageData, ImageDownloadType, ImageStatus, imageStatusLabels, imageStatusOptions } from "../../lib/api";
 import { cn } from "../../lib/cn";
 import { RatingStars } from "./RatingStars";
 
@@ -11,6 +11,7 @@ export function PreviewModal({
   onSelectPhoto,
   onNext,
   onPrevious,
+  onDownload,
   onRatingChange,
   onStatusChange,
   onCategoryChange,
@@ -22,6 +23,7 @@ export function PreviewModal({
   onSelectPhoto: (id: string) => void;
   onNext: () => void;
   onPrevious: () => void;
+  onDownload: (id: string, type: ImageDownloadType) => Promise<void>;
   onRatingChange: (id: string, rating: number) => void;
   onStatusChange: (id: string, status: ImageStatus) => void;
   onCategoryChange: (id: string, category: string) => void;
@@ -29,11 +31,26 @@ export function PreviewModal({
 }) {
   const [categoryDraft, setCategoryDraft] = useState(photo.category);
   const [remarkDraft, setRemarkDraft] = useState(photo.remark);
+  const [downloadError, setDownloadError] = useState("");
+  const [downloadingType, setDownloadingType] = useState<ImageDownloadType | null>(null);
 
   useEffect(() => {
     setCategoryDraft(photo.category);
     setRemarkDraft(photo.remark);
+    setDownloadError("");
   }, [photo.id, photo.category, photo.remark]);
+
+  const handleDownload = async (type: ImageDownloadType) => {
+    setDownloadError("");
+    setDownloadingType(type);
+    try {
+      await onDownload(photo.id, type);
+    } catch (err: any) {
+      setDownloadError(err?.message || "下载失败");
+    } finally {
+      setDownloadingType(null);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex bg-slate-950/90 text-white">
@@ -71,10 +88,50 @@ export function PreviewModal({
       <aside className="w-80 shrink-0 overflow-y-auto border-l border-white/10 bg-slate-900 p-5">
         <h2 className="mb-5 text-base font-semibold">图片操作</h2>
         <div className="space-y-5">
+          {downloadError && (
+            <div className="rounded-lg border border-red-400/30 bg-red-500/10 px-3 py-2 text-xs leading-5 text-red-100">
+              {downloadError}
+            </div>
+          )}
+
+          <div className="space-y-2 rounded-xl border border-white/10 bg-white/[0.03] p-3">
+            <button
+              className="flex w-full items-center justify-center gap-2 rounded-lg bg-white py-2 text-sm font-medium text-slate-900 hover:bg-white/90 disabled:cursor-wait disabled:opacity-70"
+              disabled={downloadingType !== null || !photo.original_exists}
+              onClick={() => handleDownload("original")}
+              title={photo.original_exists ? "下载原图" : "原图缺失"}
+              type="button"
+            >
+              <Download size={15} />
+              {downloadingType === "original" ? "下载中..." : photo.original_exists ? "下载原图" : "原图缺失"}
+            </button>
+            <button
+              className="flex w-full items-center justify-center gap-2 rounded-lg bg-slate-700 py-2 text-sm font-medium text-white hover:bg-slate-600 disabled:cursor-wait disabled:opacity-70"
+              disabled={downloadingType !== null}
+              onClick={() => handleDownload("preview")}
+              type="button"
+            >
+              <Download size={15} />
+              {downloadingType === "preview" ? "下载中..." : "下载预览图"}
+            </button>
+            <button
+              className="flex w-full items-center justify-center gap-2 rounded-lg bg-slate-800 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-45"
+              disabled={downloadingType !== null || !photo.edited_available}
+              onClick={() => handleDownload("edited")}
+              title={photo.edited_available ? "下载已修图" : "暂无已修图"}
+              type="button"
+            >
+              <Download size={15} />
+              {downloadingType === "edited" ? "下载中..." : photo.edited_available ? "下载已修图" : "暂无已修图"}
+            </button>
+          </div>
+
           <InfoRow label="拍摄时间" value={photo.shot_at || "未知"} />
           <InfoRow label="相机" value={photo.camera_model || "未知"} />
           <InfoRow label="镜头" value={photo.lens_model || "未知"} />
           <InfoRow label="尺寸" value={photo.width && photo.height ? `${photo.width} x ${photo.height}` : "未知"} />
+          <InfoRow tone={photo.original_exists ? "normal" : "danger"} label="原图文件" value={photo.original_exists ? "正常" : "缺失"} />
+          <InfoRow tone={photo.preview_exists ? "normal" : "danger"} label="预览图文件" value={photo.preview_exists ? "正常" : "缺失"} />
 
           <div className="border-t border-white/10 pt-5">
             <div className="mb-4 flex items-center justify-between">
@@ -127,11 +184,11 @@ export function PreviewModal({
   );
 }
 
-function InfoRow({ label, value }: { label: string; value: string }) {
+function InfoRow({ label, value, tone = "normal" }: { label: string; value: string; tone?: "normal" | "danger" }) {
   return (
     <div>
       <p className="mb-1 text-xs text-white/40">{label}</p>
-      <p className="text-sm text-white/80">{value}</p>
+      <p className={tone === "danger" ? "text-sm font-medium text-red-200" : "text-sm text-white/80"}>{value}</p>
     </div>
   );
 }

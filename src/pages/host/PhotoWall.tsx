@@ -8,8 +8,11 @@ import { Notice } from "../../components/ui/States";
 import {
   EventData,
   EventImageData,
+  deleteImage,
+  downloadImageFile,
   fetchEventImages,
   fetchEvents,
+  ImageDownloadType,
   ImageStatus,
   imageStatusOptions,
   updateImageCategory,
@@ -17,6 +20,11 @@ import {
   updateImageRemark,
   updateImageStatus
 } from "../../lib/api";
+import {
+  subscribeRealtimeConnection,
+  subscribeRealtimeImageEvent
+} from "../../lib/socket";
+import type { RealtimeConnectionState, RealtimeImagePayload } from "../../lib/socket";
 
 export function PhotoWallPage() {
   const [events, setEvents] = useState<EventData[]>([]);
@@ -31,6 +39,7 @@ export function PhotoWallPage() {
   const [statusFilter, setStatusFilter] = useState<ImageStatus | "all">("all");
   const [sourceType, setSourceType] = useState("all");
   const [loading, setLoading] = useState(true);
+  const [realtimeStatus, setRealtimeStatus] = useState<RealtimeConnectionState>("disconnected");
   const [message, setMessage] = useState<{ tone: "success" | "warning" | "danger" | "info"; title: string; body: string } | null>(null);
 
   const activePhoto = photos.find((photo) => photo.id === activePhotoId) ?? null;
@@ -50,6 +59,25 @@ export function PhotoWallPage() {
       published: 0
     });
   }, [photos]);
+
+  const matchesCurrentFilters = useCallback((photo: EventImageData) => {
+    if (minRating > 0 && photo.rating < minRating) return false;
+    if (statusFilter !== "all" && photo.status !== statusFilter) return false;
+    if (sourceType !== "all" && photo.source_type !== sourceType) return false;
+
+    const keyword = search.trim().toLowerCase();
+    if (!keyword) return true;
+
+    return [
+      photo.original_filename,
+      photo.stored_filename,
+      photo.category,
+      photo.remark,
+      photo.photographer,
+      photo.camera_model,
+      photo.lens_model
+    ].some((value) => value.toLowerCase().includes(keyword));
+  }, [minRating, search, sourceType, statusFilter]);
 
   const loadEvents = useCallback(async () => {
     try {
@@ -114,6 +142,75 @@ export function PhotoWallPage() {
     setPhotos((current) => current.map((photo) => (photo.id === updated.id ? updated : photo)));
   };
 
+  const removePhotoFromView = useCallback((imageId: string) => {
+    setPhotos((current) => {
+      if (!current.some((photo) => photo.id === imageId)) return current;
+      setTotal((value) => Math.max(0, value - 1));
+      return current.filter((photo) => photo.id !== imageId);
+    });
+    setSelectedIds((current) => current.filter((id) => id !== imageId));
+    setActivePhotoId((current) => current === imageId ? null : current);
+    setPreviewPhotoId((current) => current === imageId ? null : current);
+  }, []);
+
+  const handleRealtimeCreated = useCallback((payload: RealtimeImagePayload) => {
+    if (payload.eventId !== selectedEventId || !payload.image) return;
+    const image = payload.image;
+
+    if (!matchesCurrentFilters(image)) {
+      setMessage({ tone: "info", title: "收到新图片", body: "当前筛选条件未显示这张新图片，可清空筛选后查看。" });
+      return;
+    }
+
+    setPhotos((current) => {
+      if (current.some((photo) => photo.id === image.id)) {
+        return current.map((photo) => photo.id === image.id ? image : photo);
+      }
+      setTotal((value) => value + 1);
+      return [image, ...current].slice(0, 200);
+    });
+    setMessage({ tone: "info", title: "收到新图片", body: "实时同步已将新图片加入当前图片墙。" });
+  }, [matchesCurrentFilters, selectedEventId]);
+
+  const handleRealtimeUpdated = useCallback((payload: RealtimeImagePayload) => {
+    if (payload.eventId !== selectedEventId || !payload.image) return;
+    const image = payload.image;
+
+    setPhotos((current) => {
+      const exists = current.some((photo) => photo.id === image.id);
+      if (!exists) return current;
+
+      if (!matchesCurrentFilters(image)) {
+        setTotal((value) => Math.max(0, value - 1));
+        setSelectedIds((ids) => ids.filter((id) => id !== image.id));
+        setActivePhotoId((id) => id === image.id ? null : id);
+        setPreviewPhotoId((id) => id === image.id ? null : id);
+        return current.filter((photo) => photo.id !== image.id);
+      }
+
+      return current.map((photo) => photo.id === image.id ? image : photo);
+    });
+  }, [matchesCurrentFilters, selectedEventId]);
+
+  const handleRealtimeDeleted = useCallback((payload: RealtimeImagePayload) => {
+    if (payload.eventId !== selectedEventId) return;
+    removePhotoFromView(payload.imageId);
+  }, [removePhotoFromView, selectedEventId]);
+
+  useEffect(() => {
+    const unsubscribeConnection = subscribeRealtimeConnection(setRealtimeStatus);
+    const unsubscribeCreated = subscribeRealtimeImageEvent("image-created", handleRealtimeCreated);
+    const unsubscribeUpdated = subscribeRealtimeImageEvent("image-updated", handleRealtimeUpdated);
+    const unsubscribeDeleted = subscribeRealtimeImageEvent("image-deleted-logical", handleRealtimeDeleted);
+
+    return () => {
+      unsubscribeConnection();
+      unsubscribeCreated();
+      unsubscribeUpdated();
+      unsubscribeDeleted();
+    };
+  }, [handleRealtimeCreated, handleRealtimeDeleted, handleRealtimeUpdated]);
+
   const runImageUpdate = async (operation: () => Promise<{ ok: boolean; data: EventImageData; error: { message: string } | null }>, successTitle: string) => {
     try {
       const res = await operation();
@@ -142,6 +239,54 @@ export function PhotoWallPage() {
 
   const handleRemarkChange = (id: string, remark: string) => {
     void runImageUpdate(() => updateImageRemark(id, remark), "备注已更新");
+  };
+
+  const handleDownloadImage = async (id: string, type: ImageDownloadType) => {
+    const photo = photos.find((item) => item.id === id);
+    const fallbackFilename = photo?.original_filename || "image";
+
+    try {
+      await downloadImageFile(id, type, fallbackFilename);
+      setMessage({ tone: "success", title: "下载已开始", body: "图片文件已开始下载。" });
+    } catch (err: any) {
+      const message = err?.message || "图片下载失败。";
+      setMessage({ tone: "danger", title: "下载失败", body: message });
+      throw err;
+    }
+  };
+
+  const handleDeleteSelected = async () => {
+    if (selectedIds.length === 0) return;
+    const confirmed = window.confirm(`确定从图片墙删除选中的 ${selectedIds.length} 张图片？\n\n这只会把图片标记为已删除，不会删除仓库里的原图、缩略图或预览图。`);
+    if (!confirmed) return;
+
+    const ids = [...selectedIds];
+    let success = 0;
+    const failed: string[] = [];
+
+    for (const id of ids) {
+      try {
+        const res = await deleteImage(id);
+        if (res.ok) {
+          success += 1;
+        } else {
+          failed.push(res.error?.message || id);
+        }
+      } catch (err: any) {
+        failed.push(err?.message || id);
+      }
+    }
+
+    setSelectedIds([]);
+    setActivePhotoId((current) => current && ids.includes(current) ? null : current);
+    setPreviewPhotoId((current) => current && ids.includes(current) ? null : current);
+    await loadImages();
+
+    if (failed.length > 0) {
+      setMessage({ tone: "danger", title: "部分图片删除失败", body: `已删除 ${success} 张，失败 ${failed.length} 张。${failed[0] || ""}` });
+    } else {
+      setMessage({ tone: "success", title: "图片已删除", body: `已从图片墙移除 ${success} 张图片，仓库文件未被删除。` });
+    }
   };
 
   const toggleSelected = (id: string) => {
@@ -256,8 +401,10 @@ export function PhotoWallPage() {
             setSelectedIds([]);
             setActivePhotoId(null);
           }}
+          onDeleteSelected={handleDeleteSelected}
           onSearchChange={setSearch}
           onSelectAll={selectAllFiltered}
+          realtimeStatus={realtimeStatus}
         />
 
         {message && (
@@ -277,6 +424,7 @@ export function PhotoWallPage() {
               photos={photos}
               selectedIds={selectedIds}
               onActivate={setActivePhotoId}
+              onDownloadOriginal={(id) => handleDownloadImage(id, "original")}
               onOpenPreview={setPreviewPhotoId}
               onToggleSelected={toggleSelected}
             />
@@ -309,6 +457,7 @@ export function PhotoWallPage() {
           photos={photos}
           onCategoryChange={handleCategoryChange}
           onClose={() => setPreviewPhotoId(null)}
+          onDownload={handleDownloadImage}
           onNext={() => movePreview(1)}
           onPrevious={() => movePreview(-1)}
           onRatingChange={handleRatingChange}

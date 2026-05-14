@@ -5,7 +5,7 @@
  */
 
 // 声明全局类型已在 src/global.d.ts 中定义
-function getApiBase(): string {
+export function getApiBase(): string {
   return (window as any).mediaPhotoWorkbench?.apiBaseUrl ?? "http://localhost:3030";
 }
 
@@ -271,6 +271,13 @@ export interface EventImageData {
   camera_model: string;
   lens_model: string;
   source_type: string;
+  edited_available: boolean;
+  original_exists: boolean;
+  thumb_exists: boolean;
+  preview_exists: boolean;
+  edited_exists: boolean;
+  is_deleted: boolean;
+  deleted_at: string;
 }
 
 export interface EventImagesParams {
@@ -289,6 +296,35 @@ export interface EventImagesData {
   pageSize: number;
 }
 
+function normalizeImageData(image: EventImageData): EventImageData {
+  const originalExists = typeof image.original_exists === "boolean" ? image.original_exists : true;
+  const thumbExists = typeof image.thumb_exists === "boolean" ? image.thumb_exists : true;
+  const previewExists = typeof image.preview_exists === "boolean" ? image.preview_exists : true;
+  const editedExists = typeof image.edited_exists === "boolean" ? image.edited_exists : Boolean(image.edited_available);
+
+  return {
+    ...image,
+    edited_available: typeof image.edited_available === "boolean" ? image.edited_available : editedExists,
+    original_exists: originalExists,
+    thumb_exists: thumbExists,
+    preview_exists: previewExists,
+    edited_exists: editedExists,
+    is_deleted: typeof image.is_deleted === "boolean" ? image.is_deleted : false,
+    deleted_at: image.deleted_at ?? ""
+  };
+}
+
+function normalizeImageResponse(response: ApiResponse<EventImageData>): ApiResponse<EventImageData> {
+  if (!response.ok || !response.data) {
+    return response;
+  }
+
+  return {
+    ...response,
+    data: normalizeImageData(response.data)
+  };
+}
+
 export async function fetchEventImages(eventId: string, params: EventImagesParams = {}): Promise<ApiResponse<EventImagesData>> {
   const searchParams = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -297,37 +333,107 @@ export async function fetchEventImages(eventId: string, params: EventImagesParam
     }
   }
   const query = searchParams.toString();
-  return request<EventImagesData>(`/api/events/${eventId}/images${query ? `?${query}` : ""}`);
+  const response = await request<EventImagesData>(`/api/events/${eventId}/images${query ? `?${query}` : ""}`);
+  if (!response.ok || !response.data) {
+    return response;
+  }
+
+  return {
+    ...response,
+    data: {
+      ...response.data,
+      items: response.data.items.map(normalizeImageData)
+    }
+  };
 }
 
 export async function updateImageRating(id: string, rating: number): Promise<ApiResponse<EventImageData>> {
-  return request<EventImageData>(`/api/images/${id}/rating`, {
+  const response = await request<EventImageData>(`/api/images/${id}/rating`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ rating })
   });
+  return normalizeImageResponse(response);
 }
 
 export async function updateImageStatus(id: string, status: ImageStatus): Promise<ApiResponse<EventImageData>> {
-  return request<EventImageData>(`/api/images/${id}/status`, {
+  const response = await request<EventImageData>(`/api/images/${id}/status`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ status })
   });
+  return normalizeImageResponse(response);
 }
 
 export async function updateImageCategory(id: string, category: string): Promise<ApiResponse<EventImageData>> {
-  return request<EventImageData>(`/api/images/${id}/category`, {
+  const response = await request<EventImageData>(`/api/images/${id}/category`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ category })
   });
+  return normalizeImageResponse(response);
 }
 
 export async function updateImageRemark(id: string, remark: string): Promise<ApiResponse<EventImageData>> {
-  return request<EventImageData>(`/api/images/${id}/remark`, {
+  const response = await request<EventImageData>(`/api/images/${id}/remark`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ remark })
   });
+  return normalizeImageResponse(response);
+}
+
+export async function deleteImage(id: string): Promise<ApiResponse<EventImageData>> {
+  const response = await request<EventImageData>(`/api/images/${id}`, {
+    method: "DELETE"
+  });
+  return normalizeImageResponse(response);
+}
+
+export type ImageDownloadType = "original" | "preview" | "edited";
+
+export function getImageDownloadUrl(id: string, type: ImageDownloadType): string {
+  return `${getApiBase()}/api/images/${encodeURIComponent(id)}/download/${type}`;
+}
+
+function getFilenameFromDisposition(disposition: string | null, fallback: string): string {
+  if (!disposition) return fallback;
+
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1]);
+    } catch {
+      return utf8Match[1];
+    }
+  }
+
+  const plainMatch = disposition.match(/filename="?([^";]+)"?/i);
+  return plainMatch?.[1] || fallback;
+}
+
+export async function downloadImageFile(id: string, type: ImageDownloadType, fallbackFilename = "image"): Promise<void> {
+  const res = await fetch(getImageDownloadUrl(id, type));
+
+  if (!res.ok) {
+    let message = "下载失败";
+    try {
+      const json = await res.json();
+      message = json?.error?.message || message;
+    } catch {
+      // keep default message
+    }
+    throw new Error(message);
+  }
+
+  const blob = await res.blob();
+  const filename = getFilenameFromDisposition(res.headers.get("Content-Disposition"), fallbackFilename);
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

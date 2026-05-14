@@ -1,3 +1,4 @@
+import path from "path";
 import fs from "fs-extra";
 import { getDatabase } from "../db/database";
 
@@ -27,6 +28,8 @@ export interface ImageRow {
   exif_shot_at: string;
   width: number;
   height: number;
+  is_deleted: number;
+  deleted_at: string;
   created_at: string;
   updated_at: string;
 }
@@ -51,6 +54,13 @@ export interface ImageDto {
   camera_model: string;
   lens_model: string;
   source_type: string;
+  edited_available: boolean;
+  original_exists: boolean;
+  thumb_exists: boolean;
+  preview_exists: boolean;
+  edited_exists: boolean;
+  is_deleted: boolean;
+  deleted_at: string;
 }
 
 export interface ImageListParams {
@@ -69,11 +79,29 @@ export interface ImageListResult {
   pageSize: number;
 }
 
+export type ImageDownloadType = "original" | "preview" | "edited";
+
+export interface ImageDownloadFile {
+  image: ImageRow;
+  filePath: string;
+  filename: string;
+  type: ImageDownloadType;
+}
+
 function nowTimestamp(): string {
   return new Date().toISOString().replace("T", " ").replace(/\.\d+Z$/, "");
 }
 
+function pathExists(filePath: string): boolean {
+  return Boolean(filePath && fs.existsSync(filePath));
+}
+
 function toImageDto(row: ImageRow, baseUrl: string): ImageDto {
+  const originalExists = pathExists(row.original_path);
+  const thumbExists = pathExists(row.thumb_path);
+  const previewExists = pathExists(row.preview_path);
+  const editedExists = pathExists(row.edited_path);
+
   return {
     id: row.id,
     event_id: row.event_id,
@@ -93,7 +121,14 @@ function toImageDto(row: ImageRow, baseUrl: string): ImageDto {
     photographer: row.photographer,
     camera_model: row.camera_model,
     lens_model: row.lens_model,
-    source_type: row.source
+    source_type: row.source,
+    edited_available: editedExists,
+    original_exists: originalExists,
+    thumb_exists: thumbExists,
+    preview_exists: previewExists,
+    edited_exists: editedExists,
+    is_deleted: Boolean(row.is_deleted),
+    deleted_at: row.deleted_at
   };
 }
 
@@ -106,7 +141,7 @@ export function listEventImages(eventId: string, params: ImageListParams, baseUr
   const db = getDatabase();
   const page = Math.max(1, Number(params.page) || 1);
   const pageSize = Math.min(200, Math.max(1, Number(params.pageSize) || 80));
-  const where: string[] = ["event_id = ?"];
+  const where: string[] = ["event_id = ?", "is_deleted = 0"];
   const values: unknown[] = [eventId];
 
   if (typeof params.rating === "number" && Number.isFinite(params.rating) && params.rating > 0) {
@@ -160,7 +195,21 @@ function writeOperationLog(imageId: string, eventId: string, type: string, detai
   `).run(type, imageId, JSON.stringify({ event_id: eventId, ...detail }), nowTimestamp());
 }
 
-function getUpdatedImage(id: string, baseUrl: string): ImageDto {
+function refreshEventImageCount(eventId: string): void {
+  const now = nowTimestamp();
+  getDatabase().prepare(`
+    UPDATE events
+    SET total_images = (SELECT COUNT(*) FROM images WHERE event_id = ? AND is_deleted = 0), updated_at = ?
+    WHERE id = ?
+  `).run(eventId, now, eventId);
+}
+
+function basenameWithoutExtension(filename: string): string {
+  const parsed = path.parse(path.basename(filename || "image"));
+  return parsed.name || "image";
+}
+
+export function getImageDtoById(id: string, baseUrl: string): ImageDto {
   const image = getImageById(id);
   if (!image) {
     throw { code: "IMAGE_NOT_FOUND", message: "图片不存在" };
@@ -181,7 +230,7 @@ export function updateImageRating(id: string, rating: number, baseUrl: string): 
   const now = nowTimestamp();
   getDatabase().prepare("UPDATE images SET rating = ?, updated_at = ? WHERE id = ?").run(rating, now, id);
   writeOperationLog(id, existing.event_id, "image_rating_changed", { from: existing.rating, to: rating });
-  return getUpdatedImage(id, baseUrl);
+  return getImageDtoById(id, baseUrl);
 }
 
 export function updateImageStatus(id: string, status: string, baseUrl: string): ImageDto {
@@ -197,7 +246,7 @@ export function updateImageStatus(id: string, status: string, baseUrl: string): 
   const now = nowTimestamp();
   getDatabase().prepare("UPDATE images SET status = ?, updated_at = ? WHERE id = ?").run(status, now, id);
   writeOperationLog(id, existing.event_id, "image_status_changed", { from: existing.status, to: status });
-  return getUpdatedImage(id, baseUrl);
+  return getImageDtoById(id, baseUrl);
 }
 
 export function updateImageCategory(id: string, category: string, baseUrl: string): ImageDto {
@@ -210,7 +259,7 @@ export function updateImageCategory(id: string, category: string, baseUrl: strin
   const now = nowTimestamp();
   getDatabase().prepare("UPDATE images SET category = ?, updated_at = ? WHERE id = ?").run(normalized, now, id);
   writeOperationLog(id, existing.event_id, "image_category_changed", { from: existing.category, to: normalized });
-  return getUpdatedImage(id, baseUrl);
+  return getImageDtoById(id, baseUrl);
 }
 
 export function updateImageRemark(id: string, remark: string, baseUrl: string): ImageDto {
@@ -223,7 +272,25 @@ export function updateImageRemark(id: string, remark: string, baseUrl: string): 
   const now = nowTimestamp();
   getDatabase().prepare("UPDATE images SET remark = ?, updated_at = ? WHERE id = ?").run(normalized, now, id);
   writeOperationLog(id, existing.event_id, "image_remark_changed", { from: existing.remark, to: normalized });
-  return getUpdatedImage(id, baseUrl);
+  return getImageDtoById(id, baseUrl);
+}
+
+export function deleteImage(id: string, baseUrl: string): ImageDto {
+  const existing = getImageById(id);
+  if (!existing) {
+    throw { code: "IMAGE_NOT_FOUND", message: "图片不存在" };
+  }
+
+  const now = nowTimestamp();
+  getDatabase().prepare("UPDATE images SET is_deleted = 1, deleted_at = ?, updated_at = ? WHERE id = ?").run(now, now, id);
+  writeOperationLog(id, existing.event_id, "image_deleted_logical", {
+    original_filename: existing.original_filename,
+    original_path: existing.original_path,
+    thumb_path: existing.thumb_path,
+    preview_path: existing.preview_path
+  });
+  refreshEventImageCount(existing.event_id);
+  return getImageDtoById(id, baseUrl);
 }
 
 export function assertImageFile(id: string, kind: "thumb" | "preview"): { image: ImageRow; filePath: string } {
@@ -238,4 +305,49 @@ export function assertImageFile(id: string, kind: "thumb" | "preview"): { image:
   }
 
   return { image, filePath };
+}
+
+export function assertImageDownloadFile(id: string, type: ImageDownloadType): ImageDownloadFile {
+  const image = getImageById(id);
+  if (!image) {
+    throw { code: "IMAGE_NOT_FOUND", message: "图片不存在" };
+  }
+
+  if (type === "edited" && !image.edited_path) {
+    throw { code: "EDITED_IMAGE_NOT_AVAILABLE", message: "暂无已修图可下载" };
+  }
+
+  const filePath = type === "original"
+    ? image.original_path
+    : type === "preview"
+      ? image.preview_path
+      : image.edited_path;
+
+  if (!filePath || !fs.existsSync(filePath)) {
+    throw { code: "IMAGE_FILE_NOT_FOUND", message: "图片文件不存在" };
+  }
+
+  const originalBase = basenameWithoutExtension(image.original_filename);
+  const filename = type === "original"
+    ? path.basename(image.original_filename || image.stored_filename || filePath)
+    : type === "preview"
+      ? `${originalBase}_preview.webp`
+      : path.basename(filePath);
+
+  return { image, filePath, filename, type };
+}
+
+export function recordImageDownload(image: ImageRow, type: ImageDownloadType, filePath: string): void {
+  const now = nowTimestamp();
+  const db = getDatabase();
+
+  db.prepare(`
+    INSERT INTO download_logs (image_id, event_id, type, operator, device, file_path, created_at)
+    VALUES (?, ?, ?, '', '', ?, ?)
+  `).run(image.id, image.event_id, type, filePath, now);
+
+  writeOperationLog(image.id, image.event_id, "image_downloaded", {
+    download_type: type,
+    file_path: filePath
+  });
 }

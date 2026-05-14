@@ -321,7 +321,7 @@ export async function importImages(input: {
   const now = nowTimestamp();
   db.prepare(`
     UPDATE events
-    SET total_images = (SELECT COUNT(*) FROM images WHERE event_id = ?), updated_at = ?
+    SET total_images = (SELECT COUNT(*) FROM images WHERE event_id = ? AND is_deleted = 0), updated_at = ?
     WHERE id = ?
   `).run(event.id, now, event.id);
 

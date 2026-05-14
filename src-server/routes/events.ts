@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Request, Router } from "express";
 import { sendSuccess, sendError } from "../utils/response";
 import {
   listEvents,
@@ -10,10 +10,19 @@ import {
   CreateEventInput
 } from "../services/events";
 import { importImages, scanImportFolder } from "../services/imageImport";
-import { listEventImages } from "../services/images";
+import { getImageDtoById, listEventImages } from "../services/images";
 import { getLogger } from "../utils/logger";
+import { emitImageCreated } from "../realtime/socket";
 
 const router = Router();
+
+function getBaseUrl(req: Request): string {
+  return `${req.protocol}://${req.get("host")}`;
+}
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
 
 /**
  * GET /api/events
@@ -133,6 +142,17 @@ router.post("/:id/import/start", async (req, res) => {
       folderPath,
       sourceType: "host_import"
     });
+    const baseUrl = getBaseUrl(req);
+    for (const imported of result.imported) {
+      const image = getImageDtoById(imported.id, baseUrl);
+      emitImageCreated({
+        eventId: image.event_id,
+        imageId: image.id,
+        image,
+        action: "image_created",
+        updatedAt: nowIso()
+      });
+    }
     sendSuccess(res, result);
   } catch (err: any) {
     if (err?.code) {

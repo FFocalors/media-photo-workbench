@@ -28,6 +28,120 @@
 
 ## 开发记录
 
+### Phase 5B：Socket.IO 实时同步基础
+- **日期**：2026-05-14
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - `package.json` 增加 `socket.io` 与 `socket.io-client` 依赖声明。
+  - 新增 `src-server/realtime/socket.ts`，Socket.IO 复用当前 Express HTTP server，不新开固定端口。
+  - 后端实时模块提供 `initRealtime`、`getRealtime`、`emitImageCreated`、`emitImageUpdated`、`emitImageDeletedLogical`、`emitTaskUpdated`。
+  - Socket.IO 客户端连接和断开时写入日志，并在连接成功后发送 `realtime-status`。
+  - 图片导入成功后广播 `image-created`。
+  - 图片星级、状态、分类、备注更新成功后广播 `image-updated`。
+  - 图片逻辑删除成功后广播 `image-deleted-logical`。
+  - 新增 `src/lib/socket.ts`，前端集中管理 Socket.IO Client、连接状态和图片事件订阅。
+  - 图片墙监听 `image-created`、`image-updated`、`image-deleted-logical`，对当前列表做局部插入、局部更新和局部移除。
+  - 图片墙顶部显示实时同步状态：实时已连接、重连中、实时已断开。
+- **修改文件**：
+  - `package.json`
+  - `src-server/index.ts`
+  - `src-server/realtime/socket.ts`
+  - `src-server/routes/events.ts`
+  - `src-server/routes/images.ts`
+  - `src-server/services/images.ts`
+  - `src/lib/api.ts`
+  - `src/lib/socket.ts`
+  - `src/components/gallery/GalleryToolbar.tsx`
+  - `src/pages/host/PhotoWall.tsx`
+  - `API_SPEC.md`
+  - `ROADMAP.md`
+  - `CHANGELOG.md`
+  - `DEVELOPMENT_LOG.md`
+- **验证方式**：
+  - 依赖安装受沙箱网络权限限制，`pnpm add socket.io socket.io-client` 未能在当前环境完成，需要在本机执行安装后再跑完整构建。
+  - 预期验证步骤：打开两个窗口或两个浏览器页面访问同一活动图片墙；A 页面修改星级、状态、分类或备注，B 页面应自动更新；A 页面逻辑删除图片，B 页面应自动移除；导入新图片后，已打开图片墙应收到新图片或提示筛选条件未显示。
+- **未完成事项**：
+  - 未实现客户端上传、ZIP、修图回传、导出发布、活动归档和远程传输。
+  - `task-updated` 仅预留广播入口，尚未接入任务队列。
+
+### Phase 5A 修补：图片文件状态检测与图片逻辑删除
+- **日期**：2026-05-14
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - `images` 表新增 `is_deleted` 与 `deleted_at` 字段，用于图片生命周期，不复用选片状态字段。
+  - 数据库初始化时会自动为旧库补齐 `images.is_deleted` 和 `images.deleted_at`。
+  - 图片查询默认过滤 `is_deleted = 0`，逻辑删除后的图片不再出现在图片墙。
+  - 图片查询 DTO 新增 `original_exists`、`thumb_exists`、`preview_exists`、`edited_exists`、`is_deleted`、`deleted_at`。
+  - 图片墙卡片在原图缺失时显示“原图缺失”红色标记，并禁用卡片原图下载按钮。
+  - 元数据面板和预览弹窗显示原图/预览图文件状态。
+  - 新增 `DELETE /api/images/:id`，只做图片逻辑删除，不删除仓库文件。
+  - 图片墙工具栏新增“删除所选”，带确认弹窗，删除后刷新图片墙。
+  - 逻辑删除写入 `operation_logs.type = image_deleted_logical`，并刷新活动图片总数。
+  - 前端 API 层兼容旧后端响应：当旧接口暂未返回文件存在性字段时，不再把 `undefined` 误判为“缺失”。
+- **修改文件**：
+  - `src-server/db/schema.ts`
+  - `src-server/db/database.ts`
+  - `src-server/services/images.ts`
+  - `src-server/routes/images.ts`
+  - `src-server/services/imageImport.ts`
+  - `src/lib/api.ts`
+  - `src/components/gallery/PhotoGrid.tsx`
+  - `src/components/gallery/GalleryToolbar.tsx`
+  - `src/components/gallery/MetadataPanel.tsx`
+  - `src/components/gallery/PreviewModal.tsx`
+  - `src/pages/host/PhotoWall.tsx`
+  - `DATABASE_SCHEMA.md`
+  - `API_SPEC.md`
+  - `DEVELOPMENT_LOG.md`
+  - `CHANGELOG.md`
+- **验证方式**：
+  - `pnpm build` 通过。
+  - 使用 Electron Node 运行时启动临时后端，导入测试图片后确认 `original_exists/thumb_exists/preview_exists` 为 true。
+  - 将图片 `original_path` 指向不存在文件后重新查询，确认 `original_exists = false` 且 `preview_exists = true`。
+  - 调用 `DELETE /api/images/:id` 后确认返回 `is_deleted = true`，图片墙查询不再返回该图片。
+  - 验证 `operation_logs` 写入 `image_deleted_logical`。
+  - `pnpm build` 通过前端兼容修补后的类型检查和构建。
+- **遇到的问题**：
+  - 如果 Electron 未重启到新版后端，旧图片查询接口不会返回 `original_exists`、`preview_exists` 等字段，前端会把缺失字段当作 `false`，导致所有图片都误显示为“原图缺失/预览图缺失”。
+  - 首次给旧数据库添加 `is_deleted` 时，将 `idx_images_deleted` 放在了 `SCHEMA_SQL` 中。旧库执行 `CREATE TABLE IF NOT EXISTS images` 不会补列，但随后立即执行 `CREATE INDEX ... ON images(is_deleted)`，导致后端在迁移前启动失败。
+- **解决方案**：
+  - 在 `src/lib/api.ts` 统一标准化图片响应。旧后端缺少字段时默认原图、缩略图和预览图为存在；新版后端返回真实布尔值时以真实结果为准。
+  - 从 `SCHEMA_SQL` 移除 `idx_images_deleted`，改为只在轻量迁移函数补齐字段后创建索引，保证旧库可平滑启动并自动迁移。
+- **未完成事项**：
+  - 未实现图片回收站、恢复图片、永久删除图片及物理文件清理。
+
+### Phase 5A：单图下载能力
+- **日期**：2026-05-13
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - 新增单图下载接口：`GET /api/images/:id/download/original`、`GET /api/images/:id/download/preview`、`GET /api/images/:id/download/edited`。
+  - 下载接口按图片 ID 查询 `original_path`、`preview_path`、`edited_path`，检查文件存在后返回文件，不暴露仓库目录。
+  - 已修图下载在 `edited_path` 为空时返回 `EDITED_IMAGE_NOT_AVAILABLE`。
+  - 下载成功后写入 `download_logs`，并写入 `operation_logs` 的 `image_downloaded` 操作记录。
+  - 图片查询 DTO 增加 `edited_available`，前端可判断是否显示已修图下载能力。
+  - 前端 API 增加 `downloadImageFile` 和下载 URL 构造函数，下载失败时会解析后端错误并提示。
+  - 预览弹窗接入下载原图、下载预览图和已修图占位按钮；没有已修图时按钮禁用并显示“暂无已修图”。
+  - 图片卡片增加原图下载按钮，点击不会触发预览。
+- **修改文件**：
+  - `src-server/services/images.ts`
+  - `src-server/routes/images.ts`
+  - `src/lib/api.ts`
+  - `src/components/gallery/PreviewModal.tsx`
+  - `src/components/gallery/PhotoGrid.tsx`
+  - `src/pages/host/PhotoWall.tsx`
+  - `DEVELOPMENT_LOG.md`
+  - `API_SPEC.md`
+  - `CHANGELOG.md`
+  - `ROADMAP.md`
+- **验证方式**：
+  - `pnpm build` 通过。
+  - 使用 Electron Node 运行时启动临时后端，创建临时仓库和活动，导入 1 张 JPG。
+  - 验证原图下载、预览图下载均返回非空文件。
+  - 验证无已修图时 `GET /api/images/:id/download/edited` 返回 `EDITED_IMAGE_NOT_AVAILABLE`。
+  - 验证原图和预览图下载成功后 `download_logs` 与 `operation_logs` 均写入记录。
+- **未完成事项**：
+  - 未实现 ZIP、批量下载、客户端上传、Socket.IO、修图回传、导出发布和活动归档。
+
 ### 修复：图片墙预览与批量操作菜单
 - **日期**：2026-05-13
 - **开发者 / 工具**：Codex

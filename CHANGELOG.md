@@ -22,6 +22,26 @@
 ## [未发布] (Unreleased)
 
 ### 新增
+- Phase 5B Socket.IO 实时同步基础能力。
+- 后端新增 Socket.IO 服务，复用当前 Express HTTP server 端口，兼容 3030-3040 自动端口机制。
+- 新增实时广播模块，提供 `image-created`、`image-updated`、`image-deleted-logical` 和 `task-updated` 事件入口。
+- 主机本地导入成功后广播 `image-created`；图片星级、状态、分类、备注更新后广播 `image-updated`；图片逻辑删除后广播 `image-deleted-logical`。
+- 前端新增集中式 Socket.IO Client 封装，图片墙监听实时事件并执行局部插入、局部更新和局部移除。
+- 图片墙顶部新增实时同步状态：实时已连接、重连中、实时已断开。
+- Phase 5A 修补：图片文件状态检测与图片逻辑删除。
+- `images` 表新增 `is_deleted`、`deleted_at` 字段，并在启动时自动迁移旧库。
+- 图片查询结果新增 `original_exists`、`thumb_exists`、`preview_exists`、`edited_exists`、`is_deleted`、`deleted_at` 字段。
+- 新增 `DELETE /api/images/:id`，支持图片墙逻辑删除，删除后默认图片查询不再返回。
+- 图片墙新增“删除所选”功能，删除前二次确认。
+- 图片卡片、元数据面板和预览弹窗增加文件状态提示；原图缺失时显示“原图缺失”并禁用原图下载。
+- Phase 5A 单图下载能力。
+- 新增 `GET /api/images/:id/download/original`，支持按图片 ID 下载原图。
+- 新增 `GET /api/images/:id/download/preview`，支持按图片 ID 下载 WebP 预览图。
+- 新增 `GET /api/images/:id/download/edited`，为已修图下载预留接口；暂无已修图时返回 `EDITED_IMAGE_NOT_AVAILABLE`。
+- 图片下载成功后写入 `download_logs`，并写入 `operation_logs` 的 `image_downloaded` 记录。
+- 图片查询结果新增 `edited_available` 字段，用于前端判断已修图下载按钮状态。
+- 预览弹窗接入下载原图、下载预览图和已修图下载占位按钮。
+- 图片卡片接入单张原图下载按钮。
 - Phase 4 真实图片墙与基础选片。
 - Phase 3 主机本地图片导入基础管线。
 - 新增 `POST /api/events/:eventId/import/scan`，支持非递归扫描本地 JPG/JPEG 文件夹。
@@ -37,6 +57,8 @@
 - 图片预览弹窗保留打星、状态流转、左右切换和关闭快捷键。
 
 ### 修复
+- 修复旧 SQLite 库升级到图片逻辑删除字段时，`idx_images_deleted` 先于字段迁移执行，导致后端服务启动失败的问题。
+- 修复运行中的旧后端尚未返回文件状态字段时，前端把 `undefined` 误判为文件缺失，导致图片墙全部显示“原图缺失/预览图缺失”的问题。
 - 修复图片墙批量操作菜单悬浮后难以点击菜单项的问题，改为点击展开的受控菜单。
 - 取消图片墙双击预览分支，保持单击缩略图直接打开预览；批量选择继续使用图片左上角勾选框和“全选当前”。
 - 修复图片卡片选择框点击可能触发预览的问题，并让已选中图片持续显示对勾。
@@ -57,8 +79,9 @@
 
 ### 计划实现
 - 将图片导入升级为任务队列和进度轮询。
-- 补齐客户端上传、Socket.IO 实时同步和单图下载。
+- 补齐客户端上传、批量下载和客户端侧下载流程。
 - 补齐活动回收站与永久删除流程：查看已删除活动、恢复活动、二次确认后永久删除活动记录、图片记录和工作区文件。
+- 补齐图片回收站、恢复图片和永久删除图片文件流程。
 
 ---
 

@@ -62,6 +62,8 @@
 | `exif_shot_at`| TEXT | 原始 EXIF 拍摄时间字符串 | NOT NULL, DEFAULT '' |
 | `width` | INTEGER | 图片像素宽 | NOT NULL, DEFAULT 0 |
 | `height` | INTEGER | 图片像素高 | NOT NULL, DEFAULT 0 |
+| `is_deleted` | INTEGER | 图片逻辑删除标记，1 表示已从图片墙移除 | NOT NULL, DEFAULT 0 |
+| `deleted_at` | TEXT | 图片逻辑删除时间 | NOT NULL, DEFAULT '' |
 | `created_at` | TEXT | 入库时间 | NOT NULL, DEFAULT `now` |
 | `updated_at` | TEXT | 更新时间 | NOT NULL, DEFAULT `now` |
 
@@ -152,6 +154,7 @@
 - `idx_images_status`：按图片状态筛选。
 - `idx_images_rating`：按星级筛选。
 - `idx_images_file_hash`：Phase 3 主机本地导入按 sha256 `file_hash` 去重；发现已有相同 hash 时跳过导入。
+- `idx_images_deleted`：默认图片墙查询过滤 `is_deleted = 0`。
 
 ### `events.status`
 - `draft`：草稿/未开始（保留状态，当前新建活动不默认使用）
@@ -176,6 +179,8 @@
 - `edited`：已修图（修片师回传对应文件后）
 - `publish`：可发布（直出标记可发 或 修片验收通过）
 - `published`：已实际导出或打包发布过（标记记录用）
+
+> 图片删除不复用 `images.status`，而是通过 `is_deleted/deleted_at` 表达生命周期。当前图片墙删除为逻辑删除，只隐藏记录，不删除原图、缩略图、预览图或已修图文件。
 
 ### `download_logs.download_type` (对应 `download_logs.type`)
 - `original`：获取单张或多张原图

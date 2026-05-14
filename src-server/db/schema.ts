@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS images (
   exif_shot_at      TEXT NOT NULL DEFAULT '',
   width             INTEGER NOT NULL DEFAULT 0,
   height            INTEGER NOT NULL DEFAULT 0,
+  is_deleted        INTEGER NOT NULL DEFAULT 0,
+  deleted_at        TEXT NOT NULL DEFAULT '',
   created_at        TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
   updated_at        TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
   FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE

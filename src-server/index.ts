@@ -2,6 +2,7 @@ import http from "http";
 import { createApp } from "./app";
 import { loadConfig, getConfig, saveConfig } from "./config/config";
 import { initDatabase, closeDatabase } from "./db/database";
+import { initRealtime, getRealtime } from "./realtime/socket";
 import { initLogger, getLogger } from "./utils/logger";
 import { ensureDataDirs, getDatabasePath, getConfigDir, getLogsDir } from "./utils/paths";
 import { setAppDataRoot } from "./routes/settings";
@@ -81,6 +82,7 @@ export async function startServer(appDataRoot: string): Promise<ServerHandle> {
   // 6. 创建 Express 应用
   const app = createApp();
   const server = http.createServer(app);
+  initRealtime(server);
 
   // 7. 带端口冲突处理的启动
   const actualPort = await tryListen(server, preferredPort);
@@ -101,6 +103,7 @@ export async function startServer(appDataRoot: string): Promise<ServerHandle> {
     close: () => {
       logger.info("正在关闭后端服务...");
       closeDatabase();
+      getRealtime()?.close();
       server.close();
     }
   };

@@ -342,7 +342,14 @@ working/{event_slug}/清单
           "photographer": "",
           "camera_model": "NIKON Z 6_3",
           "lens_model": "",
-          "source_type": "host_import"
+          "source_type": "host_import",
+          "edited_available": false,
+          "original_exists": true,
+          "thumb_exists": true,
+          "preview_exists": true,
+          "edited_exists": false,
+          "is_deleted": false,
+          "deleted_at": ""
         }
       ],
       "total": 1,
@@ -354,7 +361,7 @@ working/{event_slug}/清单
   ```
 - **错误码**：
   - `INVALID_STATUS`：传入的状态不在允许范围内。
-- **备注**：当前未实现标签筛选；图片 URL 只返回缩略图和预览图，不返回原图下载地址。
+- **备注**：当前未实现标签筛选；默认只返回 `is_deleted = 0` 的图片。缩略图和预览图使用 `thumb_url` / `preview_url` 访问，原图、预览图下载和已修图下载使用 Download 下载接口。
 
 ### [已实现] 获取缩略图
 - **用途**：按图片 ID 获取长边 400px 的 WebP 缩略图。
@@ -376,7 +383,7 @@ working/{event_slug}/清单
 - **错误码**：
   - `IMAGE_NOT_FOUND`：图片记录不存在。
   - `IMAGE_FILE_NOT_FOUND`：预览图文件不存在。
-- **备注**：暂不实现原图下载接口。
+- **备注**：这是用于页面展示的预览图访问接口；下载预览图请使用 `/api/images/:id/download/preview`。
 
 ### [已实现] 修改图片星级
 - **用途**：打星 (0-5)。
@@ -442,6 +449,16 @@ working/{event_slug}/清单
 - **错误码**：
   - `IMAGE_NOT_FOUND`：图片不存在。
 - **备注**：备注会 trim 后保存；允许保存为空字符串。更新 `images.updated_at`，并写入 `operation_logs`。
+
+### [已实现] 逻辑删除图片
+- **用途**：将图片从图片墙移除，但不删除仓库中的任何物理文件。
+- **请求方法**：`DELETE`
+- **路径**：`/api/images/:id`
+- **请求参数示例**：无
+- **响应示例**：返回 `is_deleted = true` 的图片对象。
+- **错误码**：
+  - `IMAGE_NOT_FOUND`：图片不存在。
+- **备注**：该接口只写入 `images.is_deleted = 1` 和 `deleted_at`，并写入 `operation_logs.type = image_deleted_logical`。默认图片查询不会再返回已逻辑删除图片。
 
 ---
 
@@ -568,29 +585,39 @@ working/{event_slug}/清单
 
 ## 七、Download 下载
 
-### [计划中] 下载原图
+### [已实现] 下载原图
 - **用途**：获取未处理的原始大图。
 - **请求方法**：`GET`
 - **路径**：`/api/images/:id/download/original`
 - **请求参数示例**：无
-- **响应示例**：返回文件流
-- **备注**：无
+- **响应示例**：返回原图文件流，并带 `Content-Disposition` 下载头。
+- **错误码**：
+  - `IMAGE_NOT_FOUND`：图片记录不存在。
+  - `IMAGE_FILE_NOT_FOUND`：原图文件不存在。
+- **备注**：后端按 `image.id` 查询 `original_path` 后下载，不暴露仓库目录。下载成功后写入 `download_logs` 和 `operation_logs`。
 
-### [计划中] 下载预览图
+### [已实现] 下载预览图
 - **用途**：获取长边 1600px 的 WebP 预览大图。
 - **请求方法**：`GET`
 - **路径**：`/api/images/:id/download/preview`
 - **请求参数示例**：无
-- **响应示例**：返回文件流
-- **备注**：无
+- **响应示例**：返回 WebP 文件流，并带 `Content-Disposition` 下载头。
+- **错误码**：
+  - `IMAGE_NOT_FOUND`：图片记录不存在。
+  - `IMAGE_FILE_NOT_FOUND`：预览图文件不存在。
+- **备注**：后端按 `image.id` 查询 `preview_path` 后下载，不暴露仓库目录。下载成功后写入 `download_logs` 和 `operation_logs`。
 
-### [计划中] 下载已修图
+### [已实现] 下载已修图
 - **用途**：获取修片回传的最终 JPG。
 - **请求方法**：`GET`
 - **路径**：`/api/images/:id/download/edited`
 - **请求参数示例**：无
-- **响应示例**：返回文件流
-- **备注**：无
+- **响应示例**：返回已修图文件流，并带 `Content-Disposition` 下载头。
+- **错误码**：
+  - `IMAGE_NOT_FOUND`：图片记录不存在。
+  - `EDITED_IMAGE_NOT_AVAILABLE`：`edited_path` 为空，暂无已修图。
+  - `IMAGE_FILE_NOT_FOUND`：已修图文件不存在。
+- **备注**：当前只预留单图已修图下载能力；已修图上传与匹配流程仍未实现。下载成功后写入 `download_logs` 和 `operation_logs`。
 
 ### [计划中] 生成 ZIP 下载包
 - **用途**：将选中的多张图打包成 ZIP 下载。
@@ -706,10 +733,55 @@ working/{event_slug}/清单
 
 ## 十一、Realtime 实时事件
 
+### [已实现] Socket.IO 连接
+- **用途**：让同一主机服务下的多个页面或后续客户端实时感知图片变化。
+- **连接地址**：复用当前后端地址和端口，例如 `http://localhost:3030`。
+- **端口规则**：Socket.IO 挂载在 Express HTTP server 上，不单独占用端口；后端如果因冲突切换到 3031-3040，Socket.IO 同步使用实际端口。
+- **连接成功事件**：服务端会向当前客户端发送 `realtime-status`。
+
+连接状态 payload 示例：
+
+```json
+{
+  "ok": true,
+  "socketId": "xxx",
+  "connected": true,
+  "connectedAt": "2026-05-14T01:20:00.000Z"
+}
+```
+
+### [已实现] 图片实时事件
+
 客户端（通过局域网或本机）通过 Socket.IO 连接到主机，可监听以下事件：
 
-- `image-created`：局域网有新图上传或本地扫描入库。
-- `image-updated`：图片星级、状态、分类、标签等属性发生改变。
-- `task-updated`：导入、导出、打包等后台耗时任务的进度更新。
+- `image-created`：主机本地导入成功后广播。
+- `image-updated`：图片星级、状态、分类或备注更新后广播。
+- `image-deleted-logical`：图片逻辑删除后广播。
+- `task-updated`：后台任务更新预留事件，目前未接入具体任务队列。
+
+图片事件 payload 示例：
+
+```json
+{
+  "eventId": "evt_xxx",
+  "imageId": "img_xxx",
+  "action": "rating_changed",
+  "updatedAt": "2026-05-14T01:20:00.000Z",
+  "image": {
+    "id": "img_xxx",
+    "event_id": "evt_xxx",
+    "original_filename": "DSC_0001.jpg",
+    "thumb_url": "http://localhost:3030/api/images/img_xxx/thumb",
+    "preview_url": "http://localhost:3030/api/images/img_xxx/preview",
+    "rating": 4,
+    "status": "unselected",
+    "category": "",
+    "remark": ""
+  }
+}
+```
+
+### [计划中] 后续实时事件
+
 - `export-created`：有新的成品发布包生成。
 - `archive-updated`：活动的归档状态发生变动。
