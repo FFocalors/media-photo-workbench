@@ -22,6 +22,16 @@
 ## [未发布] (Unreleased)
 
 ### 新增
+- Phase 7 导出发布闭环。
+- 新增 `POST /api/events/:eventId/export`，支持手动选择、可发布、已修图、4 星及以上四种导出来源。
+- 发布导出优先使用已修图，缺失时回退原图；原图和已修图都缺失时跳过并记录 errors。
+- 发布导出支持原尺寸、长边 3000px、长边 1920px，以及 JPEG 质量 1-100 校验。
+- 发布导出新增独立 10MB 限制选项，用于适配秀米等平台；JPEG 质量不再和 80 / 10MB 强关联，未超过 10MB 的原尺寸文件不重压缩。
+- 每次导出生成独立 `导出/发布图/{timestamp}` 目录，发布 ZIP 保存到 `导出/压缩包`。
+- 新增 `GET /api/exports/:jobId` 和 `GET /api/exports/:jobId/download`。
+- 发布 ZIP 下载成功后写入 `download_logs` 和 `operation_logs`。
+- 导出完成后广播 `export-created`。
+- 导出发布页接入真实活动、导出设置、10MB 限制选项、结果展示、ZIP 下载和打开导出目录。
 - Phase 6 修图流转闭环。
 - 新增 `POST /api/events/:eventId/edit-package`，可将 `status = edit` 的图片生成待修包 ZIP。
 - 待修包包含待修原图、`edit_manifest.json` 和 `已修图回传` 文件夹，保存到活动工作区 `导出/压缩包`。
@@ -89,6 +99,7 @@
 - 修复新建活动可能先写数据库、但没有物理工作目录的问题；现在仓库未就绪时会阻止创建。
 
 ### 更改
+- `export_jobs` 继续复用为导出任务表，发布导出记录使用 `type = publish`。
 - `export_jobs` 复用为待修包记录表，待修包记录使用 `type = edit_package`。
 - 客户端图片墙复用主机图片墙能力，但隐藏主机专属的图片逻辑删除入口。
 - 新增 `DELETE /api/events/:id` 作为活动逻辑删除接口，只标记 `status = deleted`，不删除文件。

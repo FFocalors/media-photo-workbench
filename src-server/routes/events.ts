@@ -15,6 +15,7 @@ import { getLogger } from "../utils/logger";
 import { emitImageCreated } from "../realtime/socket";
 import { parseMultipartForm } from "../utils/multipart";
 import { createEditPackage, uploadEditedImages } from "../services/editWorkflow";
+import { createPublishExport } from "../services/publishExport";
 
 const router = Router();
 
@@ -279,6 +280,34 @@ router.post("/:id/edited/upload", async (req, res) => {
     }
   } finally {
     await form?.cleanup();
+  }
+});
+
+/**
+ * POST /api/events/:id/export
+ * 生成正式发布图和发布 ZIP。
+ */
+router.post("/:id/export", async (req, res) => {
+  try {
+    const result = await createPublishExport({
+      eventId: req.params.id,
+      mode: req.body.mode,
+      imageIds: Array.isArray(req.body.imageIds) ? req.body.imageIds : undefined,
+      ratingMin: req.body.ratingMin,
+      size: req.body.size,
+      quality: Number(req.body.quality ?? 90),
+      filenameMode: req.body.filenameMode,
+      baseUrl: getBaseUrl(req)
+    });
+    sendSuccess(res, result);
+  } catch (err: any) {
+    if (err?.code) {
+      const status = err.code === "EVENT_NOT_FOUND" ? 404 : 400;
+      sendError(res, err.code, err.message, status);
+    } else {
+      getLogger().error({ err }, "发布导出失败");
+      sendError(res, "PUBLISH_EXPORT_FAILED", "发布导出失败", 500);
+    }
   }
 });
 

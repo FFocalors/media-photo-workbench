@@ -621,3 +621,88 @@ export async function uploadEditedImages(
     body: formData
   });
 }
+
+// ---------- Publish Export ----------
+
+export type PublishExportMode = "selected" | "publish" | "edited" | "rating";
+export type PublishExportSize = "original" | "3000px" | "1920px";
+export type PublishExportFilenameMode = "original" | "event_original" | "sequence";
+
+export interface PublishExportError {
+  imageId?: string;
+  filename: string;
+  reason: string;
+}
+
+export interface PublishExportData {
+  jobId: string;
+  eventId: string;
+  mode: PublishExportMode;
+  size: PublishExportSize;
+  quality: number;
+  filenameMode: PublishExportFilenameMode;
+  limitFileSize10Mb: boolean;
+  status: "success" | "failed";
+  total: number;
+  success: number;
+  failed: number;
+  outputDir: string;
+  zipPath: string;
+  downloadUrl: string;
+  errors: PublishExportError[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function createPublishExport(
+  eventId: string,
+  input: {
+    mode: PublishExportMode;
+    imageIds?: string[];
+    ratingMin?: number;
+    size: PublishExportSize;
+    quality: number;
+    filenameMode?: PublishExportFilenameMode;
+    limitFileSize10Mb?: boolean;
+  }
+): Promise<ApiResponse<PublishExportData>> {
+  return request<PublishExportData>(`/api/events/${eventId}/export`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+}
+
+export async function fetchPublishExport(jobId: string): Promise<ApiResponse<PublishExportData>> {
+  return request<PublishExportData>(`/api/exports/${encodeURIComponent(jobId)}`);
+}
+
+export function getPublishExportDownloadUrl(jobId: string): string {
+  return `${getApiBase()}/api/exports/${encodeURIComponent(jobId)}/download`;
+}
+
+export async function downloadPublishExport(jobId: string, fallbackFilename = "publish.zip"): Promise<void> {
+  const res = await fetch(getPublishExportDownloadUrl(jobId));
+
+  if (!res.ok) {
+    let message = "发布包下载失败";
+    try {
+      const json = await res.json();
+      message = json?.error?.message || message;
+    } catch {
+      // keep default message
+    }
+    throw new Error(message);
+  }
+
+  const blob = await res.blob();
+  const filename = getFilenameFromDisposition(res.headers.get("Content-Disposition"), fallbackFilename);
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}

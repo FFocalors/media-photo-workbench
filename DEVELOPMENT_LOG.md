@@ -28,6 +28,49 @@
 
 ## 开发记录
 
+### Phase 7：导出发布
+- **日期**：2026-05-14
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - 新增发布导出服务 `src-server/services/publishExport.ts`。
+  - 新增 `POST /api/events/:eventId/export`，支持 `selected`、`publish`、`edited`、`rating` 四种导出来源。
+  - 导出优先使用存在的 `edited_path`，没有已修图时回退到 `original_path`；两者都缺失时跳过并记录 errors。
+  - 支持导出规格 `original`、`3000px`、`1920px`，JPEG 质量校验为 1-100。
+  - JPEG 质量恢复为单纯的编码质量设置，不再和 80 / 10MB 强关联。
+  - 新增独立的 10MB 限制选项：开启后单张导出 JPG 会被限制到 10MB 以内，用于适配秀米等平台；原尺寸源文件已小于等于 10MB 时直接复制，不重压缩。
+  - 每次导出写入独立目录 `working/{event_slug}/导出/发布图/{timestamp}`，ZIP 写入 `working/{event_slug}/导出/压缩包`。
+  - 复用 `export_jobs` 记录发布导出任务，`type = publish`。
+  - 新增 `GET /api/exports/:jobId` 查询导出结果。
+  - 新增 `GET /api/exports/:jobId/download` 下载发布 ZIP，下载成功写入 `download_logs` 和 `operation_logs`。
+  - 导出开始、单图导出、导出完成、导出失败均写入 `operation_logs`。
+  - 导出完成后广播 `export-created`，供后续前端或客户端监听。
+  - 改造导出发布页，支持活动选择、导出来源、规格、JPEG 质量、10MB 限制选项、命名规则、结果展示、ZIP 下载和打开导出目录。
+- **修改文件**：
+  - `src-server/services/publishExport.ts`
+  - `src-server/routes/exports.ts`
+  - `src-server/routes/events.ts`
+  - `src-server/app.ts`
+  - `src-server/realtime/socket.ts`
+  - `src/lib/api.ts`
+  - `src/pages/host/Export.tsx`
+  - `API_SPEC.md`
+  - `README.md`
+  - `ROADMAP.md`
+  - `CHANGELOG.md`
+  - `DEVELOPMENT_LOG.md`
+- **验证方式**：
+  - `pnpm build` 通过。
+  - 推荐手工验证：将图片标记为“可发布”和“已修图”，进入导出发布页，按“可发布”导出长边 3000px、质量 90，确认 `导出/发布图/{timestamp}` 生成 JPG，`导出/压缩包` 生成发布 ZIP，并可从页面下载 ZIP 和打开导出目录；再开启 10MB 限制导出，确认超过 10MB 的导出图会被压缩到限制内，未超过 10MB 的原尺寸源文件不会被重压缩。
+- **遇到的问题**：
+  - 当前环境访问 npm registry 受限，安装 `archiver` 失败。
+- **解决方案**：
+  - 发布 ZIP 暂复用项目内 `src-server/utils/zip.ts`，行为上满足生成 ZIP 和下载闭环；后续网络可用时可替换为 `archiver`。
+- **未完成事项**：
+  - 当前发布导出为同步执行，后续大批量活动应升级为任务队列和进度轮询。
+  - 暂未实现归档、回收站、永久删除、远程传输、复杂账号权限、RAW/HEIC/视频支持。
+- **下一步计划**：
+  - 建议进入 Phase 8：活动归档，完成归档目录、metadata、归档验证和只读打开。
+
 ### Phase 6：修图流转
 - **日期**：2026-05-14
 - **开发者 / 工具**：Codex

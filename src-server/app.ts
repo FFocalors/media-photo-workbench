@@ -6,6 +6,7 @@ import repositoryRouter from "./routes/repository";
 import eventsRouter from "./routes/events";
 import imagesRouter from "./routes/images";
 import editPackagesRouter from "./routes/editPackages";
+import exportsRouter from "./routes/exports";
 
 /**
  * 创建 Express 应用实例。
@@ -24,6 +25,7 @@ export function createApp(): express.Application {
   app.use("/api/events", eventsRouter);
   app.use("/api/images", imagesRouter);
   app.use("/api/edit-packages", editPackagesRouter);
+  app.use("/api/exports", exportsRouter);
 
   return app;
 }

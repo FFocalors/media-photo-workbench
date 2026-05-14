@@ -18,6 +18,15 @@ export interface RealtimeTaskPayload {
   updatedAt: string;
 }
 
+export interface RealtimeExportPayload {
+  eventId: string;
+  jobId: string;
+  status: string;
+  action: string;
+  updatedAt: string;
+  exportJob?: unknown;
+}
+
 let realtime: SocketServer | null = null;
 
 export function initRealtime(server: http.Server): SocketServer {
@@ -76,4 +85,8 @@ export function emitImageDeletedLogical(payload: RealtimeImagePayload): void {
 
 export function emitTaskUpdated(payload: RealtimeTaskPayload): void {
   emit("task-updated", payload);
+}
+
+export function emitExportCreated(payload: RealtimeExportPayload): void {
+  emit("export-created", payload);
 }

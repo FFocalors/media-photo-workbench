@@ -821,36 +821,103 @@ working/{event_slug}/清单
 
 ## 九、Export 导出发布
 
-### [计划中] 触发系统导出
-- **用途**：将满足发布条件的图片，按配置规格批量压缩导出到 `导出/发布图` 目录。
+### [已实现] 触发发布导出
+- **用途**：将满足发布条件的图片，按配置规格导出到 `导出/发布图` 目录，并生成发布 ZIP。
 - **请求方法**：`POST`
 - **路径**：`/api/events/:eventId/export`
 - **请求参数示例**：
   ```json
   {
-    "filter": { "rating_min": 4, "status": "publish" },
+    "mode": "selected",
+    "imageIds": ["img_1", "img_2"],
     "size": "3000px",
-    "quality": 90
+    "quality": 90,
+    "filenameMode": "sequence",
+    "limitFileSize10Mb": false
   }
   ```
-- **响应示例**：略
-- **备注**：返回 jobId 用于轮询进度。
+- **字段说明**：
+  - `mode`：`selected | publish | edited | rating`。
+  - `imageIds`：当 `mode = selected` 时使用。
+  - `ratingMin`：当 `mode = rating` 时使用，第一版默认 4。
+  - `size`：`original | 3000px | 1920px`。
+  - `quality`：JPEG 质量，1-100，默认建议 90。
+  - `filenameMode`：`sequence | original | event_original`。
+  - `limitFileSize10Mb`：可选布尔值，默认 `false`。开启后，单张导出 JPG 必须小于等于 10MB；未超过 10MB 的原尺寸源文件会直接复制，不再重压缩。
+- **响应示例**：
+  ```json
+  {
+    "ok": true,
+    "data": {
+      "jobId": "export_xxx",
+      "eventId": "evt_xxx",
+      "mode": "publish",
+      "size": "3000px",
+      "quality": 90,
+      "filenameMode": "sequence",
+      "limitFileSize10Mb": false,
+      "status": "success",
+      "total": 10,
+      "success": 9,
+      "failed": 1,
+      "outputDir": "E:\\MediaPhotoWorkspace\\working\\event\\导出\\发布图\\20260514_150000",
+      "zipPath": "E:\\MediaPhotoWorkspace\\working\\event\\导出\\压缩包\\publish_event_20260514_150000_export_xxx.zip",
+      "downloadUrl": "http://localhost:3030/api/exports/export_xxx/download",
+      "errors": [
+        {
+          "imageId": "img_missing",
+          "filename": "IMG_0001.JPG",
+          "reason": "原图和已修图都不存在，已跳过"
+        }
+      ],
+      "createdAt": "2026-05-14 15:00:00",
+      "updatedAt": "2026-05-14 15:00:02"
+    },
+    "error": null
+  }
+  ```
+- **导出规则**：
+  - 优先导出存在的 `edited_path`。
+  - 没有已修图时导出 `original_path`。
+  - `edited_path` 和 `original_path` 都不存在时跳过并写入 `errors`。
+  - `original` 规格不缩放；`3000px` 和 `1920px` 使用 `sharp` 转为 JPEG。
+  - JPEG 质量只控制编码质量，不再和 10MB 限制强关联。
+  - 当 `limitFileSize10Mb = true` 且导出文件超过 10MB 时，系统会自动继续降低 JPEG 质量；如果仍超过 10MB，会进一步缩小长边，直到满足 10MB 限制。
+  - 10MB 限制是独立上限保护，不是强制压缩；原尺寸导出时源文件已小于等于 10MB 会保持原文件画质。
+  - 每次导出生成独立目录 `working/{event_slug}/导出/发布图/{timestamp}`。
+  - ZIP 保存到 `working/{event_slug}/导出/压缩包`。
+  - 导出成功写入 `export_jobs.type = publish`。
+  - 导出开始、单图导出、导出完成或失败均写入 `operation_logs`。
+  - 导出完成后广播 `export-created`。
+- **错误码**：
+  - `EVENT_NOT_FOUND`：活动不存在。
+  - `EVENT_NOT_EXPORTABLE`：活动已归档或删除，不能导出。
+  - `INVALID_EXPORT_MODE`：导出来源非法。
+  - `INVALID_EXPORT_SIZE`：导出规格非法。
+  - `INVALID_EXPORT_QUALITY`：JPEG 质量不是 1-100 的整数。
+  - `NO_EXPORT_IMAGES`：当前条件下没有可导出的图片。
+- **备注**：
+  - 当前环境安装 `archiver` 受网络限制失败，发布 ZIP 暂复用项目内 ZIP 工具；接口和输出结构保持一致，后续可替换为 `archiver`。
 
-### [计划中] 获取导出任务状态
-- **用途**：查询后台导出的进度。
+### [已实现] 获取导出任务状态
+- **用途**：查询发布导出任务结果。
 - **请求方法**：`GET`
 - **路径**：`/api/exports/:jobId`
 - **请求参数示例**：无
-- **响应示例**：略
-- **备注**：无
+- **响应示例**：同发布导出响应中的 `data`。
+- **错误码**：
+  - `EXPORT_JOB_NOT_FOUND`：导出任务不存在。
 
-### [计划中] 下载导出包
+### [已实现] 下载发布包
 - **用途**：下载已经成功导出的压缩包。
 - **请求方法**：`GET`
 - **路径**：`/api/exports/:jobId/download`
 - **请求参数示例**：无
 - **响应示例**：返回文件流
-- **备注**：无
+- **错误码**：
+  - `EXPORT_JOB_NOT_FOUND`：导出任务不存在。
+  - `EXPORT_FILE_NOT_FOUND`：导出 ZIP 文件不存在。
+- **备注**：下载成功后写入 `download_logs.type = export` 和 `operation_logs.type = publish_export_downloaded`。
 
 ---
 
@@ -917,6 +984,7 @@ working/{event_slug}/清单
 - `image-updated`：图片星级、状态、分类或备注更新后广播。
 - `image-deleted-logical`：图片逻辑删除后广播。
 - `task-updated`：后台任务更新预留事件，目前未接入具体任务队列。
+- `export-created`：发布导出完成后广播，当前前端暂未消费该事件。
 
 图片事件 payload 示例：
 
@@ -942,5 +1010,4 @@ working/{event_slug}/清单
 
 ### [计划中] 后续实时事件
 
-- `export-created`：有新的成品发布包生成。
 - `archive-updated`：活动的归档状态发生变动。
