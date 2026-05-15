@@ -257,10 +257,15 @@ export interface EventPurgeData {
   deletedRecords: {
     events: number;
     images: number;
+    imageTags: number;
+    downloadLogs: number;
+    exportJobs: number;
+    operationLogs: number;
+    archivedEvents: number;
   };
 }
 
-export async function purgeEvent(id: string, includeArchive = false): Promise<ApiResponse<EventPurgeData>> {
+export async function purgeEvent(id: string, includeArchive = true): Promise<ApiResponse<EventPurgeData>> {
   return request<EventPurgeData>(`/api/events/${id}/purge`, {
     method: "DELETE",
     headers: { "Content-Type": "application/json" },
@@ -874,6 +879,7 @@ export interface ArchiveMissingFile {
 export interface ArchivePrepareData {
   archivePath: string;
   totalImages: number;
+  thumbCopied: number;
   originalCopied: number;
   editedCopied: number;
   exportCopied: number;
@@ -901,6 +907,81 @@ export interface ArchivedEventData {
   published_images: number;
   archive_path: string;
   archived_at: string;
+}
+
+export interface ArchiveMetadataFileStatus {
+  name: string;
+  path: string;
+  exists: boolean;
+  size: number;
+}
+
+export interface ArchivedImageSummary {
+  image_id: string;
+  original_filename: string;
+  stored_filename: string;
+  rating: number;
+  status: string;
+  category: string;
+  remark: string;
+  photographer: string;
+  camera_model: string;
+  lens_model: string;
+  shot_at: string;
+  original_path: string;
+  edited_path: string;
+  file_hash: string;
+  thumb_url: string;
+  thumb_archive_path: string;
+  has_thumb: boolean;
+  has_original: boolean;
+  has_edited: boolean;
+  original_retained: boolean;
+  edited_retained: boolean;
+}
+
+export interface ArchivedEventDetailData {
+  archivedEvent: ArchivedEventData;
+  event: {
+    id: string;
+    name: string;
+    slug: string;
+    date: string;
+    status: "archived";
+  };
+  archivePath: string;
+  archivedAt: string;
+  counts: {
+    total_images: number;
+    thumb_files: number;
+    original_files: number;
+    edited_files: number;
+    export_files: number;
+    missing_files: number;
+  };
+  files: Array<{
+    image_id: string;
+    type: "thumb" | "original" | "edited" | "export";
+    source_path: string;
+    archive_path: string;
+    exists: boolean;
+    file_hash: string;
+    size: number;
+  }>;
+  images: ArchivedImageSummary[];
+  missingFiles: string[];
+  metadataFiles: ArchiveMetadataFileStatus[];
+}
+
+export interface ArchivedEventDeleteData {
+  id: string;
+  eventId: string;
+  archivePath: string;
+  deletedArchive: boolean;
+  missingFiles: string[];
+  deletedRecords: {
+    archivedEvents: number;
+  };
 }
 
 export interface ArchiveCleanupData {
@@ -936,4 +1017,14 @@ export async function cleanupEventArchive(eventId: string, archivePath: string):
 
 export async function fetchArchivedEvents(): Promise<ApiResponse<ArchivedEventData[]>> {
   return request<ArchivedEventData[]>("/api/archived-events");
+}
+
+export async function fetchArchivedEventDetail(id: string): Promise<ApiResponse<ArchivedEventDetailData>> {
+  return request<ArchivedEventDetailData>(`/api/archived-events/${encodeURIComponent(id)}`);
+}
+
+export async function deleteArchivedEvent(id: string): Promise<ApiResponse<ArchivedEventDeleteData>> {
+  return request<ArchivedEventDeleteData>(`/api/archived-events/${encodeURIComponent(id)}`, {
+    method: "DELETE"
+  });
 }

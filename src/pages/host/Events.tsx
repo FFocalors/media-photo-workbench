@@ -14,6 +14,7 @@ import {
   restoreEvent,
   updateEventStatus
 } from "../../lib/api";
+import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { Notice } from "../../components/ui/States";
 
 const statusActions: Array<{ status: EventStatus; label: string; icon: typeof PlayCircle }> = [
@@ -76,13 +77,17 @@ export function EventsPage() {
   }, []);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<EventData | null>(null);
+  const [restoreTarget, setRestoreTarget] = useState<EventData | null>(null);
+  const [purgeTarget, setPurgeTarget] = useState<EventData | null>(null);
+  const [purgeConfirmName, setPurgeConfirmName] = useState("");
   const [formData, setFormData] = useState({ name: "", date: new Date().toISOString().split("T")[0], location: "", description: "" });
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleCreateEvent = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.name.trim()) {
-      alert("活动名称不能为空");
+      setMessage({ tone: "warning", title: "活动名称不能为空", body: "请输入活动名称后再创建。" });
       return;
     }
 
@@ -94,13 +99,16 @@ export function EventsPage() {
     });
 
     if (res && res.ok && res.data) {
+      const createdWithoutWorkspace = !res.data.workingDir.created;
       if (!res.data.workingDir.created) {
-        alert("请先在系统设置中配置仓库路径\n(活动记录已创建，但缺乏物理工作区，无法导入图片)");
+        setMessage({ tone: "warning", title: "活动已创建但缺少工作区", body: "请先在系统设置中配置仓库路径。活动记录已创建，但缺乏物理工作区，暂时无法导入图片。" });
       }
       setIsModalOpen(false);
       setFormData({ name: "", date: new Date().toISOString().split("T")[0], location: "", description: "" });
       loadEvents(activeTab);
-      setMessage({ tone: "success", title: "活动已创建", body: "活动记录和工作目录已创建。" });
+      if (!createdWithoutWorkspace) {
+        setMessage({ tone: "success", title: "活动已创建", body: "活动记录和工作目录已创建。" });
+      }
     } else {
       setMessage({ tone: "danger", title: "创建活动失败", body: res?.error?.message || "创建活动失败，请检查设置。" });
     }
@@ -130,15 +138,15 @@ export function EventsPage() {
     }
   };
 
-  const handleDeleteEvent = async (event: EventData) => {
-    const confirmed = window.confirm(`确定删除活动“${event.name}”？\n\n这只会把活动标记为已删除，不会删除仓库中的图片文件。`);
-    if (!confirmed) return;
-
+  const handleDeleteEvent = async () => {
+    if (!deleteTarget) return;
+    const event = deleteTarget;
     setIsMutating(true);
     setOpenMenuId(null);
     try {
       const res = await deleteEvent(event.id);
       if (res.ok && res.data) {
+        setDeleteTarget(null);
         await loadEvents(activeTab);
         setMessage({ tone: "success", title: "活动已删除", body: `${event.name} 已标记为已删除，图片文件未被删除。` });
       } else {
@@ -151,15 +159,15 @@ export function EventsPage() {
     }
   };
 
-  const handleRestoreEvent = async (event: EventData) => {
-    const confirmed = window.confirm(`恢复活动“${event.name}”？\n\n恢复后活动会回到进行中状态，工作区文件不会移动。`);
-    if (!confirmed) return;
-
+  const handleRestoreEvent = async () => {
+    if (!restoreTarget) return;
+    const event = restoreTarget;
     setIsMutating(true);
     setOpenMenuId(null);
     try {
       const res = await restoreEvent(event.id, "active");
       if (res.ok && res.data) {
+        setRestoreTarget(null);
         await loadEvents(activeTab);
         setMessage({ tone: "success", title: "活动已恢复", body: `${event.name} 已恢复为进行中。` });
       } else {
@@ -172,13 +180,35 @@ export function EventsPage() {
     }
   };
 
-  const handlePurgeEvent = async (event: EventData) => {
-    const workingPath = repositoryPath ? `${repositoryPath}\\working\\${event.slug}` : `working\\${event.slug}`;
-    const archivePath = repositoryPath ? `${repositoryPath}\\archive\\${event.slug}` : `archive\\${event.slug}`;
-    const typed = window.prompt(
-      `永久删除活动“${event.name}”？\n\n活动名称：${event.name}\n图片数量：${event.total_images}\n工作区：${workingPath}\n归档目录默认保留：${archivePath}\n\n此操作会删除活动记录和图片记录，不能撤销。\n请输入活动名称确认：`
-    );
-    if (typed !== event.name) {
+  const openDeleteEventDialog = (event: EventData) => {
+    setOpenMenuId(null);
+    setDeleteTarget(event);
+    setMessage(null);
+  };
+
+  const openRestoreEventDialog = (event: EventData) => {
+    setOpenMenuId(null);
+    setRestoreTarget(event);
+    setMessage(null);
+  };
+
+  const openPurgeEventDialog = (event: EventData) => {
+    setOpenMenuId(null);
+    setPurgeTarget(event);
+    setPurgeConfirmName("");
+    setMessage(null);
+  };
+
+  const closePurgeEventDialog = () => {
+    if (isMutating) return;
+    setPurgeTarget(null);
+    setPurgeConfirmName("");
+  };
+
+  const handlePurgeEvent = async () => {
+    if (!purgeTarget) return;
+    const event = purgeTarget;
+    if (purgeConfirmName.trim() !== event.name) {
       setMessage({ tone: "warning", title: "永久删除已取消", body: "输入的活动名称不一致，未执行删除。" });
       return;
     }
@@ -186,13 +216,15 @@ export function EventsPage() {
     setIsMutating(true);
     setOpenMenuId(null);
     try {
-      const res = await purgeEvent(event.id, false);
+      const res = await purgeEvent(event.id, true);
       if (res.ok && res.data) {
+        setPurgeTarget(null);
+        setPurgeConfirmName("");
         await loadEvents(activeTab);
         setMessage({
           tone: res.data.errors.length > 0 ? "warning" : "success",
           title: "活动已永久删除",
-          body: `删除活动记录 ${res.data.deletedRecords.events} 条，图片记录 ${res.data.deletedRecords.images} 条。归档目录默认保留。`
+          body: `删除活动记录 ${res.data.deletedRecords.events} 条、图片记录 ${res.data.deletedRecords.images} 条、关联标签 ${res.data.deletedRecords.imageTags} 条、下载日志 ${res.data.deletedRecords.downloadLogs} 条、导出任务 ${res.data.deletedRecords.exportJobs} 条、操作日志 ${res.data.deletedRecords.operationLogs} 条、归档摘要 ${res.data.deletedRecords.archivedEvents} 条。working 和归档目录已清理。`
         });
       } else {
         setMessage({ tone: "danger", title: "永久删除失败", body: res.error?.message || "无法永久删除活动。" });
@@ -203,6 +235,13 @@ export function EventsPage() {
       setIsMutating(false);
     }
   };
+
+  const purgeWorkingPath = purgeTarget
+    ? repositoryPath ? `${repositoryPath}\\working\\${purgeTarget.slug}` : `working\\${purgeTarget.slug}`
+    : "";
+  const purgeArchivePath = purgeTarget
+    ? repositoryPath ? `${repositoryPath}\\archive\\${purgeTarget.slug}` : `archive\\${purgeTarget.slug}`
+    : "";
 
   return (
     <div className="flex h-full flex-1 flex-col overflow-y-auto bg-[#F8F9FA] p-8">
@@ -315,6 +354,96 @@ export function EventsPage() {
         </div>
       )}
 
+      {purgeTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6 backdrop-blur-sm">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl">
+            <div className="mb-5 flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-bold text-red-700">永久删除活动</h2>
+                <p className="mt-1 text-sm text-slate-500">此操作会删除活动记录、图片记录、working 工作区和对应归档目录，不能撤销。</p>
+              </div>
+              <button
+                className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                disabled={isMutating}
+                onClick={closePurgeEventDialog}
+                type="button"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="space-y-3 rounded-xl bg-red-50 p-4 text-sm">
+              <InfoLine label="活动名称" value={purgeTarget.name} />
+              <InfoLine label="图片数量" value={`${purgeTarget.total_images} 张`} />
+              <InfoLine label="工作区" value={purgeWorkingPath} />
+              <InfoLine label="归档目录" value={purgeArchivePath} />
+            </div>
+
+            <label className="mt-5 block">
+              <span className="mb-1.5 block text-sm font-medium text-slate-700">输入活动名称确认</span>
+              <input
+                autoFocus
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500"
+                onChange={(event) => setPurgeConfirmName(event.target.value)}
+                placeholder={purgeTarget.name}
+                value={purgeConfirmName}
+              />
+            </label>
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                className="rounded-lg px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+                disabled={isMutating}
+                onClick={closePurgeEventDialog}
+                type="button"
+              >
+                取消
+              </button>
+              <button
+                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={isMutating || purgeConfirmName.trim() !== purgeTarget.name}
+                onClick={handlePurgeEvent}
+                type="button"
+              >
+                {isMutating ? "删除中..." : "确认永久删除"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteTarget && (
+        <ConfirmDialog
+          confirmLabel="删除活动"
+          confirming={isMutating}
+          description="这只会把活动标记为已删除，不会删除仓库中的图片文件。之后可在回收站恢复或永久删除。"
+          details={[
+            { label: "活动名称", value: deleteTarget.name },
+            { label: "图片数量", value: `${deleteTarget.total_images} 张` }
+          ]}
+          onCancel={() => !isMutating && setDeleteTarget(null)}
+          onConfirm={handleDeleteEvent}
+          title="删除活动"
+          tone="warning"
+        />
+      )}
+
+      {restoreTarget && (
+        <ConfirmDialog
+          confirmLabel="恢复活动"
+          confirming={isMutating}
+          description="恢复后活动会回到进行中状态，工作区文件不会移动。"
+          details={[
+            { label: "活动名称", value: restoreTarget.name },
+            { label: "图片数量", value: `${restoreTarget.total_images} 张` }
+          ]}
+          onCancel={() => !isMutating && setRestoreTarget(null)}
+          onConfirm={handleRestoreEvent}
+          title="恢复活动"
+          tone="success"
+        />
+      )}
+
       {loading ? (
         <div className="flex h-64 items-center justify-center text-slate-400">加载中...</div>
       ) : events.length === 0 ? (
@@ -386,7 +515,7 @@ export function EventsPage() {
                           <>
                             <button
                               className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-emerald-600 hover:bg-emerald-50"
-                              onClick={() => handleRestoreEvent(event)}
+                              onClick={() => openRestoreEventDialog(event)}
                               type="button"
                             >
                               <RotateCcw size={15} />
@@ -394,7 +523,7 @@ export function EventsPage() {
                             </button>
                             <button
                               className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
-                              onClick={() => handlePurgeEvent(event)}
+                              onClick={() => openPurgeEventDialog(event)}
                               type="button"
                             >
                               <Trash2 size={15} />
@@ -404,7 +533,7 @@ export function EventsPage() {
                         ) : (
                           <button
                             className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
-                            onClick={() => handleDeleteEvent(event)}
+                            onClick={() => openDeleteEventDialog(event)}
                             type="button"
                           >
                             <Trash2 size={15} />
@@ -435,6 +564,15 @@ function Stat({ label, value, color = "text-slate-900" }: { label: string; value
     <div>
       <p className="mb-1 text-[10px] text-slate-400">{label}</p>
       <p className={cn("text-sm font-medium", color)}>{value}</p>
+    </div>
+  );
+}
+
+function InfoLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="grid grid-cols-[72px_1fr] gap-3">
+      <span className="text-slate-500">{label}</span>
+      <span className="break-all font-medium text-slate-900">{value}</span>
     </div>
   );
 }

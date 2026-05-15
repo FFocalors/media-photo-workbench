@@ -46,6 +46,11 @@ export interface EventPurgeResult {
   deletedRecords: {
     events: number;
     images: number;
+    imageTags: number;
+    downloadLogs: number;
+    exportJobs: number;
+    operationLogs: number;
+    archivedEvents: number;
   };
 }
 
@@ -126,6 +131,30 @@ async function removeDirectoryIfExists(targetPath: string, missingFiles: string[
   } catch (err: any) {
     errors.push(`${targetPath}: ${err?.message || "删除失败"}`);
   }
+}
+
+async function listArchivePathsForEvent(repositoryPath: string, event: EventRow): Promise<string[]> {
+  const rows = getDatabase().prepare("SELECT archive_path FROM archived_events WHERE event_id = ?").all(event.id) as Array<{ archive_path: string }>;
+  const paths = rows.map((row) => row.archive_path).filter(Boolean);
+  const archiveRoot = path.join(repositoryPath, "archive");
+  if (await fs.pathExists(archiveRoot)) {
+    const names = await fs.readdir(archiveRoot);
+    for (const name of names) {
+      if (name === event.slug || name.startsWith(`${event.slug}_`)) {
+        paths.push(path.join(archiveRoot, name));
+      }
+    }
+  }
+  return Array.from(new Set(paths));
+}
+
+function makePlaceholders(values: unknown[]): string {
+  return values.map(() => "?").join(", ");
+}
+
+function deleteByIds(table: string, column: string, ids: string[]): number {
+  if (ids.length === 0) return 0;
+  return getDatabase().prepare(`DELETE FROM ${table} WHERE ${column} IN (${makePlaceholders(ids)})`).run(...ids).changes;
 }
 
 /**
@@ -273,7 +302,8 @@ export async function purgeEvent(id: string, input: { includeArchive?: boolean }
 
   const workspace = getEventWorkspacePaths(repositoryStatus.path, existing.slug);
   const archivePath = path.join(repositoryStatus.path, "archive", existing.slug);
-  const includeArchive = input.includeArchive === true;
+  const includeArchive = input.includeArchive !== false;
+  const archivePaths = includeArchive ? await listArchivePathsForEvent(repositoryStatus.path, existing) : [archivePath];
   const deletedFiles: string[] = [];
   const missingFiles: string[] = [];
   const errors: string[] = [];
@@ -285,13 +315,16 @@ export async function purgeEvent(id: string, input: { includeArchive?: boolean }
     image_count: imageCount,
     working_path: workspace.eventDir,
     archive_path: archivePath,
+    archive_paths: archivePaths,
     include_archive: includeArchive
   };
   writeEventOperationLog(existing.id, "event_purge_started", purgeDetail);
 
   await removeDirectoryIfExists(workspace.eventDir, missingFiles, errors, deletedFiles);
   if (includeArchive) {
-    await removeDirectoryIfExists(archivePath, missingFiles, errors, deletedFiles);
+    for (const candidate of archivePaths) {
+      await removeDirectoryIfExists(candidate, missingFiles, errors, deletedFiles);
+    }
   }
 
   if (errors.length > 0) {
@@ -305,14 +338,26 @@ export async function purgeEvent(id: string, input: { includeArchive?: boolean }
     };
   }
 
+  const db = getDatabase();
+  const imageIds = (db.prepare("SELECT id FROM images WHERE event_id = ?").all(existing.id) as Array<{ id: string }>).map((row) => row.id);
+  const exportJobIds = (db.prepare("SELECT id FROM export_jobs WHERE event_id = ?").all(existing.id) as Array<{ id: string }>).map((row) => row.id);
+  const operationTargetIds = Array.from(new Set([existing.id, ...imageIds, ...exportJobIds]));
+
   writeEventOperationLog(existing.id, "event_purged", {
     ...purgeDetail,
     deleted_files: deletedFiles,
     missing_files: missingFiles
   });
 
-  const db = getDatabase();
+  const deletedImageTags = deleteByIds("image_tags", "image_id", imageIds);
+  const deletedDownloadLogs = imageIds.length > 0
+    ? db.prepare(`DELETE FROM download_logs WHERE event_id = ? OR image_id IN (${makePlaceholders(imageIds)})`).run(existing.id, ...imageIds).changes
+    : db.prepare("DELETE FROM download_logs WHERE event_id = ?").run(existing.id).changes;
+  const deletedExportJobs = db.prepare("DELETE FROM export_jobs WHERE event_id = ?").run(existing.id).changes;
+  const deletedOperationLogsByTarget = deleteByIds("operation_logs", "target_id", operationTargetIds);
+  const deletedOperationLogsByDetail = db.prepare("DELETE FROM operation_logs WHERE detail LIKE ?").run(`%"event_id":"${existing.id}"%`).changes;
   const deletedImages = db.prepare("DELETE FROM images WHERE event_id = ?").run(existing.id).changes;
+  const deletedArchivedEvents = db.prepare("DELETE FROM archived_events WHERE event_id = ?").run(existing.id).changes;
   const deletedEvents = db.prepare("DELETE FROM events WHERE id = ?").run(existing.id).changes;
 
   return {
@@ -326,7 +371,12 @@ export async function purgeEvent(id: string, input: { includeArchive?: boolean }
     errors,
     deletedRecords: {
       events: deletedEvents,
-      images: deletedImages
+      images: deletedImages,
+      imageTags: deletedImageTags,
+      downloadLogs: deletedDownloadLogs,
+      exportJobs: deletedExportJobs,
+      operationLogs: deletedOperationLogsByTarget + deletedOperationLogsByDetail,
+      archivedEvents: deletedArchivedEvents
     }
   };
 }

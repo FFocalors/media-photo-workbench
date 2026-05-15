@@ -594,7 +594,7 @@ router.delete("/:id", (req, res) => {
 router.delete("/:id/purge", async (req, res) => {
   try {
     const result = await purgeEvent(req.params.id, {
-      includeArchive: req.body?.includeArchive === true
+      includeArchive: req.body?.includeArchive !== false
     });
     sendSuccess(res, result);
   } catch (err: any) {

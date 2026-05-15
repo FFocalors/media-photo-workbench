@@ -54,9 +54,7 @@ MediaPhotoWorkspace/
 │   ├── 导出/压缩包/
 │   └── 清单/
 ├── archive/event_slug/
-│   ├── 原图/
-│   ├── 已修图/
-│   ├── 导出/
+│   ├── 缩略图/
 │   └── metadata/event.db
 ├── temp/
 └── logs/
@@ -72,7 +70,7 @@ MediaPhotoWorkspace/
 
 每张导入图片生成：
 
-- `original`：原始 JPG，用于修图、导出、归档。
+- `original`：原始 JPG，用于修图、导出；轻量归档只记录其历史路径，不再默认复制原图。
 - `thumb`：长边 400px，WebP，用于图片墙。
 - `preview`：长边 1600px，WebP，用于预览弹窗。
 
@@ -212,7 +210,9 @@ archive-updated
 
 每个活动结束后必须支持归档，主数据库不能无限写。
 
-归档流程：生成归档目录、复制原图、已修图、发布图、生成 `event.db`、`images.csv`、`operation_logs.csv`、`manifest.json`、验证数量和完整性、用户确认后清理 `working`、主库只保留 `archived_events` 摘要。
+归档流程：生成轻量归档目录、复制缩略图、生成 `event.db`、`images.csv`、`operation_logs.csv`、`manifest.json`、验证缩略图和 metadata 完整性、用户确认后清理 `working`、主库保留 `archived_events` 摘要。
+
+归档默认不长期保存原图、已修图、发布图或 ZIP，只在 metadata 中记录历史路径和业务状态。归档只读查看依赖缩略图和 metadata。归档目录支持二次确认后删除，用于释放长期占用空间。
 
 归档活动支持只读打开。默认不允许修改归档活动。
 

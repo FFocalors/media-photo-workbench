@@ -16,14 +16,29 @@
 - **0.8.0**：活动归档
 - **0.9.0**：回收站、恢复、永久删除
 - **0.10.0**：任务队列与批量 ZIP 下载
-- **0.11.0**：远程传输预留
+- **0.11.0**：归档活动只读打开
+- **0.12.0**：真实局域网 / 手机网页 / 多设备测试修复
+- **0.13.0**：Windows 打包发布
+- **0.14.0-rc**：真实活动压力测试与问题修复
 - **1.0.0**：第一个可用于实际活动的稳定版本
+- **1.1.0 之后**：远程传输预留 / 远程连接探索
 
 ---
 
 ## [未发布] (Unreleased)
 
 ### 新增
+- v0.11.0-dev 归档活动只读打开。
+- 归档策略调整为轻量归档：新生成归档只复制缩略图和 metadata，原图、已修图、导出文件只记录历史路径，不再默认复制进 `archive`。
+- 新增 `GET /api/archived-events/:id`，根据 `archived_events.id` 读取归档活动详情。
+- 新增 `GET /api/archived-events/:id/thumb/:imageId`，用于只读归档页访问归档缩略图。
+- 新增 `DELETE /api/archived-events/:id`，支持二次确认后删除归档目录和归档摘要。
+- 归档详情会读取 `archive_path` 下的 `缩略图`、`metadata/manifest.json`、`images.csv`、`operation_logs.csv` 和 `event.db` 文件状态。
+- 归档详情返回活动基本信息、归档路径、归档时间、缩略图计数、缺失文件、metadata 文件状态和图片元数据列表。
+- 归档页新增“只读归档”模式，可查看已归档活动列表和只读详情，并支持打开归档目录。
+- 归档页只读模式新增缩略图墙和“删除归档”入口。
+- 活动回收站永久删除会清理该活动的 working 目录、所有匹配的 archive 目录、图片记录、图片标签关联、下载日志、导出任务、操作日志和归档摘要。
+- 只读归档详情不提供打星、状态修改、上传、删除、导出或修图回传入口。
 - v0.10.0-dev 任务队列与批量 ZIP 下载。
 - 新增内存任务管理器 `src-server/services/tasks.ts`，支持任务创建、更新、完成、失败、查询和取消占位。
 - 新增 `GET /api/tasks`、`GET /api/tasks/:taskId`、`POST /api/tasks/:taskId/cancel`；当前取消接口明确返回 `TASK_CANCEL_NOT_SUPPORTED`。
@@ -40,12 +55,12 @@
 - 新增 `DELETE /api/images/:id/purge`，仅允许永久删除回收站图片，并清理原图、缩略图、预览图和已修图文件。
 - 新增 `GET /api/events/trash`，支持查看活动回收站。
 - 新增 `PATCH /api/events/:id/restore`，支持恢复已逻辑删除活动。
-- 新增 `DELETE /api/events/:id/purge`，仅允许永久删除 `status = deleted` 的活动，默认清理 working 工作区和主库记录，不删除 archive 归档目录。
+- 新增 `DELETE /api/events/:id/purge`，仅允许永久删除 `status = deleted` 的活动，默认清理 working 工作区、对应 archive 归档目录和主库记录。
 - 活动管理页新增回收站入口，支持恢复活动和输入活动名称二次确认后永久删除。
 - 图片墙新增主机端图片回收站入口，支持批量恢复和二次确认永久删除。
 - Phase 8 活动归档闭环。
 - 新增 `POST /api/events/:eventId/archive/prepare`、`POST /api/events/:eventId/archive/verify`、`POST /api/events/:eventId/archive/cleanup`。
-- 归档会生成 `archive/{event_slug}`，复制原图、已修图、导出文件和压缩包，并生成 `manifest.json`、`images.csv`、`operation_logs.csv` 和独立 `event.db`。
+- 归档会生成 `archive/{event_slug}`，当前策略只复制缩略图并生成 `manifest.json`、`images.csv`、`operation_logs.csv` 和独立 `event.db`。
 - 归档验证通过后才允许清理 working 工作区，清理后活动状态更新为 `archived` 并写入 `archived_events` 摘要。
 - Phase 7 导出发布闭环。
 - 新增 `POST /api/events/:eventId/export`，支持手动选择、可发布、已修图、4 星及以上四种导出来源。
@@ -138,8 +153,10 @@
 - 将图片导入升级为任务队列和进度轮询。
 - 将待修包生成、大批量已修图回传、归档清理和永久删除继续接入任务系统。
 - 增加任务持久化、真正取消和重试能力。
-- 补齐归档活动只读打开。
-- 补齐远程传输预留入口。
+- v0.12.0-dev：真实局域网 / 手机网页 / 多设备测试修复。
+- v0.13.0-dev：Windows 打包发布。
+- v0.14.0-rc：真实活动压力测试与问题修复。
+- v1.1.0 之后再探索远程传输预留 / 远程连接。
 
 ---
 

@@ -4,6 +4,7 @@ import { GalleryToolbar } from "../../components/gallery/GalleryToolbar";
 import { MetadataPanel } from "../../components/gallery/MetadataPanel";
 import { PhotoGrid } from "../../components/gallery/PhotoGrid";
 import { PreviewModal } from "../../components/gallery/PreviewModal";
+import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { Notice } from "../../components/ui/States";
 import {
   EventData,
@@ -45,6 +46,7 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
   const [trashMode, setTrashMode] = useState(false);
   const [loading, setLoading] = useState(true);
   const [realtimeStatus, setRealtimeStatus] = useState<RealtimeConnectionState>("disconnected");
+  const [confirmAction, setConfirmAction] = useState<"delete" | "restore" | "purge" | null>(null);
   const [message, setMessage] = useState<{ tone: "success" | "warning" | "danger" | "info"; title: string; body: string } | null>(null);
 
   const activePhoto = photos.find((photo) => photo.id === activePhotoId) ?? null;
@@ -275,11 +277,12 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
     }
   };
 
-  const handleDeleteSelected = async () => {
+  const handleDeleteSelected = () => {
     if (selectedIds.length === 0) return;
-    const confirmed = window.confirm(`确定从图片墙删除选中的 ${selectedIds.length} 张图片？\n\n这只会把图片标记为已删除，不会删除仓库里的原图、缩略图或预览图。`);
-    if (!confirmed) return;
+    setConfirmAction("delete");
+  };
 
+  const executeDeleteSelected = async () => {
     const ids = [...selectedIds];
     let success = 0;
     const failed: string[] = [];
@@ -307,13 +310,15 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
     } else {
       setMessage({ tone: "success", title: "图片已删除", body: `已从图片墙移除 ${success} 张图片，仓库文件未被删除。` });
     }
+    setConfirmAction(null);
   };
 
-  const handleRestoreSelected = async () => {
+  const handleRestoreSelected = () => {
     if (selectedIds.length === 0) return;
-    const confirmed = window.confirm(`确定恢复选中的 ${selectedIds.length} 张图片？`);
-    if (!confirmed) return;
+    setConfirmAction("restore");
+  };
 
+  const executeRestoreSelected = async () => {
     const ids = [...selectedIds];
     let success = 0;
     const failed: string[] = [];
@@ -337,24 +342,15 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
     setMessage(failed.length > 0
       ? { tone: "warning", title: "部分图片恢复失败", body: `已恢复 ${success} 张，失败 ${failed.length} 张。${failed[0] || ""}` }
       : { tone: "success", title: "图片已恢复", body: `已恢复 ${success} 张图片，返回图片墙后可查看。` });
+    setConfirmAction(null);
   };
 
-  const handlePurgeSelected = async () => {
+  const handlePurgeSelected = () => {
     if (selectedIds.length === 0) return;
-    const targets = photos.filter((photo) => selectedIds.includes(photo.id));
-    const pathLines = targets.flatMap((photo) => [
-      photo.original_path,
-      photo.thumb_path,
-      photo.preview_path,
-      photo.edited_path
-    ].filter(Boolean).map((filePath) => `${photo.original_filename}: ${filePath}`));
-    const preview = pathLines.slice(0, 12).join("\n");
-    const more = pathLines.length > 12 ? `\n... 还有 ${pathLines.length - 12} 个路径` : "";
-    const confirmed = window.confirm(
-      `永久删除选中的 ${targets.length} 张图片？\n\n将尝试删除以下文件：\n${preview || "无文件路径"}${more}\n\n此操作会删除图片数据库记录，不能撤销。`
-    );
-    if (!confirmed) return;
+    setConfirmAction("purge");
+  };
 
+  const executePurgeSelected = async () => {
     const ids = [...selectedIds];
     let success = 0;
     const failed: string[] = [];
@@ -381,6 +377,7 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
     setMessage(failed.length > 0
       ? { tone: "danger", title: "部分图片永久删除失败", body: `已删除 ${success} 张，失败 ${failed.length} 张。${failed[0] || ""}` }
       : { tone: "success", title: "图片已永久删除", body: `已永久删除 ${success} 张图片。` });
+    setConfirmAction(null);
   };
 
   const handleDownloadSelectedZip = async () => {
@@ -485,6 +482,13 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
     : selectedEventId && total === 0 && !search && minRating === 0 && statusFilter === "all"
     ? "暂无图片，请先导入图片。"
     : "当前筛选条件下没有可显示的图片。可以清空筛选、降低星级条件，或切换到全部状态。";
+  const selectedPhotos = photos.filter((photo) => selectedIds.includes(photo.id));
+  const purgePathLines = selectedPhotos.flatMap((photo) => [
+    photo.original_path,
+    photo.thumb_path,
+    photo.preview_path,
+    photo.edited_path
+  ].filter(Boolean).map((filePath) => `${photo.original_filename}: ${filePath}`));
 
   return (
     <div className="flex h-full flex-1 overflow-hidden bg-[#F8F9FA]">
@@ -597,6 +601,53 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
           }}
           onStatusChange={handleStatusChange}
         />
+      )}
+
+      {confirmAction === "delete" && (
+        <ConfirmDialog
+          confirmLabel="删除图片"
+          description="这只会把图片标记为已删除，不会删除仓库里的原图、缩略图或预览图。"
+          details={[{ label: "图片数量", value: `${selectedIds.length} 张` }]}
+          onCancel={() => setConfirmAction(null)}
+          onConfirm={executeDeleteSelected}
+          title="删除所选图片"
+          tone="warning"
+        />
+      )}
+
+      {confirmAction === "restore" && (
+        <ConfirmDialog
+          confirmLabel="恢复图片"
+          description="恢复后图片会重新出现在当前活动的图片墙中。"
+          details={[{ label: "图片数量", value: `${selectedIds.length} 张` }]}
+          onCancel={() => setConfirmAction(null)}
+          onConfirm={executeRestoreSelected}
+          title="恢复所选图片"
+          tone="success"
+        />
+      )}
+
+      {confirmAction === "purge" && (
+        <ConfirmDialog
+          confirmLabel="永久删除"
+          description="此操作会删除图片数据库记录，并尝试删除下方关联文件，不能撤销。"
+          details={[{ label: "图片数量", value: `${selectedPhotos.length} 张` }]}
+          onCancel={() => setConfirmAction(null)}
+          onConfirm={executePurgeSelected}
+          title="永久删除所选图片"
+          tone="danger"
+        >
+          <div className="max-h-44 overflow-y-auto rounded-xl border border-red-100 bg-red-50 p-3 text-xs leading-5 text-red-700">
+            {purgePathLines.length === 0 ? (
+              <p>无文件路径</p>
+            ) : (
+              purgePathLines.slice(0, 24).map((line, index) => (
+                <p className="break-all" key={`${line}-${index}`}>{line}</p>
+              ))
+            )}
+            {purgePathLines.length > 24 && <p className="mt-2 text-red-500">还有 {purgePathLines.length - 24} 个路径未显示。</p>}
+          </div>
+        </ConfirmDialog>
       )}
     </div>
   );

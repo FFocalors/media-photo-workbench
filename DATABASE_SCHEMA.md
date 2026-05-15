@@ -147,6 +147,8 @@
 | `archive_path`| TEXT | 归档包存放的绝对物理路径 | NOT NULL, DEFAULT '' |
 | `archived_at` | TEXT | 执行归档的时间 | NOT NULL, DEFAULT `now` |
 
+> v0.11.1-dev 轻量归档不新增数据库字段。详情接口以 `archived_events.archive_path` 为入口，读取 `缩略图/`、`metadata/manifest.json`、`images.csv`、`operation_logs.csv` 和 `event.db` 文件状态；只读展示不修改 `events` 或 `images`。删除归档时会删除对应 `archive_path` 和 `archived_events` 摘要。活动回收站永久删除会额外清理该活动的图片记录、图片标签关联、下载日志、导出任务、操作日志和归档摘要。
+
 ---
 
 ## 核心枚举值参考
@@ -186,7 +188,7 @@
 
 > 图片删除不复用 `images.status`，而是通过 `is_deleted/deleted_at` 表达生命周期。图片墙删除为逻辑删除，只隐藏记录，不删除原图、缩略图、预览图或已修图文件；图片回收站可恢复，也可在二次确认后永久删除图片记录及其关联文件。
 
-> 活动删除通过 `events.status = deleted` 表达。活动回收站可恢复活动；永久删除仅允许对 `deleted` 活动执行，默认清理 working 工作区、活动图片记录和活动记录，不删除 archive 归档目录。
+> 活动删除通过 `events.status = deleted` 表达。活动回收站可恢复活动；永久删除仅允许对 `deleted` 活动执行，默认清理 working 工作区、对应 archive 归档目录、活动图片记录、图片标签关联、下载日志、导出任务、操作日志、归档摘要和活动记录。
 
 ### `download_logs.download_type` (对应 `download_logs.type`)
 - `original`：获取单张或多张原图

@@ -12,7 +12,7 @@ import { getEventWorkspacePaths } from "./eventWorkspace";
 import { ImageRow } from "./images";
 import { checkRepository } from "./repository";
 
-type ArchiveFileType = "original" | "edited" | "export";
+type ArchiveFileType = "thumb" | "original" | "edited" | "export";
 
 interface OperationLogRow {
   id: number;
@@ -71,9 +71,11 @@ export interface ArchiveManifest {
     created_at: string;
     archive_path: string;
     version: string;
+    strategy?: string;
   };
   counts: {
     total_images: number;
+    thumb_files: number;
     original_files: number;
     edited_files: number;
     export_files: number;
@@ -85,6 +87,7 @@ export interface ArchiveManifest {
 export interface ArchivePrepareResult {
   archivePath: string;
   totalImages: number;
+  thumbCopied: number;
   originalCopied: number;
   editedCopied: number;
   exportCopied: number;
@@ -123,7 +126,62 @@ export interface ArchivedEventRow {
   archived_at: string;
 }
 
+export interface ArchiveMetadataFileStatus {
+  name: string;
+  path: string;
+  exists: boolean;
+  size: number;
+}
+
+export interface ArchivedImageSummary {
+  image_id: string;
+  original_filename: string;
+  stored_filename: string;
+  rating: number;
+  status: string;
+  category: string;
+  remark: string;
+  photographer: string;
+  camera_model: string;
+  lens_model: string;
+  shot_at: string;
+  original_path: string;
+  edited_path: string;
+  file_hash: string;
+  thumb_url: string;
+  thumb_archive_path: string;
+  has_thumb: boolean;
+  has_original: boolean;
+  has_edited: boolean;
+  original_retained: boolean;
+  edited_retained: boolean;
+}
+
+export interface ArchivedEventDetail {
+  archivedEvent: ArchivedEventRow;
+  event: ArchiveManifest["event"];
+  archivePath: string;
+  archivedAt: string;
+  counts: ArchiveManifest["counts"];
+  files: ArchiveFileEntry[];
+  images: ArchivedImageSummary[];
+  missingFiles: string[];
+  metadataFiles: ArchiveMetadataFileStatus[];
+}
+
+export interface ArchivedEventDeleteResult {
+  id: string;
+  eventId: string;
+  archivePath: string;
+  deletedArchive: boolean;
+  missingFiles: string[];
+  deletedRecords: {
+    archivedEvents: number;
+  };
+}
+
 const ARCHIVE_VERSION = "0.8.0-dev";
+const ARCHIVE_STRATEGY = "lightweight_thumbs_metadata";
 
 function nowTimestamp(): string {
   return new Date().toISOString().replace("T", " ").replace(/\.\d+Z$/, "");
@@ -264,7 +322,7 @@ async function uniqueFilePath(dir: string, filename: string): Promise<string> {
 
 async function copyImageFile(input: {
   image: ImageRow;
-  type: "original" | "edited";
+  type: ArchiveFileType;
   sourcePath: string;
   targetDir: string;
   filename: string;
@@ -347,11 +405,7 @@ async function createArchiveRoot(repositoryPath: string, eventSlug: string): Pro
 
 function getArchiveDirs(archivePath: string) {
   return {
-    originalDir: path.join(archivePath, "原图"),
-    editedDir: path.join(archivePath, "已修图"),
-    exportPublishDir: path.join(archivePath, "导出", "发布图"),
-    exportCompressedDir: path.join(archivePath, "导出", "压缩图"),
-    exportZipDir: path.join(archivePath, "导出", "压缩包"),
+    thumbDir: path.join(archivePath, "缩略图"),
     metadataDir: path.join(archivePath, "metadata")
   };
 }
@@ -505,6 +559,109 @@ async function readManifest(archivePath: string): Promise<ArchiveManifest> {
   return fs.readJson(manifestPath) as Promise<ArchiveManifest>;
 }
 
+function parseCsv(text: string): Record<string, string>[] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  const source = text.replace(/^\uFEFF/, "");
+
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    const next = source[index + 1];
+
+    if (char === "\"" && inQuotes && next === "\"") {
+      current += "\"";
+      index += 1;
+      continue;
+    }
+
+    if (char === "\"") {
+      inQuotes = !inQuotes;
+      continue;
+    }
+
+    if (char === "," && !inQuotes) {
+      row.push(current);
+      current = "";
+      continue;
+    }
+
+    if ((char === "\n" || char === "\r") && !inQuotes) {
+      if (char === "\r" && next === "\n") index += 1;
+      row.push(current);
+      if (row.some((value) => value.length > 0)) rows.push(row);
+      row = [];
+      current = "";
+      continue;
+    }
+
+    current += char;
+  }
+
+  row.push(current);
+  if (row.some((value) => value.length > 0)) rows.push(row);
+
+  if (rows.length === 0) return [];
+  const headers = rows[0];
+  return rows.slice(1).map((values) => {
+    return headers.reduce<Record<string, string>>((row, header, index) => {
+      row[header] = values[index] ?? "";
+      return row;
+    }, {});
+  });
+}
+
+async function readArchiveImagesCsv(archivedEventId: string, imagesCsvPath: string, files: ArchiveFileEntry[]): Promise<ArchivedImageSummary[]> {
+  if (!(await fs.pathExists(imagesCsvPath))) return [];
+
+  const text = await fs.readFile(imagesCsvPath, "utf8");
+  const rows = parseCsv(text);
+  const thumbByImageId = new Map(files.filter((file) => file.type === "thumb" && file.exists).map((file) => [file.image_id, file.archive_path]));
+  const originalIds = new Set(files.filter((file) => file.type === "original" && file.exists).map((file) => file.image_id));
+  const editedIds = new Set(files.filter((file) => file.type === "edited" && file.exists).map((file) => file.image_id));
+
+  return rows.map((row) => {
+    const imageId = row.image_id ?? "";
+    const thumbArchivePath = row.thumb_archive_path || thumbByImageId.get(imageId) || "";
+    const originalRetained = row.original_retained ? row.original_retained === "true" : originalIds.has(imageId);
+    const editedRetained = row.edited_retained ? row.edited_retained === "true" : editedIds.has(imageId);
+    return {
+      image_id: imageId,
+      original_filename: row.original_filename ?? "",
+      stored_filename: row.stored_filename ?? "",
+      rating: Number(row.rating || 0),
+      status: row.status ?? "",
+      category: row.category ?? "",
+      remark: row.remark ?? "",
+      photographer: row.photographer ?? "",
+      camera_model: row.camera_model ?? "",
+      lens_model: row.lens_model ?? "",
+      shot_at: row.shot_at ?? "",
+      original_path: row.original_path ?? "",
+      edited_path: row.edited_path ?? "",
+      file_hash: row.file_hash ?? "",
+      thumb_url: imageId ? `/api/archived-events/${encodeURIComponent(archivedEventId)}/thumb/${encodeURIComponent(imageId)}` : "",
+      thumb_archive_path: thumbArchivePath,
+      has_thumb: Boolean(thumbArchivePath),
+      has_original: originalRetained,
+      has_edited: editedRetained,
+      original_retained: originalRetained,
+      edited_retained: editedRetained
+    };
+  });
+}
+
+async function getMetadataFileStatus(metadataDir: string, name: string): Promise<ArchiveMetadataFileStatus> {
+  const filePath = path.join(metadataDir, name);
+  if (!(await fs.pathExists(filePath))) {
+    return { name, path: filePath, exists: false, size: 0 };
+  }
+
+  const stat = await fs.stat(filePath);
+  return { name, path: filePath, exists: true, size: stat.size };
+}
+
 async function makeWritableRecursive(targetPath: string): Promise<void> {
   let stat: fs.Stats;
   try {
@@ -568,10 +725,40 @@ async function removeWorkspaceDirectory(eventDir: string): Promise<void> {
   }
 }
 
+async function removeArchiveDirectory(archivePath: string): Promise<boolean> {
+  if (!archivePath || !(await fs.pathExists(archivePath))) return false;
+
+  const removeOnce = async (maxRetries: number, retryDelay: number) => {
+    await makeWritableRecursive(archivePath);
+    await nativeFs.rm(archivePath, {
+      recursive: true,
+      force: true,
+      maxRetries,
+      retryDelay
+    });
+  };
+
+  try {
+    await removeOnce(8, 300);
+  } catch (firstErr) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    try {
+      await removeOnce(20, 500);
+    } catch (secondErr: any) {
+      const message = secondErr?.message || (firstErr instanceof Error ? firstErr.message : String(secondErr || firstErr));
+      throw {
+        code: "ARCHIVE_DELETE_FAILED",
+        message: `归档目录删除失败：${archivePath}。请关闭正在访问该归档目录的资源管理器、图片查看器或 OneDrive 同步后重试。原始错误：${message}`
+      };
+    }
+  }
+
+  return true;
+}
+
 export async function prepareEventArchive(eventId: string): Promise<ArchivePrepareResult> {
   const event = ensureArchiveableEvent(eventId);
   const repositoryPath = ensureRepositoryReady();
-  const workspace = getEventWorkspacePaths(repositoryPath, event.slug);
   const archivePath = await createArchiveRoot(repositoryPath, event.slug);
   const dirs = getArchiveDirs(archivePath);
   const startedAt = nowIso();
@@ -595,34 +782,19 @@ export async function prepareEventArchive(eventId: string): Promise<ArchivePrepa
     for (const image of images) {
       fileEntries.push(await copyImageFile({
         image,
-        type: "original",
-        sourcePath: image.original_path,
-        targetDir: dirs.originalDir,
-        filename: image.stored_filename || image.original_filename,
-        fileHash: image.file_hash,
+        type: "thumb",
+        sourcePath: image.thumb_path,
+        targetDir: dirs.thumbDir,
+        filename: `${image.id}.webp`,
+        fileHash: "",
         missingFiles
       }));
-
-      if (image.edited_path) {
-        fileEntries.push(await copyImageFile({
-          image,
-          type: "edited",
-          sourcePath: image.edited_path,
-          targetDir: dirs.editedDir,
-          filename: path.basename(image.edited_path),
-          fileHash: "",
-          missingFiles
-        }));
-      }
     }
 
-    fileEntries.push(...await copyExportTree(workspace.publishExportDir, dirs.exportPublishDir));
-    fileEntries.push(...await copyExportTree(workspace.compressedExportDir, dirs.exportCompressedDir));
-    fileEntries.push(...await copyExportTree(workspace.zipExportDir, dirs.exportZipDir));
-
-    const originalCopied = fileEntries.filter((entry) => entry.type === "original" && entry.exists).length;
-    const editedCopied = fileEntries.filter((entry) => entry.type === "edited" && entry.exists).length;
-    const exportCopied = fileEntries.filter((entry) => entry.type === "export" && entry.exists).length;
+    const thumbCopied = fileEntries.filter((entry) => entry.type === "thumb" && entry.exists).length;
+    const originalCopied = 0;
+    const editedCopied = 0;
+    const exportCopied = 0;
     const manifest: ArchiveManifest = {
       event: {
         id: event.id,
@@ -634,10 +806,12 @@ export async function prepareEventArchive(eventId: string): Promise<ArchivePrepa
       archive: {
         created_at: startedAt,
         archive_path: archivePath,
-        version: ARCHIVE_VERSION
+        version: ARCHIVE_VERSION,
+        strategy: ARCHIVE_STRATEGY
       },
       counts: {
         total_images: images.length,
+        thumb_files: thumbCopied,
         original_files: originalCopied,
         edited_files: editedCopied,
         export_files: exportCopied,
@@ -657,9 +831,11 @@ export async function prepareEventArchive(eventId: string): Promise<ArchivePrepa
       detail: {
         archive_path: archivePath,
         total_images: images.length,
-        original_copied: originalCopied,
-        edited_copied: editedCopied,
-        export_copied: exportCopied,
+        archive_strategy: ARCHIVE_STRATEGY,
+        thumb_copied: thumbCopied,
+        original_copied: 0,
+        edited_copied: 0,
+        export_copied: 0,
         missing_files: missingFiles.length
       }
     });
@@ -677,25 +853,34 @@ export async function prepareEventArchive(eventId: string): Promise<ArchivePrepa
       "camera_model",
       "lens_model",
       "shot_at",
+      "thumb_archive_path",
       "original_path",
       "edited_path",
+      "original_retained",
+      "edited_retained",
       "file_hash"
-    ], images.map((image) => ({
-      image_id: image.id,
-      original_filename: image.original_filename,
-      stored_filename: image.stored_filename,
-      rating: image.rating,
-      status: image.status,
-      category: image.category,
-      remark: image.remark,
-      photographer: image.photographer,
-      camera_model: image.camera_model,
-      lens_model: image.lens_model,
-      shot_at: image.shot_at,
-      original_path: image.original_path,
-      edited_path: image.edited_path,
-      file_hash: image.file_hash
-    })));
+    ], images.map((image) => {
+      const thumbEntry = fileEntries.find((entry) => entry.type === "thumb" && entry.image_id === image.id);
+      return {
+        image_id: image.id,
+        original_filename: image.original_filename,
+        stored_filename: image.stored_filename,
+        rating: image.rating,
+        status: image.status,
+        category: image.category,
+        remark: image.remark,
+        photographer: image.photographer,
+        camera_model: image.camera_model,
+        lens_model: image.lens_model,
+        shot_at: image.shot_at,
+        thumb_archive_path: thumbEntry?.archive_path || "",
+        original_path: image.original_path,
+        edited_path: image.edited_path,
+        original_retained: "false",
+        edited_retained: "false",
+        file_hash: image.file_hash
+      };
+    }));
     await writeCsv(operationLogsCsvPath, [
       "id",
       "type",
@@ -712,6 +897,7 @@ export async function prepareEventArchive(eventId: string): Promise<ArchivePrepa
     return {
       archivePath,
       totalImages: images.length,
+      thumbCopied,
       originalCopied,
       editedCopied,
       exportCopied,
@@ -874,4 +1060,117 @@ export function listArchivedEvents(): ArchivedEventRow[] {
     SELECT * FROM archived_events
     ORDER BY archived_at DESC
   `).all() as ArchivedEventRow[];
+}
+
+export async function getArchivedEventDetail(id: string): Promise<ArchivedEventDetail> {
+  const archivedEvent = getDatabase().prepare("SELECT * FROM archived_events WHERE id = ?").get(id) as ArchivedEventRow | undefined;
+  if (!archivedEvent) {
+    throw { code: "ARCHIVED_EVENT_NOT_FOUND", message: "归档活动不存在" };
+  }
+
+  if (!archivedEvent.archive_path || !(await fs.pathExists(archivedEvent.archive_path))) {
+    throw { code: "ARCHIVE_PATH_NOT_FOUND", message: `归档目录不存在：${archivedEvent.archive_path || "空路径"}` };
+  }
+
+  const metadataDir = path.join(archivedEvent.archive_path, "metadata");
+  const manifestPath = path.join(metadataDir, "manifest.json");
+  if (!(await fs.pathExists(manifestPath))) {
+    throw { code: "ARCHIVE_MANIFEST_NOT_FOUND", message: "归档 manifest.json 不存在" };
+  }
+
+  const manifest = await readManifest(archivedEvent.archive_path);
+  const metadataFiles = await Promise.all([
+    getMetadataFileStatus(metadataDir, "manifest.json"),
+    getMetadataFileStatus(metadataDir, "images.csv"),
+    getMetadataFileStatus(metadataDir, "operation_logs.csv"),
+    getMetadataFileStatus(metadataDir, "event.db")
+  ]);
+
+  const missingFiles: string[] = [];
+  for (const entry of manifest.files) {
+    if (!entry.exists) {
+      missingFiles.push(entry.archive_path || entry.source_path);
+      continue;
+    }
+    if (!entry.archive_path || !(await fs.pathExists(entry.archive_path))) {
+      missingFiles.push(entry.archive_path || entry.source_path);
+    }
+  }
+
+  const images = await readArchiveImagesCsv(archivedEvent.id, path.join(metadataDir, "images.csv"), manifest.files);
+
+  return {
+    archivedEvent,
+    event: manifest.event,
+    archivePath: archivedEvent.archive_path,
+    archivedAt: archivedEvent.archived_at,
+    counts: manifest.counts,
+    files: manifest.files,
+    images,
+    missingFiles,
+    metadataFiles
+  };
+}
+
+export async function getArchivedEventThumbPath(id: string, imageId: string): Promise<string> {
+  const archivedEvent = getDatabase().prepare("SELECT * FROM archived_events WHERE id = ?").get(id) as ArchivedEventRow | undefined;
+  if (!archivedEvent) {
+    throw { code: "ARCHIVED_EVENT_NOT_FOUND", message: "归档活动不存在" };
+  }
+  if (!archivedEvent.archive_path || !(await fs.pathExists(archivedEvent.archive_path))) {
+    throw { code: "ARCHIVE_PATH_NOT_FOUND", message: `归档目录不存在：${archivedEvent.archive_path || "空路径"}` };
+  }
+
+  const manifest = await readManifest(archivedEvent.archive_path);
+  const thumb = manifest.files.find((entry) => entry.type === "thumb" && entry.image_id === imageId && entry.exists);
+  if (!thumb?.archive_path || !(await fs.pathExists(thumb.archive_path))) {
+    throw { code: "ARCHIVE_THUMB_NOT_FOUND", message: "归档缩略图不存在" };
+  }
+  return thumb.archive_path;
+}
+
+export async function deleteArchivedEvent(id: string): Promise<ArchivedEventDeleteResult> {
+  const db = getDatabase();
+  const archivedEvent = db.prepare("SELECT * FROM archived_events WHERE id = ?").get(id) as ArchivedEventRow | undefined;
+  if (!archivedEvent) {
+    throw { code: "ARCHIVED_EVENT_NOT_FOUND", message: "归档活动不存在" };
+  }
+
+  const missingFiles: string[] = [];
+  const deletedArchive = await removeArchiveDirectory(archivedEvent.archive_path);
+  if (!deletedArchive) {
+    missingFiles.push(archivedEvent.archive_path);
+  }
+
+  writeOperationLog({
+    type: "archive_deleted",
+    eventId: archivedEvent.event_id,
+    detail: {
+      archive_id: archivedEvent.id,
+      archive_path: archivedEvent.archive_path,
+      archive_deleted: deletedArchive,
+      missing_files: missingFiles
+    }
+  });
+
+  const deletedArchivedEvents = db.prepare("DELETE FROM archived_events WHERE id = ?").run(id).changes;
+  emitArchiveUpdated({
+    eventId: archivedEvent.event_id,
+    archivePath: archivedEvent.archive_path,
+    status: "deleted",
+    action: "archive_deleted",
+    updatedAt: nowIso(),
+    archivedEvent
+  });
+
+  return {
+    id: archivedEvent.id,
+    eventId: archivedEvent.event_id,
+    archivePath: archivedEvent.archive_path,
+    deletedArchive,
+    missingFiles,
+    deletedRecords: {
+      archivedEvents: deletedArchivedEvents
+    }
+  };
 }

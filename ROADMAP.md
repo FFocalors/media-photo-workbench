@@ -2,7 +2,7 @@
 
 ## 当前阶段状态
 
-项目已进入 v0.10.0-dev：任务队列与批量 ZIP 下载。当前代码已经支持主机本地导入、真实图片墙、基础选片、单图下载、Socket.IO 实时同步、客户端上传协作、修图流转、发布导出、活动归档、活动/图片回收站恢复和安全永久删除，并开始提供统一任务中心和批量 ZIP 下载。
+项目已进入 v0.11.0-dev：归档活动只读打开。当前代码已经支持主机本地导入、真实图片墙、基础选片、单图下载、Socket.IO 实时同步、客户端上传协作、修图流转、发布导出、活动归档、活动/图片回收站恢复和安全永久删除、统一任务中心、批量 ZIP 下载，并开始支持 working 清理后的历史归档只读查看。
 
 ## 已完成
 
@@ -105,7 +105,8 @@
 
 ### Phase 8：活动归档
 - `POST /api/events/:eventId/archive/prepare` 生成活动归档目录。
-- 归档复制原图、已修图、导出发布图和压缩包到 `archive/{event_slug}`。
+- 归档采用轻量策略，只复制活动缩略图到 `archive/{event_slug}/缩略图`。
+- 原图、已修图、导出发布图和压缩包不再默认复制进归档，只在 metadata 中记录历史路径和状态。
 - 生成 `metadata/manifest.json`、`images.csv`、`operation_logs.csv` 和独立 `event.db`。
 - `POST /api/events/:eventId/archive/verify` 验证归档文件存在性和 hash。
 - `POST /api/events/:eventId/archive/cleanup` 在验证通过后清理 `working/{event_slug}`，更新活动状态为 `archived`，并写入 `archived_events` 摘要。
@@ -118,7 +119,7 @@
 - 图片墙新增主机端回收站入口，支持批量恢复和二次确认永久删除。
 - `GET /api/events/trash` 查看已逻辑删除活动。
 - `PATCH /api/events/:id/restore` 恢复活动到 `active` 或 `draft`。
-- `DELETE /api/events/:id/purge` 仅允许永久删除 `status = deleted` 的活动，默认删除 working 工作区、活动图片记录和活动记录，不删除 archive 归档目录。
+- `DELETE /api/events/:id/purge` 仅允许永久删除 `status = deleted` 的活动，默认删除 working 工作区、对应 archive 归档目录、活动图片记录、图片标签关联、下载日志、导出任务、操作日志、归档摘要和活动记录。
 - 活动管理页新增回收站入口，永久删除前要求输入活动名称。
 
 ### v0.10.0-dev：任务队列与批量 ZIP 下载
@@ -131,15 +132,28 @@
 - 新增 `GET /api/download-packages/:packageId/download` 下载生成的批量 ZIP。
 - 发布导出和归档 prepare 保持原接口返回不变，同时增加轻量任务记录和进度可见性。
 
-## 下一步
+## 当前阶段
+
+### v0.11.0-dev：归档活动只读打开
+- 新增 `GET /api/archived-events/:id`，根据 `archived_events.id` 读取归档活动详情。
+- 新生成的归档默认只保留缩略图和 metadata，不再保留原图、已修图或导出文件副本。
+- 归档详情读取 `archive_path/缩略图`、`metadata/manifest.json`、`images.csv`、`operation_logs.csv` 和 `event.db` 文件状态。
+- working 工作区清理后，仍可通过归档目录查看活动摘要、缩略图、文件计数、缺失文件和图片元数据。
+- 归档页新增“只读归档”模式，展示已归档活动列表和只读详情；不提供打星、改状态、上传、删除、导出或修图回传入口。
+- 归档页支持二次确认后删除归档目录和 `archived_events` 摘要。
+- `ARCHIVE_PATH_NOT_FOUND` 和 `ARCHIVE_MANIFEST_NOT_FOUND` 会作为明确错误返回。
+
+## 后续路线
+
+- **v0.12.0-dev**：真实局域网 / 手机网页 / 多设备测试修复。
+- **v0.13.0-dev**：Windows 打包发布。
+- **v0.14.0-rc**：真实活动压力测试与问题修复。
+- **v1.0.0**：第一个稳定可用版本。
+- **v1.1.0 之后**：远程传输预留 / 远程连接探索。
 
 ### 后续任务系统增强
 - 将导入、待修包生成、大批量已修图回传、归档清理和永久删除继续纳入统一任务模型。
 - 增加真正取消、任务持久化和重试能力。
-
-### 后续增强
-- 归档活动只读打开。
-- 远程传输预留入口和目录监听。
 
 ## 暂不做
 

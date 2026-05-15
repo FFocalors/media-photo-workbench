@@ -293,7 +293,15 @@ working/{event_slug}/清单
     "data": {
       "eventId": "evt_xxx",
       "deletedFiles": ["E:\\仓库\\working\\活动\\原图\\..."],
-      "deletedRecords": { "events": 1, "images": 12 },
+      "deletedRecords": {
+        "events": 1,
+        "images": 12,
+        "imageTags": 0,
+        "downloadLogs": 3,
+        "exportJobs": 2,
+        "operationLogs": 24,
+        "archivedEvents": 1
+      },
       "missingFiles": [],
       "errors": [],
       "workingPath": "E:\\仓库\\working\\活动",
@@ -307,15 +315,15 @@ working/{event_slug}/清单
   - `EVENT_NOT_DELETED`：活动不在回收站中。
   - `REPOSITORY_NOT_READY`：仓库路径不可用。
   - `EVENT_PURGE_FILE_FAILED`：工作区文件删除失败。
-- **备注**：仅允许对 `status = deleted` 的活动执行。前端必须二次确认并建议输入活动名称。默认不删除 `archive/{event_slug}`，只有明确传 `includeArchive = true` 时才删除归档目录。
+- **备注**：仅允许对 `status = deleted` 的活动执行。前端必须二次确认并建议输入活动名称。默认删除 `working/{event_slug}` 和对应 `archive/{event_slug}` / `archive/{event_slug}_*` 归档目录；如明确传 `includeArchive = false` 才保留归档目录。数据库会清理该活动的 `images`、`image_tags`、`download_logs`、`export_jobs`、`operation_logs`、`archived_events` 和 `events` 相关记录。
 
 ### [已实现] 准备活动归档
 - **用途**：执行活动归档准备流程。
 - **请求方法**：`POST`
 - **路径**：`/api/events/:eventId/archive/prepare`
 - **请求参数示例**：无
-- **响应示例**：返回归档目录、复制数量、缺失文件、`manifestPath` 和 `eventDbPath`。
-- **备注**：生成 `archive/{event_slug}`，复制原图、已修图、发布图和压缩包，并生成 `metadata/manifest.json`、`images.csv`、`operation_logs.csv` 和独立 `event.db`。
+- **响应示例**：返回归档目录、缩略图复制数量、缺失文件、`manifestPath` 和 `eventDbPath`。
+- **备注**：生成轻量归档 `archive/{event_slug}`，只复制缩略图到 `缩略图/`，并生成 `metadata/manifest.json`、`images.csv`、`operation_logs.csv` 和独立 `event.db`；原图、已修图、发布图和压缩包只记录历史路径，不复制进归档。
 
 ### [已实现] 获取已归档活动列表
 - **用途**：获取历史已归档的只读活动列表摘要。
@@ -324,6 +332,81 @@ working/{event_slug}/清单
 - **请求参数示例**：无
 - **响应示例**：略
 - **备注**：无
+
+### [已实现] 获取已归档活动详情
+- **用途**：在 working 工作区已清理后，只读打开历史归档活动。
+- **请求方法**：`GET`
+- **路径**：`/api/archived-events/:id`
+- **请求参数示例**：无
+- **响应示例**：
+  ```json
+  {
+    "ok": true,
+    "data": {
+      "archivedEvent": {
+        "id": "arch_evt_xxx",
+        "event_id": "evt_xxx",
+        "event_name": "活动名称",
+        "event_slug": "event_slug",
+        "event_date": "2026-05-15",
+        "total_images": 12,
+        "edited_images": 5,
+        "published_images": 3,
+        "archive_path": "E:\\仓库\\archive\\event_slug",
+        "archived_at": "2026-05-15 12:00:00"
+      },
+      "event": {
+        "id": "evt_xxx",
+        "name": "活动名称",
+        "slug": "event_slug",
+        "date": "2026-05-15",
+        "status": "archived"
+      },
+      "archivePath": "E:\\仓库\\archive\\event_slug",
+      "archivedAt": "2026-05-15 12:00:00",
+      "counts": {
+        "total_images": 12,
+        "thumb_files": 12,
+        "original_files": 0,
+        "edited_files": 0,
+        "export_files": 0,
+        "missing_files": 0
+      },
+      "files": [],
+      "images": [],
+      "missingFiles": [],
+      "metadataFiles": [
+        { "name": "manifest.json", "path": "E:\\仓库\\archive\\event_slug\\metadata\\manifest.json", "exists": true, "size": 1024 }
+      ]
+    },
+    "error": null
+  }
+  ```
+- **错误码**：
+  - `ARCHIVED_EVENT_NOT_FOUND`：归档摘要不存在。
+  - `ARCHIVE_PATH_NOT_FOUND`：`archive_path` 目录不存在。
+  - `ARCHIVE_MANIFEST_NOT_FOUND`：`metadata/manifest.json` 不存在。
+- **备注**：只读接口，不修改 `archive`、`archived_events` 或原始 `events/images` 记录；轻量归档下原图/已修图未保留属于预期状态，不计入缺失；某个归档缩略图或 metadata 文件缺失会进入 `missingFiles`，不会导致整个接口崩溃。
+
+### [已实现] 获取归档缩略图
+- **用途**：只读归档页显示历史活动缩略图。
+- **请求方法**：`GET`
+- **路径**：`/api/archived-events/:id/thumb/:imageId`
+- **请求参数示例**：无
+- **响应示例**：返回 WebP 文件流。
+- **错误码**：
+  - `ARCHIVED_EVENT_NOT_FOUND`：归档摘要不存在。
+  - `ARCHIVE_PATH_NOT_FOUND`：归档目录不存在。
+  - `ARCHIVE_MANIFEST_NOT_FOUND`：`manifest.json` 不存在。
+  - `ARCHIVE_THUMB_NOT_FOUND`：对应归档缩略图不存在。
+
+### [已实现] 删除归档活动
+- **用途**：删除只读归档目录和 `archived_events` 摘要，释放归档占用空间。
+- **请求方法**：`DELETE`
+- **路径**：`/api/archived-events/:id`
+- **请求参数示例**：无
+- **响应示例**：返回 `archivePath`、是否删除目录、缺失文件和删除的归档摘要记录数。
+- **备注**：只删除 archive 归档目录和归档摘要，不删除原活动 `events/images` 记录；前端必须二次确认。
 
 ---
 
@@ -1076,8 +1159,8 @@ working/{event_slug}/清单
 - **请求方法**：`POST`
 - **路径**：`/api/events/:eventId/archive/prepare`
 - **请求参数示例**：无
-- **响应示例**：返回 `archivePath`、图片数量、原图/已修图/导出文件复制数量、缺失文件、`manifestPath` 和 `eventDbPath`。
-- **备注**：归档目录位于 `archive/{event_slug}`；如果目录已存在，会使用时间后缀避免覆盖。
+- **响应示例**：返回 `archivePath`、图片数量、缩略图复制数量、缺失文件、`manifestPath` 和 `eventDbPath`。
+- **备注**：归档目录位于 `archive/{event_slug}`；如果目录已存在，会使用时间后缀避免覆盖。当前轻量归档只保留缩略图和 metadata。
 
 ### [已实现] 验证归档完整性
 - **用途**：比对文件数量、hash，确保没有漏归档。
@@ -1098,13 +1181,13 @@ working/{event_slug}/清单
 - **响应示例**：返回清理后的 `workingPath`、活动状态和归档摘要。
 - **备注**：只有归档验证通过后才能清理。第一版保留主库图片详细记录，活动状态改为 `archived`，并写入 `archived_events` 摘要。
 
-### [计划中] 读取历史归档数据
+### [已实现] 读取历史归档数据
 - **用途**：打开只读的历史归档页面。
 - **请求方法**：`GET`
 - **路径**：`/api/archived-events/:id`
 - **请求参数示例**：无
-- **响应示例**：略
-- **备注**：无
+- **响应示例**：返回归档摘要、manifest 计数、metadata 文件状态、缺失文件和 images.csv 图片元数据。
+- **备注**：working 工作区已清理时仍可读取；只读接口不修改任何归档或业务数据。
 
 ---
 

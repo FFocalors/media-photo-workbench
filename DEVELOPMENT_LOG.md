@@ -28,6 +28,68 @@
 
 ## 开发记录
 
+### v0.11.1-dev：轻量归档策略与归档删除
+- **日期**：2026-05-15
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - 将活动归档策略从完整复制素材改为轻量归档：新归档只复制 `缩略图/` 和 `metadata/`。
+  - 原图、已修图、导出发布图和 ZIP 不再默认复制进 `archive`，只在 `images.csv` / `event.db` 中保留历史路径和状态。
+  - `manifest.json` 新增轻量策略信息和 `thumb_files` 计数，归档验证只检查实际归档的缩略图与 metadata。
+  - 只读归档详情页新增缩略图墙，原图/已修图显示为“未保留”而不是“缺失”。
+  - 新增 `GET /api/archived-events/:id/thumb/:imageId`，用于读取归档缩略图。
+  - 新增 `DELETE /api/archived-events/:id`，支持删除归档目录和 `archived_events` 摘要。
+  - 活动回收站永久删除现在会同时清理 `working` 工作区、对应 `archive` 归档目录、图片记录、图片标签关联、下载日志、导出任务、操作日志、归档摘要和活动记录。
+- **修改文件**：
+  - `src-server/services/archive.ts`
+  - `src-server/routes/archivedEvents.ts`
+  - `src-server/services/events.ts`
+  - `src-server/routes/events.ts`
+  - `src/lib/api.ts`
+  - `src/pages/host/Archive.tsx`
+  - `src/pages/host/Events.tsx`
+  - `README.md`
+  - `ROADMAP.md`
+  - `CHANGELOG.md`
+  - `API_SPEC.md`
+  - `DEVELOPMENT_LOG.md`
+- **验证方式**：
+  - `pnpm build` 通过。
+  - 建议手工验证：生成新归档后确认 `archive/{event_slug}` 下只有 `缩略图/` 和 `metadata/`；清理 working 后只读归档仍能显示缩略图和元数据；删除归档后目录和摘要消失；活动回收站永久删除后 working、archive 和该活动所有关联数据库记录均被清理。
+- **未完成事项**：
+  - 旧版本已经生成的完整归档不会自动瘦身；可以只读打开，也可以手动删除后重新按轻量策略生成。
+- **下一步计划**：
+  - 继续 v0.12.0-dev：真实局域网 / 手机网页 / 多设备测试修复。
+
+### v0.11.0-dev：归档活动只读打开
+- **日期**：2026-05-15
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - 新增 `GET /api/archived-events/:id`，根据 `archived_events.id` 读取归档活动详情。
+  - 详情接口读取 `archive_path/metadata/manifest.json`，并检查 `images.csv`、`operation_logs.csv`、`event.db` 的存在状态。
+  - 解析 `images.csv`，返回只读图片元数据列表，包括文件名、星级、状态、分类、摄影师、缩略图和原文件保留状态。
+  - 根据 manifest 检查归档文件是否仍存在，缺失文件进入 `missingFiles`，不会因为单个图片文件缺失导致接口崩溃。
+  - 归档页新增“归档流程 / 只读归档”模式；只读模式展示已归档活动列表、活动摘要、归档路径、metadata 状态、缺失文件和图片元数据。
+  - 只读详情不提供打星、改状态、上传、删除、导出或修图回传入口。
+  - 文档路线调整：v1.0.0 前继续完善本地/局域网工作流，远程传输放到 v1.1.0 之后探索。
+- **修改文件**：
+  - `src-server/services/archive.ts`
+  - `src-server/routes/archivedEvents.ts`
+  - `src/lib/api.ts`
+  - `src/pages/host/Archive.tsx`
+  - `README.md`
+  - `ROADMAP.md`
+  - `CHANGELOG.md`
+  - `API_SPEC.md`
+  - `DEVELOPMENT_LOG.md`
+- **验证方式**：
+  - `pnpm build` 通过。
+  - 建议手工验证：准备一个已归档活动，进入归档管理的“只读归档”，选择活动后确认详情可打开；清理 `working/{event_slug}` 后仍可读取；临时移走 `metadata/manifest.json` 时接口返回 `ARCHIVE_MANIFEST_NOT_FOUND`；“打开归档目录”能调用系统资源管理器。
+- **未完成事项**：
+  - 当前只读详情以 metadata 和 CSV 为主，不提供 archived event.db 的独立浏览 UI。
+  - 归档图片只展示元数据列表，暂不做归档缩略图墙。
+- **下一步计划**：
+  - 进入 v0.12.0-dev：真实局域网 / 手机网页 / 多设备测试修复。
+
 ### v0.10.0-dev：任务队列与批量 ZIP 下载
 - **日期**：2026-05-15
 - **开发者 / 工具**：Codex
@@ -97,7 +159,7 @@
   - 新增图片恢复 `PATCH /api/images/:id/restore`，恢复后写入操作日志并广播图片更新。
   - 新增图片永久删除 `DELETE /api/images/:id/purge`，仅允许删除回收站图片，清理原图、缩略图、预览图和已修图文件，并返回删除结果。
   - 新增活动回收站 `GET /api/events/trash`、活动恢复 `PATCH /api/events/:id/restore` 和活动永久删除 `DELETE /api/events/:id/purge`。
-  - 活动永久删除仅允许 `status = deleted` 的活动，默认只清理 working 工作区和主库记录，不删除 archive 归档目录。
+  - 活动永久删除仅允许 `status = deleted` 的活动，当前策略会同时清理 working 工作区、对应 archive 归档目录和主库记录。
   - 活动管理页新增回收站入口，支持恢复活动和输入活动名称二次确认后永久删除。
   - 图片墙新增主机端图片回收站入口，支持查看已删除图片、批量恢复和二次确认永久删除。
   - 客户端模式继续隐藏主机专属的回收站和永久删除入口。
@@ -133,7 +195,7 @@
 - **开发者 / 工具**：Codex
 - **完成内容**：
   - 新增活动归档准备、验证和工作区清理接口。
-  - 归档目录生成到 `archive/{event_slug}`，复制原图、已修图、导出发布图和压缩包。
+  - 归档目录生成到 `archive/{event_slug}`；当前策略只复制缩略图和 metadata，原图、已修图、导出发布图和压缩包只保留历史路径记录。
   - 生成 `metadata/manifest.json`、`images.csv`、`operation_logs.csv` 和独立 `event.db`。
   - 归档验证会读取 manifest 并检查文件存在性和 hash。
   - 清理工作区必须在归档验证通过后执行，成功后活动状态更新为 `archived` 并写入 `archived_events` 摘要。
