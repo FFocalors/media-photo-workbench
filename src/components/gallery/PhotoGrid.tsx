@@ -35,7 +35,7 @@ export function PhotoGrid({
   }
 
   return (
-    <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-3">
       {photos.map((photo) => (
         <PhotoCard
           active={photo.id === activeId}

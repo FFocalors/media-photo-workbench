@@ -76,8 +76,8 @@ export function ClientUploadPage() {
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-[#F8F9FA]">
-      <div className="border-b border-slate-100 bg-white px-6 py-5">
-        <div className="flex items-start justify-between">
+      <div className="border-b border-slate-100 bg-white px-4 py-5 lg:px-6">
+        <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold text-slate-900">客户端上传</h1>
             <p className="mt-1 text-sm text-slate-500">{hostAddress || "未连接主机"}</p>
@@ -92,14 +92,14 @@ export function ClientUploadPage() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6">
-        <div className="mx-auto grid max-w-5xl grid-cols-[1fr_320px] gap-6">
+      <div className="flex-1 overflow-y-auto p-4 lg:p-6">
+        <div className="mx-auto grid max-w-5xl gap-6 xl:grid-cols-[1fr_320px]">
           <section className="space-y-6">
             {message && <Notice tone={message.tone} title={message.title}>{message.body}</Notice>}
 
             <div className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
               <h2 className="mb-5 font-semibold text-slate-900">上传信息</h2>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid gap-4 sm:grid-cols-2">
                 <label>
                   <span className="mb-1.5 block text-xs font-medium text-slate-500">活动</span>
                   <select

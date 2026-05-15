@@ -28,6 +28,45 @@
 
 ## 开发记录
 
+### v0.12.0-dev：窗口适配、真实压力测试与问题修复
+- **日期**：2026-05-15
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - Electron 主窗口最小尺寸调整为 `1200 x 760`，作为桌面端可用窗口下限。
+  - 图片墙布局改为响应式三栏策略：宽屏显示筛选栏、图片墙和元数据栏；中窄窗口下筛选栏改为抽屉，元数据栏默认隐藏并通过按钮打开。
+  - 图片墙顶部工具栏精简核心信息，次要操作统一收进“更多操作”菜单，避免非最大化窗口下按钮文字竖排。
+  - 图片墙缩略图网格改为 `auto-fill + minmax(150px, 1fr)`，保证中间图片区在不同窗口宽度下仍可用。
+  - 待修图自定义分包、已修图回传、客户端修图任务、客户端上传、导出发布、归档管理、主机首页等页面补充响应式栅格和换行策略。
+  - 文档将 v0.12.0-dev 定位调整为“窗口适配、真实压力测试与问题修复”，明确第一版不做完整手机端适配，手机/平板仅作为轻量访问入口。
+- **修改文件**：
+  - `electron/main.cjs`
+  - `src/components/gallery/GalleryToolbar.tsx`
+  - `src/components/gallery/FilterSidebar.tsx`
+  - `src/components/gallery/MetadataPanel.tsx`
+  - `src/components/gallery/PhotoGrid.tsx`
+  - `src/pages/host/PhotoWall.tsx`
+  - `src/pages/host/Retouch.tsx`
+  - `src/pages/client/ClientRetouch.tsx`
+  - `src/pages/client/ClientUpload.tsx`
+  - `src/pages/client/ClientConnect.tsx`
+  - `src/pages/host/Export.tsx`
+  - `src/pages/host/Archive.tsx`
+  - `src/pages/host/Import.tsx`
+  - `src/pages/host/Events.tsx`
+  - `src/pages/host/Overview.tsx`
+  - `README.md`
+  - `ROADMAP.md`
+  - `CHANGELOG.md`
+  - `DEVELOPMENT_LOG.md`
+- **验证方式**：
+  - `pnpm build` 通过。
+  - 建议手工验证：在 1920x1080、1440x900、1366x768、1280x720、1200x760 下检查图片墙工具栏不竖排、不覆盖缩略图；筛选抽屉可开关；元数据抽屉可开关；待修图自定义分包、客户端修图任务、导出发布和归档管理在非最大化窗口下仍可操作。
+- **未完成事项**：
+  - 未在本轮自动化执行真实 50/300/500 张图片压力测试；需要后续使用真实活动素材补测导入、图片墙滚动、批量 ZIP、待修包、导出发布和归档。
+  - 手机端不作为完整适配目标，仅保留轻量访问方向。
+- **下一步计划**：
+  - 继续真实局域网多设备补测，收集窗口尺寸、批量任务和 Socket.IO 同步问题，再进入 Windows 打包发布准备。
+
 ### v0.11.5-dev：修图协作与导航流程优化
 - **日期**：2026-05-15
 - **开发者 / 工具**：Codex

@@ -107,16 +107,16 @@ export function OverviewPage() {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto p-8">
-      <div className="mb-8 flex items-center justify-between">
-        <div className="flex items-baseline gap-4">
+    <div className="flex-1 overflow-y-auto p-5 xl:p-8">
+      <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
+        <div className="flex flex-wrap items-baseline gap-4">
           <h1 className="text-2xl font-bold text-slate-900">系统概览</h1>
           <span className="flex items-center gap-1.5 text-sm text-slate-500">
             <span className={cn("h-2 w-2 rounded-full", serverReady && databaseReady && repositoryReady ? "bg-emerald-500" : "bg-amber-500")} />
             {loading ? "正在读取真实状态..." : overallStatus}
           </span>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <button
             className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 shadow-sm transition-colors hover:bg-slate-50"
             onClick={() => void loadOverview()}
@@ -145,7 +145,7 @@ export function OverviewPage() {
             </Notice>
           )}
 
-          <div className="mb-8 grid grid-cols-3 gap-6">
+          <div className="mb-8 grid gap-6 lg:grid-cols-2 2xl:grid-cols-3">
             <InfoCard label="当前活动">
               {currentEvent ? (
                 <>

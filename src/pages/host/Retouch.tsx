@@ -285,13 +285,13 @@ export function RetouchPage() {
   };
 
   return (
-    <div className="flex h-full flex-1 flex-col overflow-y-auto bg-[#F8F9FA] p-8">
-      <div className="mb-6 flex items-start justify-between gap-6">
+    <div className="flex h-full flex-1 flex-col overflow-y-auto bg-[#F8F9FA] p-5 xl:p-8">
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-6">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">修图流转</h1>
           <p className="mt-1 text-sm text-slate-500">生成待修包，回传已修图，并将图片状态同步为已修图。</p>
         </div>
-        <label className="min-w-72">
+        <label className="min-w-64 max-w-full sm:min-w-72">
           <span className="mb-1.5 block text-xs font-medium text-slate-500">活动</span>
           <select
             className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-blue-500"
@@ -309,7 +309,7 @@ export function RetouchPage() {
         </label>
       </div>
 
-      <div className="mb-6 grid grid-cols-4 gap-4">
+      <div className="mb-6 grid grid-cols-2 gap-4 xl:grid-cols-4">
         <MetricCard icon={<PackageCheck size={18} />} label="待修图" loading={loading} value={editTotal} />
         <MetricCard icon={<CheckCircle2 size={18} />} label="已修图" loading={loading} value={editedTotal} />
         <MetricCard icon={<ImageOff size={18} />} label="原图缺失" loading={loading} tone="danger" value={originalMissingCount} />
@@ -472,16 +472,16 @@ function RetouchTodo({
   };
 
   return (
-    <div className="flex min-h-[520px] flex-1 flex-col rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
-      <div className="mb-6 flex items-start justify-between gap-4">
+    <div className="flex min-h-[520px] flex-1 flex-col rounded-2xl border border-slate-100 bg-white p-4 shadow-sm xl:p-6">
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h3 className="font-medium text-slate-900">待修包生成</h3>
           <p className="mt-1 text-xs text-slate-500">
             当前活动有 {editTotal.toLocaleString()} 张图片被标记为“待修图”。
           </p>
         </div>
-        <div className="flex items-end gap-3">
-          <div className="flex rounded-lg bg-slate-100 p-1">
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="flex flex-wrap rounded-lg bg-slate-100 p-1">
             {[
               ["single", "一个包"],
               ["count", "平均拆包"],
@@ -489,7 +489,7 @@ function RetouchTodo({
             ].map(([value, label]) => (
               <button
                 className={cn(
-                  "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+                  "whitespace-nowrap rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
                   packageMode === value ? "bg-white text-blue-600 shadow-sm" : "text-slate-500 hover:text-slate-800"
                 )}
                 key={value}
@@ -533,13 +533,13 @@ function RetouchTodo({
           <p className="text-sm font-medium text-slate-700">暂无待修图片，请先在图片墙将图片标记为“待修图”。</p>
         </div>
       ) : (
-        <div className={cn("grid flex-1 gap-6", packageMode === "custom" ? "grid-cols-[1fr_380px]" : "grid-cols-[1fr_320px]")}>
+        <div className={cn("grid flex-1 gap-6 2xl:grid-cols-[1fr_320px]", packageMode === "custom" && "2xl:grid-cols-[1fr_380px]")}>
           <div className="rounded-xl border border-slate-100 bg-slate-50 p-4">
             <div className="mb-3 flex items-center justify-between gap-4">
               <h4 className="text-sm font-medium text-slate-700">待修图片预览</h4>
               {packageMode === "custom" && <span className="text-xs text-slate-400">未分配 {unassignedCount} 张</span>}
             </div>
-            <div className="grid grid-cols-4 gap-3">
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-3">
               {(packageMode === "custom" ? editImages : editImages.slice(0, 12)).map((image) => (
                 <button
                   className={cn(
@@ -732,8 +732,8 @@ function RetouchDone({ canUpload, selectedEventId, uploadResult, uploading, onRe
   };
 
   return (
-    <div className="flex min-h-[520px] flex-1 flex-col rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
-      <div className="mb-6 flex items-center justify-between gap-4">
+    <div className="flex min-h-[520px] flex-1 flex-col rounded-2xl border border-slate-100 bg-white p-4 shadow-sm xl:p-6">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
         <div>
           <h3 className="font-medium text-slate-900">已修图回传</h3>
           <p className="mt-1 text-xs text-slate-500">可直接拖入待修包里的“已修图回传”文件夹；系统会读取其中的 edit_manifest.json 和 JPG/JPEG。</p>
@@ -767,7 +767,7 @@ function RetouchDone({ canUpload, selectedEventId, uploadResult, uploading, onRe
         type="file"
       />
 
-      <div className="grid flex-1 grid-cols-[1fr_340px] gap-6">
+      <div className="grid flex-1 gap-6 xl:grid-cols-[1fr_340px]">
         <div
           className={cn(
             "rounded-xl border border-dashed p-5 transition-colors",

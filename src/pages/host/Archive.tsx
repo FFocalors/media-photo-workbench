@@ -303,8 +303,8 @@ export function ArchivePage() {
   };
 
   return (
-    <div className="flex h-full flex-1 flex-col overflow-y-auto bg-[#F8F9FA] p-8">
-      <div className="mb-6 flex items-start justify-between gap-6">
+    <div className="flex h-full flex-1 flex-col overflow-y-auto bg-[#F8F9FA] p-5 xl:p-8">
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-6">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">活动归档</h1>
           <p className="mt-1 text-sm text-slate-500">生成归档、验证完整性，并只读查看历史归档活动。</p>
@@ -326,7 +326,7 @@ export function ArchivePage() {
           </div>
         </div>
         {activeMode === "workflow" && (
-          <label className="min-w-72">
+          <label className="min-w-64 max-w-full sm:min-w-72">
             <span className="mb-1.5 block text-xs font-medium text-slate-500">活动</span>
             <select
               className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-blue-500"
@@ -432,7 +432,7 @@ export function ArchivePage() {
         <Step number={4} label="完成" active={step >= 4} completed={step > 4} />
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[360px_1fr] gap-6">
+      <div className="grid min-h-0 flex-1 gap-6 xl:grid-cols-[340px_1fr] 2xl:grid-cols-[360px_1fr]">
         <aside className="h-fit rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
           <h3 className="font-medium text-slate-900">活动摘要</h3>
           <p className="mt-1 text-xs text-slate-400">{selectedEvent?.name || "未选择活动"}</p>
@@ -600,7 +600,7 @@ function ArchiveDeleteLine({ label, value }: { label: string; value: string }) {
 
 function ResultPanel({ items }: { items: Array<[string, number]> }) {
   return (
-    <div className="mt-5 grid grid-cols-5 gap-3">
+    <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-5">
       {items.map(([label, value]) => (
         <div className={cn("rounded-xl border p-4", label.includes("缺失") && value > 0 ? "border-amber-100 bg-amber-50" : "border-slate-100 bg-slate-50")} key={label}>
           <p className="text-xs text-slate-500">{label}</p>
@@ -631,7 +631,7 @@ function ReadonlyArchiveView({
   selectedArchivedId: string;
 }) {
   return (
-    <div className="grid min-h-0 flex-1 grid-cols-[340px_1fr] gap-6">
+    <div className="grid min-h-0 flex-1 gap-6 xl:grid-cols-[320px_1fr] 2xl:grid-cols-[340px_1fr]">
       <aside className="h-fit rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
         <div className="flex items-center justify-between gap-3">
           <div>
@@ -752,7 +752,7 @@ function ReadonlyArchiveView({
 
             <section className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
               <h3 className="font-medium text-slate-900">metadata 文件状态</h3>
-              <div className="mt-4 grid grid-cols-4 gap-3">
+              <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
                 {detail.metadataFiles.map((file) => (
                   <div className={cn("rounded-xl border p-4", file.exists ? "border-emerald-100 bg-emerald-50" : "border-red-100 bg-red-50")} key={file.name}>
                     <p className="text-sm font-medium text-slate-900">{file.name}</p>

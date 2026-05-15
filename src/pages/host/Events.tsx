@@ -244,7 +244,7 @@ export function EventsPage() {
     : "";
 
   return (
-    <div className="flex h-full flex-1 flex-col overflow-y-auto bg-[#F8F9FA] p-8">
+    <div className="flex h-full flex-1 flex-col overflow-y-auto bg-[#F8F9FA] p-5 xl:p-8">
       <div className="mb-6 flex items-center justify-between">
         <div>
           <h1 className="mb-1 text-2xl font-bold text-slate-900">活动管理</h1>

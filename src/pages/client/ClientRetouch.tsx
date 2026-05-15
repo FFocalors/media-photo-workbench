@@ -197,13 +197,13 @@ export function ClientRetouchPage() {
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-[#F8F9FA]">
-      <div className="border-b border-slate-100 bg-white px-6 py-5">
-        <div className="flex items-start justify-between gap-6">
+      <div className="border-b border-slate-100 bg-white px-4 py-5 lg:px-6">
+        <div className="flex flex-wrap items-start justify-between gap-6">
           <div>
             <h1 className="text-2xl font-bold text-slate-900">修图任务</h1>
             <p className="mt-1 text-sm text-slate-500">{hostAddress || "未连接主机"}</p>
           </div>
-          <label className="min-w-72">
+          <label className="min-w-64 max-w-full sm:min-w-72">
             <span className="mb-1.5 block text-xs font-medium text-slate-500">活动</span>
             <select
               className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-blue-500"
@@ -222,8 +222,8 @@ export function ClientRetouchPage() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6">
-        <div className="mx-auto grid max-w-6xl grid-cols-[1fr_380px] gap-6">
+      <div className="flex-1 overflow-y-auto p-4 lg:p-6">
+        <div className="mx-auto grid max-w-6xl gap-6 xl:grid-cols-[1fr_380px]">
           <section className="space-y-6">
             {message && <Notice tone={message.tone} title={message.title}>{message.body}</Notice>}
 
@@ -247,7 +247,7 @@ export function ClientRetouchPage() {
                   <p className="mt-2 text-xs text-slate-400">请由主机端在“修图流转”中生成待修包。</p>
                 </div>
               ) : (
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-4">
                   {packages.map((item) => (
                     <div className="rounded-xl border border-slate-100 bg-slate-50 p-4" key={item.packageId}>
                       <div className="mb-4 flex items-start justify-between gap-4">

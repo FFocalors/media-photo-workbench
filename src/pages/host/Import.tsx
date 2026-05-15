@@ -140,7 +140,7 @@ export function ImportPage() {
   };
 
   return (
-    <div className="flex h-full flex-1 flex-col overflow-y-auto bg-[#F8F9FA] p-8">
+    <div className="flex h-full flex-1 flex-col overflow-y-auto bg-[#F8F9FA] p-5 xl:p-8">
       <div className="mb-8 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">图片导入</h1>
@@ -158,7 +158,7 @@ export function ImportPage() {
         <Step number={4} label="完成" active={step >= 4} completed={step > 4} />
       </div>
 
-      <div className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 gap-6">
+      <div className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col gap-6 xl:flex-row">
         <div className="flex flex-1 flex-col rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
           <div className="mb-6 flex border-b border-slate-100">
             <button className="mr-6 border-b-2 border-blue-600 px-1 pb-3 text-sm font-medium text-blue-600" type="button">本地导入</button>
@@ -258,7 +258,7 @@ export function ImportPage() {
           </div>
         </div>
 
-        <div className="flex w-[400px] flex-col rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
+        <div className="flex w-full flex-col rounded-2xl border border-slate-100 bg-white p-6 shadow-sm xl:w-[400px]">
           <div className="mb-6 flex items-center justify-between">
             <h3 className="font-medium text-slate-900">处理结果</h3>
             <span className="rounded-md bg-slate-50 px-2 py-1 text-xs font-medium text-slate-500">host_import</span>

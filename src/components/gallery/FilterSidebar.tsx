@@ -1,4 +1,6 @@
+import { X } from "lucide-react";
 import { EventData, ImageStatus, imageStatusLabels, imageStatusOptions } from "../../lib/api";
+import { cn } from "../../lib/cn";
 
 export function FilterSidebar({
   events,
@@ -13,7 +15,10 @@ export function FilterSidebar({
   onMinRatingChange,
   onStatusChange,
   onSourceTypeChange,
-  onReset
+  onReset,
+  className,
+  showClose = false,
+  onClose
 }: {
   events: EventData[];
   selectedEventId: string;
@@ -28,14 +33,24 @@ export function FilterSidebar({
   onStatusChange: (status: ImageStatus | "all") => void;
   onSourceTypeChange: (value: string) => void;
   onReset: () => void;
+  className?: string;
+  showClose?: boolean;
+  onClose?: () => void;
 }) {
   const total = Object.values(statusCounts).reduce((sum, count) => sum + count, 0);
 
   return (
-    <div className="flex w-64 flex-col overflow-y-auto border-r border-slate-100 bg-white">
+    <div className={cn("flex w-64 shrink-0 flex-col overflow-y-auto border-r border-slate-100 bg-white", className)}>
       <div className="flex items-center justify-between border-b border-slate-50 p-4">
         <h2 className="font-semibold text-slate-800">筛选</h2>
-        <button className="text-xs text-blue-600 hover:text-blue-700" onClick={onReset} type="button">重置</button>
+        <div className="flex items-center gap-3">
+          <button className="text-xs text-blue-600 hover:text-blue-700" onClick={onReset} type="button">重置</button>
+          {showClose && (
+            <button className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600" onClick={onClose} type="button">
+              <X size={16} />
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="space-y-6 p-4">

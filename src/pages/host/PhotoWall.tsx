@@ -44,6 +44,8 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
   const [statusFilter, setStatusFilter] = useState<ImageStatus | "all">("all");
   const [sourceType, setSourceType] = useState("all");
   const [trashMode, setTrashMode] = useState(false);
+  const [filterPanelOpen, setFilterPanelOpen] = useState(false);
+  const [metadataPanelOpen, setMetadataPanelOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [realtimeStatus, setRealtimeStatus] = useState<RealtimeConnectionState>("disconnected");
   const [confirmAction, setConfirmAction] = useState<"delete" | "restore" | "purge" | null>(null);
@@ -150,6 +152,12 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
   useEffect(() => {
     loadImages();
   }, [loadImages]);
+
+  useEffect(() => {
+    if (!activePhotoId) {
+      setMetadataPanelOpen(false);
+    }
+  }, [activePhotoId]);
 
   const replacePhoto = (updated: EventImageData) => {
     setPhotos((current) => current.map((photo) => (photo.id === updated.id ? updated : photo)));
@@ -490,28 +498,68 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
     photo.edited_path
   ].filter(Boolean).map((filePath) => `${photo.original_filename}: ${filePath}`));
 
+  const filterSidebarProps = {
+    events,
+    minRating,
+    search,
+    selectedEventId,
+    sourceType,
+    statusCounts,
+    statusFilter,
+    onEventChange: (eventId: string) => {
+      setSelectedEventId(eventId);
+      setSelectedIds([]);
+      setActivePhotoId(null);
+      setPreviewPhotoId(null);
+      setFilterPanelOpen(false);
+    },
+    onMinRatingChange: setMinRating,
+    onReset: resetFilters,
+    onSearchChange: setSearch,
+    onSourceTypeChange: setSourceType,
+    onStatusChange: setStatusFilter
+  };
+
+  const metadataPanelProps = {
+    photo: activePhoto,
+    selectedCount: selectedIds.length,
+    onCategoryChange: (category: string) => {
+      if (activePhoto) handleCategoryChange(activePhoto.id, category);
+    },
+    onClearActive: () => setActivePhotoId(null),
+    onOpenPreview: () => {
+      if (activePhoto) setPreviewPhotoId(activePhoto.id);
+    },
+    onRatingChange: (rating: number) => {
+      if (activePhoto) handleRatingChange(activePhoto.id, rating);
+    },
+    onRemarkChange: (remark: string) => {
+      if (activePhoto) handleRemarkChange(activePhoto.id, remark);
+    },
+    onStatusChange: (status: ImageStatus) => {
+      if (activePhoto) handleStatusChange(activePhoto.id, status);
+    }
+  };
+
   return (
-    <div className="flex h-full flex-1 overflow-hidden bg-[#F8F9FA]">
-      <FilterSidebar
-        events={events}
-        minRating={minRating}
-        search={search}
-        selectedEventId={selectedEventId}
-        sourceType={sourceType}
-        statusCounts={statusCounts}
-        statusFilter={statusFilter}
-        onEventChange={(eventId) => {
-          setSelectedEventId(eventId);
-          setSelectedIds([]);
-          setActivePhotoId(null);
-          setPreviewPhotoId(null);
-        }}
-        onMinRatingChange={setMinRating}
-        onReset={resetFilters}
-        onSearchChange={setSearch}
-        onSourceTypeChange={setSourceType}
-        onStatusChange={setStatusFilter}
-      />
+    <div className="relative flex h-full min-w-0 flex-1 overflow-hidden bg-[#F8F9FA]">
+      <FilterSidebar {...filterSidebarProps} className="hidden xl:flex" />
+      {filterPanelOpen && (
+        <>
+          <button
+            aria-label="关闭筛选"
+            className="absolute inset-0 z-30 bg-slate-900/20 xl:hidden"
+            onClick={() => setFilterPanelOpen(false)}
+            type="button"
+          />
+          <FilterSidebar
+            {...filterSidebarProps}
+            className="absolute inset-y-0 left-0 z-40 flex w-72 shadow-xl xl:hidden"
+            showClose
+            onClose={() => setFilterPanelOpen(false)}
+          />
+        </>
+      )}
 
       <div className="flex min-w-0 flex-1 flex-col">
         <GalleryToolbar
@@ -532,6 +580,11 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
           onSelectAll={selectAllFiltered}
           realtimeStatus={realtimeStatus}
           trashMode={trashMode}
+          filtersOpen={filterPanelOpen}
+          hasMetadata={Boolean(activePhoto)}
+          metadataOpen={metadataPanelOpen}
+          onToggleFilters={() => setFilterPanelOpen((open) => !open)}
+          onToggleMetadata={() => setMetadataPanelOpen((open) => !open)}
           onToggleTrashMode={mode === "host" ? () => {
             setTrashMode((value) => !value);
             setSelectedIds([]);
@@ -573,16 +626,22 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
         </div>
       </div>
 
-      <MetadataPanel
-        photo={activePhoto}
-        selectedCount={selectedIds.length}
-        onCategoryChange={(category) => activePhoto && handleCategoryChange(activePhoto.id, category)}
-        onClearActive={() => setActivePhotoId(null)}
-        onOpenPreview={() => activePhoto && setPreviewPhotoId(activePhoto.id)}
-        onRatingChange={(rating) => activePhoto && handleRatingChange(activePhoto.id, rating)}
-        onRemarkChange={(remark) => activePhoto && handleRemarkChange(activePhoto.id, remark)}
-        onStatusChange={(status) => activePhoto && handleStatusChange(activePhoto.id, status)}
-      />
+      <MetadataPanel {...metadataPanelProps} className="hidden 2xl:flex" />
+      {metadataPanelOpen && (
+        <>
+          <button
+            aria-label="关闭元数据"
+            className="absolute inset-0 z-30 bg-slate-900/20 2xl:hidden"
+            onClick={() => setMetadataPanelOpen(false)}
+            type="button"
+          />
+          <MetadataPanel
+            {...metadataPanelProps}
+            className="absolute inset-y-0 right-0 z-40 flex w-80 max-w-[85vw] shadow-xl 2xl:hidden"
+            onClosePanel={() => setMetadataPanelOpen(false)}
+          />
+        </>
+      )}
 
       {previewPhoto && (
         <PreviewModal

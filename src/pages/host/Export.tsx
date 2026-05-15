@@ -180,13 +180,13 @@ export function ExportPage() {
   };
 
   return (
-    <div className="flex h-full flex-1 flex-col overflow-y-auto bg-[#F8F9FA] p-8">
-      <div className="mb-6 flex items-start justify-between gap-6">
+    <div className="flex h-full flex-1 flex-col overflow-y-auto bg-[#F8F9FA] p-5 xl:p-8">
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-6">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">导出发布</h1>
           <p className="mt-1 text-sm text-slate-500">按条件生成正式发布图和 ZIP 发布包。</p>
         </div>
-        <label className="min-w-72">
+        <label className="min-w-64 max-w-full sm:min-w-72">
           <span className="mb-1.5 block text-xs font-medium text-slate-500">活动</span>
           <select
             className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-blue-500"
@@ -206,14 +206,14 @@ export function ExportPage() {
 
       {message && <Notice className="mb-6" tone={message.tone} title={message.title}>{message.body}</Notice>}
 
-      <div className="grid min-h-0 flex-1 grid-cols-[1fr_360px] gap-6">
+      <div className="grid min-h-0 flex-1 gap-6 xl:grid-cols-[1fr_360px]">
         <main className="space-y-6">
           <section className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
             <div className="mb-5 flex items-center justify-between">
               <h3 className="font-medium text-slate-900">导出来源</h3>
               <span className="text-xs text-slate-400">{loadingCounts ? "正在读取数量..." : "数量为当前活动实时统计"}</span>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid gap-4 sm:grid-cols-2">
               {modeOptions.map((option) => (
                 <ExportSource
                   active={mode === option.value}
@@ -233,7 +233,7 @@ export function ExportPage() {
             <div className="space-y-5">
               <div>
                 <p className="mb-3 text-xs font-medium text-slate-500">导出规格</p>
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid gap-3 sm:grid-cols-3">
                   {sizeOptions.map((option) => (
                     <button
                       className={cn(
@@ -251,7 +251,7 @@ export function ExportPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid gap-4 sm:grid-cols-2">
                 <label>
                   <span className="mb-1.5 block text-xs font-medium text-slate-500">JPEG 质量</span>
                   <input
@@ -299,7 +299,7 @@ export function ExportPage() {
           {result && (
             <section className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
               <h3 className="mb-5 font-medium text-slate-900">导出结果</h3>
-              <div className="grid grid-cols-4 gap-3">
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                 <ResultMetric label="总数" value={result.total} />
                 <ResultMetric label="成功" tone="success" value={result.success} />
                 <ResultMetric label="失败" tone={result.failed > 0 ? "danger" : "default"} value={result.failed} />

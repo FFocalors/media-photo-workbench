@@ -57,8 +57,8 @@ export function ClientConnectPage() {
 
   return (
     <main className="min-h-screen bg-[#F8F9FA] text-slate-900">
-      <div className="mx-auto flex min-h-screen max-w-6xl flex-col px-8 py-8">
-        <header className="mb-8 flex items-center justify-between">
+      <div className="mx-auto flex min-h-screen max-w-6xl flex-col px-4 py-6 lg:px-8 lg:py-8">
+        <header className="mb-8 flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <Link className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-50" to="/">
               <ArrowLeft size={18} />
@@ -74,7 +74,7 @@ export function ClientConnectPage() {
           </div>
         </header>
 
-        <div className="grid flex-1 grid-cols-[1fr_360px] gap-6">
+        <div className="grid flex-1 gap-6 xl:grid-cols-[1fr_360px]">
           <section className="flex flex-col gap-6">
             <div className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
               <div className="mb-6 flex items-start justify-between">
@@ -131,7 +131,7 @@ export function ClientConnectPage() {
 
             <div className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
               <h2 className="mb-5 font-semibold text-slate-900">协作身份</h2>
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid gap-4 sm:grid-cols-3">
                 <Field label="姓名" onChange={setUserName} value={userName} />
                 <label>
                   <span className="mb-1.5 block text-xs font-medium text-slate-500">角色</span>
@@ -144,7 +144,7 @@ export function ClientConnectPage() {
             </div>
 
             {health && (
-              <div className="grid grid-cols-3 gap-6">
+              <div className="grid gap-6 lg:grid-cols-3">
                 <ClientActionCard
                   body="查看缩略图、预览图，完成打星、状态流转、分类、备注和单图下载。"
                   icon={<CheckCircle2 size={24} />}

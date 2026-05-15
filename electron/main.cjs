@@ -22,8 +22,8 @@ function createWindow() {
   const mainWindow = new BrowserWindow({
     width: 1360,
     height: 860,
-    minWidth: 1120,
-    minHeight: 720,
+    minWidth: 1200,
+    minHeight: 760,
     backgroundColor: "#f6f8fb",
     title: "Media Photo Workbench",
     webPreferences: {

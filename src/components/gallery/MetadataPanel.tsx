@@ -1,6 +1,7 @@
 import { Info, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { EventImageData, ImageStatus, imageStatusLabels, imageStatusOptions } from "../../lib/api";
+import { cn } from "../../lib/cn";
 import { RatingStars } from "./RatingStars";
 
 export function MetadataPanel({
@@ -11,7 +12,9 @@ export function MetadataPanel({
   onCategoryChange,
   onRemarkChange,
   onOpenPreview,
-  onClearActive
+  onClearActive,
+  onClosePanel,
+  className
 }: {
   photo: EventImageData | null;
   selectedCount: number;
@@ -21,6 +24,8 @@ export function MetadataPanel({
   onRemarkChange: (remark: string) => void;
   onOpenPreview: () => void;
   onClearActive: () => void;
+  onClosePanel?: () => void;
+  className?: string;
 }) {
   const [categoryDraft, setCategoryDraft] = useState("");
   const [remarkDraft, setRemarkDraft] = useState("");
@@ -31,12 +36,12 @@ export function MetadataPanel({
   }, [photo?.id, photo?.category, photo?.remark]);
 
   return (
-    <div className="flex w-72 flex-col overflow-y-auto border-l border-slate-100 bg-white">
+    <div className={cn("flex w-72 shrink-0 flex-col overflow-y-auto border-l border-slate-100 bg-white", className)}>
       <div className="flex items-center justify-between border-b border-slate-50 p-4">
         <h2 className="flex items-center gap-2 font-semibold text-slate-800">
           <Info size={16} /> 元数据
         </h2>
-        <button className="text-slate-400 hover:text-slate-600" onClick={onClearActive} type="button"><X size={16} /></button>
+        <button className="text-slate-400 hover:text-slate-600" onClick={onClosePanel ?? onClearActive} type="button"><X size={16} /></button>
       </div>
 
       {!photo ? (
