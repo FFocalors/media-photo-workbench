@@ -1,4 +1,4 @@
-import { ChevronDown, LayoutGrid, List, Search, Trash2 } from "lucide-react";
+import { ChevronDown, Download, LayoutGrid, List, RotateCcw, Search, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ImageStatus, imageStatusLabels } from "../../lib/api";
 import type { RealtimeConnectionState } from "../../lib/socket";
@@ -13,7 +13,12 @@ export function GalleryToolbar({
   search,
   onSearchChange,
   realtimeStatus,
-  allowDelete = true
+  allowDelete = true,
+  trashMode = false,
+  onToggleTrashMode,
+  onRestoreSelected,
+  onPurgeSelected,
+  onDownloadSelectedZip
 }: {
   selectedCount: number;
   filteredCount: number;
@@ -25,6 +30,11 @@ export function GalleryToolbar({
   onSearchChange: (value: string) => void;
   realtimeStatus: RealtimeConnectionState;
   allowDelete?: boolean;
+  trashMode?: boolean;
+  onToggleTrashMode?: () => void;
+  onRestoreSelected?: () => void;
+  onPurgeSelected?: () => void;
+  onDownloadSelectedZip?: () => void;
 }) {
   const [batchMenuOpen, setBatchMenuOpen] = useState(false);
   const batchMenuRef = useRef<HTMLDivElement | null>(null);
@@ -74,7 +84,37 @@ export function GalleryToolbar({
         <div className="mx-1 h-6 w-px bg-slate-200" />
         <button className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50" onClick={onSelectAll} type="button">全选当前</button>
         <button className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50" disabled={selectedCount === 0} onClick={onClearSelection} type="button">清除选择</button>
-        {allowDelete && (
+        {onToggleTrashMode && (
+          <button
+            className={`rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors ${trashMode ? "border-blue-100 bg-blue-50 text-blue-600 hover:bg-blue-100" : "border-slate-200 text-slate-700 hover:bg-slate-50"}`}
+            onClick={onToggleTrashMode}
+            type="button"
+          >
+            {trashMode ? "返回图片墙" : "图片回收站"}
+          </button>
+        )}
+        {trashMode ? (
+          <>
+            <button
+              className="flex items-center gap-1.5 rounded-lg border border-emerald-100 px-3 py-1.5 text-sm font-medium text-emerald-600 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
+              disabled={selectedCount === 0}
+              onClick={onRestoreSelected}
+              type="button"
+            >
+              <RotateCcw size={15} />
+              恢复所选
+            </button>
+            <button
+              className="flex items-center gap-1.5 rounded-lg border border-red-100 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
+              disabled={selectedCount === 0}
+              onClick={onPurgeSelected}
+              type="button"
+            >
+              <Trash2 size={15} />
+              永久删除
+            </button>
+          </>
+        ) : allowDelete && (
           <button
             className="flex items-center gap-1.5 rounded-lg border border-red-100 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
             disabled={selectedCount === 0}
@@ -85,11 +125,22 @@ export function GalleryToolbar({
             删除所选
           </button>
         )}
+        {!trashMode && onDownloadSelectedZip && (
+          <button
+            className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={selectedCount === 0}
+            onClick={onDownloadSelectedZip}
+            type="button"
+          >
+            <Download size={15} />
+            下载所选 ZIP
+          </button>
+        )}
         <div className="relative" ref={batchMenuRef}>
           <button
             aria-expanded={batchMenuOpen}
             className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={selectedCount === 0}
+            disabled={selectedCount === 0 || trashMode}
             onClick={() => setBatchMenuOpen((open) => !open)}
             type="button"
           >

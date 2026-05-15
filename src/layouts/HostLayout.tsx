@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { cn } from "../lib/cn";
+import { TaskCenter } from "../components/tasks/TaskCenter";
 
 const navItems = [
   { icon: Home, label: "首页", to: "/host/overview" },
@@ -53,6 +54,10 @@ export function HostLayout() {
               {item.label}
             </NavLink>
           ))}
+        </div>
+
+        <div className="border-t border-slate-50 px-3 py-3">
+          <TaskCenter />
         </div>
 
         <div className="flex items-center gap-3 border-t border-slate-50 p-4">

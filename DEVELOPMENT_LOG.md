@@ -28,6 +28,136 @@
 
 ## 开发记录
 
+### v0.10.0-dev：任务队列与批量 ZIP 下载
+- **日期**：2026-05-15
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - 新增内存任务管理器 `src-server/services/tasks.ts`，支持创建、更新、完成、失败、查询和取消占位。
+  - 新增 `GET /api/tasks`、`GET /api/tasks/:taskId`、`POST /api/tasks/:taskId/cancel`。
+  - `task-updated` 接入真实 Socket.IO 广播，任务状态变化会实时推送到前端。
+  - 新增批量 ZIP 下载服务 `src-server/services/downloadPackages.ts`。
+  - 新增 `POST /api/events/:eventId/download/zip`，返回 `taskId`，任务完成后在 `result.downloadUrl` 提供下载链接。
+  - 新增 `GET /api/download-packages/:packageId/download`，下载成功写入 `download_logs` 和 `operation_logs`。
+  - 批量 ZIP 支持 `original`、`preview`、`edited`、`best` 四种类型；`best` 优先已修图，缺失时回退原图。
+  - 主机端和客户端新增侧边栏任务中心，显示进行中、完成、失败任务、进度条、错误列表和下载入口。
+  - 图片墙新增“下载所选 ZIP”按钮。
+  - 发布导出和活动归档 prepare 增加轻量任务记录，不改变原接口返回。
+- **修改文件**：
+  - `src-server/services/tasks.ts`
+  - `src-server/routes/tasks.ts`
+  - `src-server/services/downloadPackages.ts`
+  - `src-server/routes/downloadPackages.ts`
+  - `src-server/routes/events.ts`
+  - `src-server/realtime/socket.ts`
+  - `src-server/app.ts`
+  - `src/lib/api.ts`
+  - `src/lib/socket.ts`
+  - `src/components/tasks/TaskCenter.tsx`
+  - `src/components/gallery/GalleryToolbar.tsx`
+  - `src/layouts/HostLayout.tsx`
+  - `src/pages/host/PhotoWall.tsx`
+  - `README.md`
+  - `ROADMAP.md`
+  - `CHANGELOG.md`
+  - `API_SPEC.md`
+  - `DATABASE_SCHEMA.md`
+  - `DEVELOPMENT_LOG.md`
+- **验证方式**：
+  - `pnpm build` 通过。
+  - 建议手工验证：打开图片墙选择多张图片，点击“下载所选 ZIP”，侧边栏任务中心应显示进度；任务完成后点击下载；删除某张原图后再生成 ZIP，缺失文件应进入任务 errors；发布导出和归档 prepare 原页面流程应保持可用，同时任务中心出现轻量任务记录。
+- **未完成事项**：
+  - 第一版任务使用内存存储，应用重启后任务列表清空。
+  - `POST /api/tasks/:taskId/cancel` 当前明确返回 `TASK_CANCEL_NOT_SUPPORTED`，尚未实现真正取消。
+  - 导入、待修包生成、大批量已修图回传、归档清理和永久删除还未完全任务化。
+- **下一步计划**：
+  - 继续把更多耗时操作接入任务系统，或优先做归档活动只读打开。
+
+### 修复：图片导入去重范围限定为同一活动
+- **日期**：2026-05-14
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - 修复主机导入和客户端上传复用导入管线时，`file_hash` 查重按全库生效的问题。
+  - 去重查询改为 `event_id + file_hash`，同一活动重复导入仍跳过，不同活动可导入同一张图片。
+- **修改文件**：
+  - `src-server/services/imageImport.ts`
+  - `API_SPEC.md`
+  - `DATABASE_SCHEMA.md`
+  - `ROADMAP.md`
+  - `CHANGELOG.md`
+  - `DEVELOPMENT_LOG.md`
+- **验证方式**：
+  - `pnpm build` 通过。
+  - 手工建议：创建两个活动，把同一张 JPG 分别导入两个活动，应都成功；在同一活动再次导入同一张 JPG，应计入 `skipped`。
+
+### Phase 9：回收站 / 恢复 / 永久删除
+- **日期**：2026-05-14
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - 新增图片回收站查询 `GET /api/events/:eventId/images/trash`，返回已逻辑删除图片及文件存在状态。
+  - 新增图片恢复 `PATCH /api/images/:id/restore`，恢复后写入操作日志并广播图片更新。
+  - 新增图片永久删除 `DELETE /api/images/:id/purge`，仅允许删除回收站图片，清理原图、缩略图、预览图和已修图文件，并返回删除结果。
+  - 新增活动回收站 `GET /api/events/trash`、活动恢复 `PATCH /api/events/:id/restore` 和活动永久删除 `DELETE /api/events/:id/purge`。
+  - 活动永久删除仅允许 `status = deleted` 的活动，默认只清理 working 工作区和主库记录，不删除 archive 归档目录。
+  - 活动管理页新增回收站入口，支持恢复活动和输入活动名称二次确认后永久删除。
+  - 图片墙新增主机端图片回收站入口，支持查看已删除图片、批量恢复和二次确认永久删除。
+  - 客户端模式继续隐藏主机专属的回收站和永久删除入口。
+- **修改文件**：
+  - `src-server/services/images.ts`
+  - `src-server/routes/images.ts`
+  - `src-server/services/events.ts`
+  - `src-server/routes/events.ts`
+  - `src/lib/api.ts`
+  - `src/components/gallery/GalleryToolbar.tsx`
+  - `src/pages/host/PhotoWall.tsx`
+  - `src/pages/host/Events.tsx`
+  - `API_SPEC.md`
+  - `DATABASE_SCHEMA.md`
+  - `README.md`
+  - `ROADMAP.md`
+  - `CHANGELOG.md`
+  - `DEVELOPMENT_LOG.md`
+- **验证方式**：
+  - `pnpm build` 通过。
+  - 手工验证：图片逻辑删除后进入图片回收站，恢复后图片墙重新显示；永久删除前展示相关文件路径并二次确认，执行后图片记录和对应文件被清理；活动逻辑删除后进入活动回收站，恢复后活动列表重新显示；永久删除活动前要求输入活动名称，执行后 working 工作区、events/images 记录被清理。
+- **遇到的问题**：
+  - Windows / OneDrive 目录偶发 `EPERM`，直接删除非空工作区目录可能失败。
+- **解决方案**：
+  - 永久删除和归档清理前递归移除只读属性，并优先按文件清理后删除目录；失败时返回明确错误，不静默吞掉。
+- **未完成事项**：
+  - 暂未实现归档活动只读重新打开、复杂权限和任务队列。
+- **下一步计划**：
+  - 建议进入远程传输预留或任务队列化，将导入、导出、归档、永久删除等长任务统一纳入任务状态。
+
+### Phase 8：活动归档
+- **日期**：2026-05-14
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - 新增活动归档准备、验证和工作区清理接口。
+  - 归档目录生成到 `archive/{event_slug}`，复制原图、已修图、导出发布图和压缩包。
+  - 生成 `metadata/manifest.json`、`images.csv`、`operation_logs.csv` 和独立 `event.db`。
+  - 归档验证会读取 manifest 并检查文件存在性和 hash。
+  - 清理工作区必须在归档验证通过后执行，成功后活动状态更新为 `archived` 并写入 `archived_events` 摘要。
+  - 归档页接入真实 API，支持选择活动、生成归档、验证归档、二次确认清理和打开归档目录。
+- **修改文件**：
+  - `src-server/services/archive.ts`
+  - `src-server/routes/archivedEvents.ts`
+  - `src-server/routes/events.ts`
+  - `src-server/app.ts`
+  - `src/lib/api.ts`
+  - `src/pages/host/Archive.tsx`
+  - `API_SPEC.md`
+  - `README.md`
+  - `ROADMAP.md`
+  - `CHANGELOG.md`
+  - `DEVELOPMENT_LOG.md`
+- **验证方式**：
+  - `pnpm build` 通过。
+  - 手工验证：准备归档、验证归档、确认 metadata 文件和 `event.db` 生成、清理 working 后 archive 保留，活动状态变为 `archived`。
+- **未完成事项**：
+  - 归档活动只读打开仍留作后续增强。
+- **下一步计划**：
+  - 进入 Phase 9：补齐活动和图片回收站、恢复、永久删除闭环。
+
 ### Phase 7：导出发布
 - **日期**：2026-05-14
 - **开发者 / 工具**：Codex
@@ -127,7 +257,7 @@
   - 新增 `POST /api/events/:eventId/upload`，支持客户端以 `multipart/form-data` 上传一个或多个 JPG/JPEG 文件。
   - 新增轻量 multipart 解析工具，将上传文件暂存到系统临时目录，导入完成后自动清理。
   - 客户端上传复用现有图片处理管线：复制到 `原图/客户端上传`，生成 400px WebP 缩略图和 1600px WebP 预览图，读取 EXIF，写入 `images` 表。
-  - 客户端上传写入 `source = client_upload`，支持摄影师、设备名和备注字段，使用 `file_hash` 去重，重复计入 `skipped`。
+  - 客户端上传写入 `source = client_upload`，支持摄影师、设备名和备注字段，使用 `event_id + file_hash` 在同一活动内去重，重复计入 `skipped`。
   - 上传成功后广播 `image-created`，主机窗口和其他客户端窗口可实时看到新图。
 - **修改文件**：
   - `src/lib/api.ts`
@@ -360,7 +490,7 @@
   - 新增 `src-server/services/imageImport.ts`，实现主机本地文件夹非递归扫描，只识别 `.jpg` / `.jpeg`。
   - 新增图片导入管线：按 `eventId` 查询活动，定位仓库 `working/{event_slug}`，复制原图到 `原图/主机导入`，并准备生成缩略图与预览图。
   - 新增 `src-server/services/eventWorkspace.ts`，集中管理活动中文工作目录，避免活动创建和导入逻辑重复维护目录名。
-  - 导入时使用 sha256 `file_hash` 去重；数据库中已有相同 hash 时跳过并计入 `skipped`。
+  - 导入时使用 sha256 `file_hash` 去重；同一活动内已有相同 hash 时跳过并计入 `skipped`，不同活动允许导入同一张图片。
   - 导入记录写入 `images` 表，默认 `rating = 0`、`status = unselected`、`source = host_import`。
   - 通过 `sharp` 生成 WebP 资源：`缩略图/{imageId}.webp` 长边 400px，`预览图/{imageId}.webp` 长边 1600px。
   - 通过 `exifr` 尝试读取拍摄时间、相机型号、镜头信息；EXIF 读取失败不会阻断导入。

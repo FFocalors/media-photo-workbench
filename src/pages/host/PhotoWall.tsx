@@ -8,6 +8,7 @@ import { Notice } from "../../components/ui/States";
 import {
   EventData,
   EventImageData,
+  createDownloadZipTask,
   deleteImage,
   downloadImageFile,
   fetchEventImages,
@@ -15,6 +16,9 @@ import {
   ImageDownloadType,
   ImageStatus,
   imageStatusOptions,
+  fetchEventTrashedImages,
+  purgeImage,
+  restoreImage,
   updateImageCategory,
   updateImageRating,
   updateImageRemark,
@@ -38,6 +42,7 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
   const [minRating, setMinRating] = useState(0);
   const [statusFilter, setStatusFilter] = useState<ImageStatus | "all">("all");
   const [sourceType, setSourceType] = useState("all");
+  const [trashMode, setTrashMode] = useState(false);
   const [loading, setLoading] = useState(true);
   const [realtimeStatus, setRealtimeStatus] = useState<RealtimeConnectionState>("disconnected");
   const [message, setMessage] = useState<{ tone: "success" | "warning" | "danger" | "info"; title: string; body: string } | null>(null);
@@ -109,14 +114,17 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
 
     setLoading(true);
     try {
-      const res = await fetchEventImages(selectedEventId, {
+      const params = {
         page: 1,
         pageSize: 200,
         rating: minRating > 0 ? minRating : undefined,
         status: statusFilter,
         source_type: sourceType,
         keyword: search.trim() || undefined
-      });
+      };
+      const res = trashMode
+        ? await fetchEventTrashedImages(selectedEventId, params)
+        : await fetchEventImages(selectedEventId, params);
       if (res.ok && res.data) {
         setPhotos(res.data.items);
         setTotal(res.data.total);
@@ -131,7 +139,7 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
     } finally {
       setLoading(false);
     }
-  }, [minRating, search, selectedEventId, sourceType, statusFilter]);
+  }, [minRating, search, selectedEventId, sourceType, statusFilter, trashMode]);
 
   useEffect(() => {
     loadEvents();
@@ -179,6 +187,11 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
     if (payload.eventId !== selectedEventId || !payload.image) return;
     const image = payload.image;
 
+    if (trashMode && !image.is_deleted) {
+      removePhotoFromView(image.id);
+      return;
+    }
+
     setPhotos((current) => {
       const exists = current.some((photo) => photo.id === image.id);
       if (!exists) return current;
@@ -193,12 +206,16 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
 
       return current.map((photo) => photo.id === image.id ? image : photo);
     });
-  }, [matchesCurrentFilters, selectedEventId]);
+  }, [matchesCurrentFilters, removePhotoFromView, selectedEventId, trashMode]);
 
   const handleRealtimeDeleted = useCallback((payload: RealtimeImagePayload) => {
     if (payload.eventId !== selectedEventId) return;
+    if (trashMode) {
+      void loadImages();
+      return;
+    }
     removePhotoFromView(payload.imageId);
-  }, [removePhotoFromView, selectedEventId]);
+  }, [loadImages, removePhotoFromView, selectedEventId, trashMode]);
 
   useEffect(() => {
     const unsubscribeConnection = subscribeRealtimeConnection(setRealtimeStatus);
@@ -292,6 +309,102 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
     }
   };
 
+  const handleRestoreSelected = async () => {
+    if (selectedIds.length === 0) return;
+    const confirmed = window.confirm(`确定恢复选中的 ${selectedIds.length} 张图片？`);
+    if (!confirmed) return;
+
+    const ids = [...selectedIds];
+    let success = 0;
+    const failed: string[] = [];
+    for (const id of ids) {
+      try {
+        const res = await restoreImage(id);
+        if (res.ok) {
+          success += 1;
+        } else {
+          failed.push(res.error?.message || id);
+        }
+      } catch (err: any) {
+        failed.push(err?.message || id);
+      }
+    }
+
+    setSelectedIds([]);
+    setActivePhotoId(null);
+    setPreviewPhotoId(null);
+    await loadImages();
+    setMessage(failed.length > 0
+      ? { tone: "warning", title: "部分图片恢复失败", body: `已恢复 ${success} 张，失败 ${failed.length} 张。${failed[0] || ""}` }
+      : { tone: "success", title: "图片已恢复", body: `已恢复 ${success} 张图片，返回图片墙后可查看。` });
+  };
+
+  const handlePurgeSelected = async () => {
+    if (selectedIds.length === 0) return;
+    const targets = photos.filter((photo) => selectedIds.includes(photo.id));
+    const pathLines = targets.flatMap((photo) => [
+      photo.original_path,
+      photo.thumb_path,
+      photo.preview_path,
+      photo.edited_path
+    ].filter(Boolean).map((filePath) => `${photo.original_filename}: ${filePath}`));
+    const preview = pathLines.slice(0, 12).join("\n");
+    const more = pathLines.length > 12 ? `\n... 还有 ${pathLines.length - 12} 个路径` : "";
+    const confirmed = window.confirm(
+      `永久删除选中的 ${targets.length} 张图片？\n\n将尝试删除以下文件：\n${preview || "无文件路径"}${more}\n\n此操作会删除图片数据库记录，不能撤销。`
+    );
+    if (!confirmed) return;
+
+    const ids = [...selectedIds];
+    let success = 0;
+    const failed: string[] = [];
+    for (const id of ids) {
+      try {
+        const res = await purgeImage(id);
+        if (res.ok) {
+          success += 1;
+          if (res.data?.errors?.length) {
+            failed.push(res.data.errors[0]);
+          }
+        } else {
+          failed.push(res.error?.message || id);
+        }
+      } catch (err: any) {
+        failed.push(err?.message || id);
+      }
+    }
+
+    setSelectedIds([]);
+    setActivePhotoId(null);
+    setPreviewPhotoId(null);
+    await loadImages();
+    setMessage(failed.length > 0
+      ? { tone: "danger", title: "部分图片永久删除失败", body: `已删除 ${success} 张，失败 ${failed.length} 张。${failed[0] || ""}` }
+      : { tone: "success", title: "图片已永久删除", body: `已永久删除 ${success} 张图片。` });
+  };
+
+  const handleDownloadSelectedZip = async () => {
+    if (!selectedEventId || selectedIds.length === 0) return;
+    try {
+      const res = await createDownloadZipTask(selectedEventId, {
+        imageIds: selectedIds,
+        type: "best",
+        filenameMode: "sequence"
+      });
+      if (!res.ok) {
+        setMessage({ tone: "danger", title: "批量下载任务创建失败", body: res.error?.message || "无法创建批量下载任务。" });
+        return;
+      }
+      setMessage({
+        tone: "info",
+        title: "批量下载任务已创建",
+        body: "ZIP 正在生成，完成后可在右上角任务中心下载。"
+      });
+    } catch (err: any) {
+      setMessage({ tone: "danger", title: "批量下载任务创建失败", body: err?.message || "请求失败。" });
+    }
+  };
+
   const toggleSelected = (id: string) => {
     setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
     setActivePhotoId(id);
@@ -367,7 +480,9 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
   }, [movePreview, previewPhoto, previewPhotoId]);
 
   const emptyTitle = selectedEventId && total === 0 && !search && minRating === 0 && statusFilter === "all" ? "暂无图片" : "当前筛选没有图片";
-  const emptyBody = selectedEventId && total === 0 && !search && minRating === 0 && statusFilter === "all"
+  const emptyBody = trashMode
+    ? "图片回收站为空。逻辑删除后的图片会显示在这里。"
+    : selectedEventId && total === 0 && !search && minRating === 0 && statusFilter === "all"
     ? "暂无图片，请先导入图片。"
     : "当前筛选条件下没有可显示的图片。可以清空筛选、降低星级条件，或切换到全部状态。";
 
@@ -406,9 +521,19 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
           }}
           allowDelete={mode === "host"}
           onDeleteSelected={handleDeleteSelected}
+          onPurgeSelected={handlePurgeSelected}
+          onDownloadSelectedZip={handleDownloadSelectedZip}
+          onRestoreSelected={handleRestoreSelected}
           onSearchChange={setSearch}
           onSelectAll={selectAllFiltered}
           realtimeStatus={realtimeStatus}
+          trashMode={trashMode}
+          onToggleTrashMode={mode === "host" ? () => {
+            setTrashMode((value) => !value);
+            setSelectedIds([]);
+            setActivePhotoId(null);
+            setPreviewPhotoId(null);
+          } : undefined}
         />
 
         {message && (

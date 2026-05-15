@@ -315,7 +315,7 @@ export async function importImageFiles(input: {
       }
 
       const fileHash = await hashFile(file.path);
-      const duplicate = db.prepare("SELECT id FROM images WHERE file_hash = ? LIMIT 1").get(fileHash);
+      const duplicate = db.prepare("SELECT id FROM images WHERE event_id = ? AND file_hash = ? LIMIT 1").get(event.id, fileHash);
       if (duplicate) {
         result.skipped += 1;
         continue;

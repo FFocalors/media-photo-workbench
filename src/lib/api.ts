@@ -188,6 +188,10 @@ export async function fetchEvents(status?: string): Promise<ApiResponse<EventDat
   return request<EventData[]>(`/api/events${query}`);
 }
 
+export async function fetchEventTrash(): Promise<ApiResponse<EventData[]>> {
+  return request<EventData[]>("/api/events/trash");
+}
+
 export async function fetchEventById(id: string): Promise<ApiResponse<EventData>> {
   return request<EventData>(`/api/events/${id}`);
 }
@@ -230,6 +234,37 @@ export async function updateEventStatus(
 export async function deleteEvent(id: string): Promise<ApiResponse<EventData>> {
   return request<EventData>(`/api/events/${id}`, {
     method: "DELETE"
+  });
+}
+
+export async function restoreEvent(id: string, status: "active" | "draft" = "active"): Promise<ApiResponse<EventData>> {
+  return request<EventData>(`/api/events/${id}/restore`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status })
+  });
+}
+
+export interface EventPurgeData {
+  eventId: string;
+  eventName: string;
+  workingPath: string;
+  archivePath: string;
+  includeArchive: boolean;
+  deletedFiles: string[];
+  missingFiles: string[];
+  errors: string[];
+  deletedRecords: {
+    events: number;
+    images: number;
+  };
+}
+
+export async function purgeEvent(id: string, includeArchive = false): Promise<ApiResponse<EventPurgeData>> {
+  return request<EventPurgeData>(`/api/events/${id}/purge`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ includeArchive })
   });
 }
 
@@ -365,6 +400,10 @@ export interface EventImageData {
   edited_exists: boolean;
   is_deleted: boolean;
   deleted_at: string;
+  original_path?: string;
+  thumb_path?: string;
+  preview_path?: string;
+  edited_path?: string;
 }
 
 export interface EventImagesParams {
@@ -434,6 +473,28 @@ export async function fetchEventImages(eventId: string, params: EventImagesParam
   };
 }
 
+export async function fetchEventTrashedImages(eventId: string, params: EventImagesParams = {}): Promise<ApiResponse<EventImagesData>> {
+  const searchParams = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== "" && value !== "all") {
+      searchParams.set(key, String(value));
+    }
+  }
+  const query = searchParams.toString();
+  const response = await request<EventImagesData>(`/api/events/${eventId}/images/trash${query ? `?${query}` : ""}`);
+  if (!response.ok || !response.data) {
+    return response;
+  }
+
+  return {
+    ...response,
+    data: {
+      ...response.data,
+      items: response.data.items.map(normalizeImageData)
+    }
+  };
+}
+
 export async function updateImageRating(id: string, rating: number): Promise<ApiResponse<EventImageData>> {
   const response = await request<EventImageData>(`/api/images/${id}/rating`, {
     method: "PATCH",
@@ -475,6 +536,28 @@ export async function deleteImage(id: string): Promise<ApiResponse<EventImageDat
     method: "DELETE"
   });
   return normalizeImageResponse(response);
+}
+
+export async function restoreImage(id: string): Promise<ApiResponse<EventImageData>> {
+  const response = await request<EventImageData>(`/api/images/${id}/restore`, {
+    method: "PATCH"
+  });
+  return normalizeImageResponse(response);
+}
+
+export interface ImagePurgeData {
+  imageId: string;
+  eventId: string;
+  deletedFiles: string[];
+  missingFiles: string[];
+  errors: string[];
+  deletedRecords: number;
+}
+
+export async function purgeImage(id: string): Promise<ApiResponse<ImagePurgeData>> {
+  return request<ImagePurgeData>(`/api/images/${id}/purge`, {
+    method: "DELETE"
+  });
 }
 
 export type ImageDownloadType = "original" | "preview" | "edited";
@@ -523,6 +606,78 @@ export async function downloadImageFile(id: string, type: ImageDownloadType, fal
   anchor.click();
   anchor.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// ---------- Tasks ----------
+
+export type TaskStatus = "pending" | "running" | "success" | "failed" | "cancelled";
+
+export interface TaskErrorItem {
+  filename?: string;
+  path?: string;
+  imageId?: string;
+  reason: string;
+}
+
+export interface TaskData {
+  id: string;
+  taskId?: string;
+  type: string;
+  eventId: string;
+  title: string;
+  status: TaskStatus;
+  total: number;
+  finished: number;
+  successCount: number;
+  failedCount: number;
+  skippedCount: number;
+  errors: TaskErrorItem[];
+  result: Record<string, any> | null;
+  createdAt: string;
+  updatedAt: string;
+  finishedAt: string;
+}
+
+export async function fetchTasks(): Promise<ApiResponse<TaskData[]>> {
+  return request<TaskData[]>("/api/tasks");
+}
+
+export async function fetchTask(taskId: string): Promise<ApiResponse<TaskData>> {
+  return request<TaskData>(`/api/tasks/${encodeURIComponent(taskId)}`);
+}
+
+export async function cancelTask(taskId: string): Promise<ApiResponse<never>> {
+  return request<never>(`/api/tasks/${encodeURIComponent(taskId)}/cancel`, {
+    method: "POST"
+  });
+}
+
+// ---------- Batch ZIP Download ----------
+
+export type DownloadZipType = "original" | "preview" | "edited" | "best";
+export type DownloadZipFilenameMode = "original" | "sequence";
+
+export interface CreateDownloadZipTaskData {
+  taskId: string;
+}
+
+export async function createDownloadZipTask(
+  eventId: string,
+  input: {
+    imageIds: string[];
+    type?: DownloadZipType;
+    filenameMode?: DownloadZipFilenameMode;
+  }
+): Promise<ApiResponse<CreateDownloadZipTaskData>> {
+  return request<CreateDownloadZipTaskData>(`/api/events/${eventId}/download/zip`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+}
+
+export function getDownloadPackageUrl(packageId: string): string {
+  return `${getApiBase()}/api/download-packages/${encodeURIComponent(packageId)}/download`;
 }
 
 // ---------- Edit Workflow ----------

@@ -61,6 +61,10 @@ export interface ImageDto {
   edited_exists: boolean;
   is_deleted: boolean;
   deleted_at: string;
+  original_path?: string;
+  thumb_path?: string;
+  preview_path?: string;
+  edited_path?: string;
 }
 
 export interface ImageListParams {
@@ -70,6 +74,7 @@ export interface ImageListParams {
   status?: string;
   sourceType?: string;
   keyword?: string;
+  deleted?: boolean;
 }
 
 export interface ImageListResult {
@@ -88,6 +93,15 @@ export interface ImageDownloadFile {
   type: ImageDownloadType;
 }
 
+export interface ImagePurgeResult {
+  imageId: string;
+  eventId: string;
+  deletedFiles: string[];
+  missingFiles: string[];
+  errors: string[];
+  deletedRecords: number;
+}
+
 function nowTimestamp(): string {
   return new Date().toISOString().replace("T", " ").replace(/\.\d+Z$/, "");
 }
@@ -96,13 +110,13 @@ function pathExists(filePath: string): boolean {
   return Boolean(filePath && fs.existsSync(filePath));
 }
 
-function toImageDto(row: ImageRow, baseUrl: string): ImageDto {
+function toImageDto(row: ImageRow, baseUrl: string, includePaths = false): ImageDto {
   const originalExists = pathExists(row.original_path);
   const thumbExists = pathExists(row.thumb_path);
   const previewExists = pathExists(row.preview_path);
   const editedExists = pathExists(row.edited_path);
 
-  return {
+  const dto: ImageDto = {
     id: row.id,
     event_id: row.event_id,
     original_filename: row.original_filename,
@@ -130,6 +144,15 @@ function toImageDto(row: ImageRow, baseUrl: string): ImageDto {
     is_deleted: Boolean(row.is_deleted),
     deleted_at: row.deleted_at
   };
+
+  if (includePaths) {
+    dto.original_path = row.original_path;
+    dto.thumb_path = row.thumb_path;
+    dto.preview_path = row.preview_path;
+    dto.edited_path = row.edited_path;
+  }
+
+  return dto;
 }
 
 export function getImageById(id: string): ImageRow | undefined {
@@ -141,7 +164,7 @@ export function listEventImages(eventId: string, params: ImageListParams, baseUr
   const db = getDatabase();
   const page = Math.max(1, Number(params.page) || 1);
   const pageSize = Math.min(200, Math.max(1, Number(params.pageSize) || 80));
-  const where: string[] = ["event_id = ?", "is_deleted = 0"];
+  const where: string[] = ["event_id = ?", params.deleted ? "is_deleted = 1" : "is_deleted = 0"];
   const values: unknown[] = [eventId];
 
   if (typeof params.rating === "number" && Number.isFinite(params.rating) && params.rating > 0) {
@@ -180,11 +203,15 @@ export function listEventImages(eventId: string, params: ImageListParams, baseUr
   `).all(...values, pageSize, offset) as ImageRow[];
 
   return {
-    items: rows.map((row) => toImageDto(row, baseUrl)),
+    items: rows.map((row) => toImageDto(row, baseUrl, Boolean(params.deleted))),
     total,
     page,
     pageSize
   };
+}
+
+export function listEventTrashedImages(eventId: string, params: ImageListParams, baseUrl: string): ImageListResult {
+  return listEventImages(eventId, { ...params, deleted: true }, baseUrl);
 }
 
 function writeOperationLog(imageId: string, eventId: string, type: string, detail: Record<string, unknown>): void {
@@ -291,6 +318,95 @@ export function deleteImage(id: string, baseUrl: string): ImageDto {
   });
   refreshEventImageCount(existing.event_id);
   return getImageDtoById(id, baseUrl);
+}
+
+export function restoreImage(id: string, baseUrl: string): ImageDto {
+  const existing = getImageById(id);
+  if (!existing) {
+    throw { code: "IMAGE_NOT_FOUND", message: "图片不存在" };
+  }
+  if (!existing.is_deleted) {
+    throw { code: "IMAGE_NOT_DELETED", message: "图片不在回收站中" };
+  }
+
+  const now = nowTimestamp();
+  getDatabase().prepare("UPDATE images SET is_deleted = 0, deleted_at = '', updated_at = ? WHERE id = ?").run(now, id);
+  writeOperationLog(id, existing.event_id, "image_restored", {
+    original_filename: existing.original_filename,
+    deleted_at: existing.deleted_at
+  });
+  refreshEventImageCount(existing.event_id);
+  return getImageDtoById(id, baseUrl);
+}
+
+function collectImageFilePaths(image: ImageRow): string[] {
+  return Array.from(new Set([
+    image.original_path,
+    image.thumb_path,
+    image.preview_path,
+    image.edited_path
+  ].filter(Boolean)));
+}
+
+function isPathReferencedByOtherImage(imageId: string, filePath: string): boolean {
+  const row = getDatabase().prepare(`
+    SELECT id FROM images
+    WHERE id != ?
+      AND (original_path = ? OR thumb_path = ? OR preview_path = ? OR edited_path = ?)
+    LIMIT 1
+  `).get(imageId, filePath, filePath, filePath, filePath);
+  return Boolean(row);
+}
+
+export async function purgeImage(id: string): Promise<ImagePurgeResult> {
+  const existing = getImageById(id);
+  if (!existing) {
+    throw { code: "IMAGE_NOT_FOUND", message: "图片不存在" };
+  }
+  if (!existing.is_deleted) {
+    throw { code: "IMAGE_NOT_DELETED", message: "只能永久删除回收站中的图片" };
+  }
+
+  const deletedFiles: string[] = [];
+  const missingFiles: string[] = [];
+  const errors: string[] = [];
+  const filePaths = collectImageFilePaths(existing);
+
+  for (const filePath of filePaths) {
+    try {
+      if (isPathReferencedByOtherImage(existing.id, filePath)) {
+        errors.push(`文件仍被其他图片记录引用，已保留：${filePath}`);
+        continue;
+      }
+      if (!fs.existsSync(filePath)) {
+        missingFiles.push(filePath);
+        continue;
+      }
+      await fs.remove(filePath);
+      deletedFiles.push(filePath);
+    } catch (err: any) {
+      errors.push(`${filePath}: ${err?.message || "删除失败"}`);
+    }
+  }
+
+  writeOperationLog(existing.id, existing.event_id, "image_purged", {
+    original_filename: existing.original_filename,
+    deleted_files: deletedFiles,
+    missing_files: missingFiles,
+    errors
+  });
+
+  const result = getDatabase().prepare("DELETE FROM images WHERE id = ?").run(existing.id);
+  refreshEventImageCount(existing.event_id);
+
+  return {
+    imageId: existing.id,
+    eventId: existing.event_id,
+    deletedFiles,
+    missingFiles,
+    errors,
+    deletedRecords: result.changes
+  };
 }
 
 export function assertImageFile(id: string, kind: "thumb" | "preview"): { image: ImageRow; filePath: string } {

@@ -1,5 +1,5 @@
 import { io, type Socket } from "socket.io-client";
-import { getApiBase, type EventImageData } from "./api";
+import { getApiBase, type EventImageData, type TaskData } from "./api";
 
 export type RealtimeConnectionState = "connected" | "reconnecting" | "disconnected";
 
@@ -12,6 +12,10 @@ export interface RealtimeImagePayload {
 }
 
 export type RealtimeImageEventName = "image-created" | "image-updated" | "image-deleted-logical";
+export type RealtimeTaskPayload = TaskData & {
+  taskId?: string;
+  action?: string;
+};
 
 let socket: Socket | null = null;
 let socketBaseUrl = "";
@@ -72,4 +76,12 @@ export function subscribeRealtimeImageEvent(
   const activeSocket = getSocket();
   activeSocket.on(eventName, listener);
   return () => activeSocket.off(eventName, listener);
+}
+
+export function subscribeRealtimeTaskEvent(
+  listener: (payload: RealtimeTaskPayload) => void
+): () => void {
+  const activeSocket = getSocket();
+  activeSocket.on("task-updated", listener);
+  return () => activeSocket.off("task-updated", listener);
 }

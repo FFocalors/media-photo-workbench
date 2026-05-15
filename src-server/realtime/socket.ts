@@ -11,10 +11,20 @@ export interface RealtimeImagePayload {
 }
 
 export interface RealtimeTaskPayload {
-  taskId: string;
-  eventId?: string;
+  id?: string;
+  taskId?: string;
+  type: string;
+  eventId: string;
+  title?: string;
   status: string;
-  action: string;
+  action?: string;
+  total: number;
+  finished: number;
+  successCount: number;
+  failedCount: number;
+  skippedCount: number;
+  errors: unknown[];
+  result: unknown;
   updatedAt: string;
 }
 

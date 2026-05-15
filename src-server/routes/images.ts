@@ -5,7 +5,9 @@ import {
   assertImageFile,
   deleteImage,
   ImageDownloadType,
+  purgeImage,
   recordImageDownload,
+  restoreImage,
   updateImageCategory,
   updateImageRating,
   updateImageRemark,
@@ -100,6 +102,31 @@ router.delete("/:id", (req, res) => {
     sendSuccess(res, image);
   } catch (err: any) {
     handleImageError(res, err, "删除图片失败");
+  }
+});
+
+router.patch("/:id/restore", (req, res) => {
+  try {
+    const image = restoreImage(req.params.id, getBaseUrl(req));
+    emitImageUpdated({
+      eventId: image.event_id,
+      imageId: image.id,
+      image,
+      action: "image_restored",
+      updatedAt: nowIso()
+    });
+    sendSuccess(res, image);
+  } catch (err: any) {
+    handleImageError(res, err, "恢复图片失败");
+  }
+});
+
+router.delete("/:id/purge", async (req, res) => {
+  try {
+    const result = await purgeImage(req.params.id);
+    sendSuccess(res, result);
+  } catch (err: any) {
+    handleImageError(res, err, "永久删除图片失败");
   }
 });
 

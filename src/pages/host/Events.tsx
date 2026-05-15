@@ -1,7 +1,19 @@
-import { Archive, FileText, MoreHorizontal, PlayCircle, Plus, Trash2, X } from "lucide-react";
+import { Archive, FileText, MoreHorizontal, PlayCircle, Plus, RotateCcw, Trash2, X } from "lucide-react";
 import { useState, useEffect } from "react";
 import { cn } from "../../lib/cn";
-import { createEvent, deleteEvent, EventData, EventStatus, eventStatusLabels, fetchEvents, updateEventStatus } from "../../lib/api";
+import {
+  createEvent,
+  deleteEvent,
+  EventData,
+  EventStatus,
+  eventStatusLabels,
+  fetchEvents,
+  fetchEventTrash,
+  fetchSettings,
+  purgeEvent,
+  restoreEvent,
+  updateEventStatus
+} from "../../lib/api";
 import { Notice } from "../../components/ui/States";
 
 const statusActions: Array<{ status: EventStatus; label: string; icon: typeof PlayCircle }> = [
@@ -17,6 +29,7 @@ export function EventsPage() {
   const [loading, setLoading] = useState(true);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [isMutating, setIsMutating] = useState(false);
+  const [repositoryPath, setRepositoryPath] = useState("");
   const [message, setMessage] = useState<{ tone: "success" | "warning" | "danger" | "info"; title: string; body: string } | null>(null);
 
   const loadEvents = async (tab: string) => {
@@ -26,7 +39,7 @@ export function EventsPage() {
     if (tab === "已归档") statusFilter = "archived";
 
     try {
-      const res = await fetchEvents(statusFilter);
+      const res = tab === "回收站" ? await fetchEventTrash() : await fetchEvents(statusFilter);
       if (res && res.ok && res.data) {
         setEvents(res.data);
       } else {
@@ -41,6 +54,20 @@ export function EventsPage() {
   useEffect(() => {
     loadEvents(activeTab);
   }, [activeTab]);
+
+  useEffect(() => {
+    const loadSettings = async () => {
+      try {
+        const res = await fetchSettings();
+        if (res.ok && res.data) {
+          setRepositoryPath(res.data.repository.path);
+        }
+      } catch {
+        // The page can still work without showing full physical paths.
+      }
+    };
+    void loadSettings();
+  }, []);
 
   useEffect(() => {
     const closeMenu = () => setOpenMenuId(null);
@@ -124,6 +151,59 @@ export function EventsPage() {
     }
   };
 
+  const handleRestoreEvent = async (event: EventData) => {
+    const confirmed = window.confirm(`恢复活动“${event.name}”？\n\n恢复后活动会回到进行中状态，工作区文件不会移动。`);
+    if (!confirmed) return;
+
+    setIsMutating(true);
+    setOpenMenuId(null);
+    try {
+      const res = await restoreEvent(event.id, "active");
+      if (res.ok && res.data) {
+        await loadEvents(activeTab);
+        setMessage({ tone: "success", title: "活动已恢复", body: `${event.name} 已恢复为进行中。` });
+      } else {
+        setMessage({ tone: "danger", title: "恢复失败", body: res.error?.message || "无法恢复活动。" });
+      }
+    } catch {
+      setMessage({ tone: "danger", title: "恢复失败", body: "请求失败，请确认本地后端服务已启动。" });
+    } finally {
+      setIsMutating(false);
+    }
+  };
+
+  const handlePurgeEvent = async (event: EventData) => {
+    const workingPath = repositoryPath ? `${repositoryPath}\\working\\${event.slug}` : `working\\${event.slug}`;
+    const archivePath = repositoryPath ? `${repositoryPath}\\archive\\${event.slug}` : `archive\\${event.slug}`;
+    const typed = window.prompt(
+      `永久删除活动“${event.name}”？\n\n活动名称：${event.name}\n图片数量：${event.total_images}\n工作区：${workingPath}\n归档目录默认保留：${archivePath}\n\n此操作会删除活动记录和图片记录，不能撤销。\n请输入活动名称确认：`
+    );
+    if (typed !== event.name) {
+      setMessage({ tone: "warning", title: "永久删除已取消", body: "输入的活动名称不一致，未执行删除。" });
+      return;
+    }
+
+    setIsMutating(true);
+    setOpenMenuId(null);
+    try {
+      const res = await purgeEvent(event.id, false);
+      if (res.ok && res.data) {
+        await loadEvents(activeTab);
+        setMessage({
+          tone: res.data.errors.length > 0 ? "warning" : "success",
+          title: "活动已永久删除",
+          body: `删除活动记录 ${res.data.deletedRecords.events} 条，图片记录 ${res.data.deletedRecords.images} 条。归档目录默认保留。`
+        });
+      } else {
+        setMessage({ tone: "danger", title: "永久删除失败", body: res.error?.message || "无法永久删除活动。" });
+      }
+    } catch {
+      setMessage({ tone: "danger", title: "永久删除失败", body: "请求失败，请确认本地后端服务已启动。" });
+    } finally {
+      setIsMutating(false);
+    }
+  };
+
   return (
     <div className="flex h-full flex-1 flex-col overflow-y-auto bg-[#F8F9FA] p-8">
       <div className="mb-6 flex items-center justify-between">
@@ -133,7 +213,7 @@ export function EventsPage() {
         </div>
         <div className="flex items-center gap-4">
           <div className="flex rounded-lg bg-slate-100 p-1">
-            {["全部", "进行中", "已归档"].map((tab) => (
+            {["全部", "进行中", "已归档", "回收站"].map((tab) => (
               <button
                 className={cn(
                   "rounded-md px-4 py-1.5 text-sm font-medium transition-colors",
@@ -242,7 +322,7 @@ export function EventsPage() {
           <div className="mb-4 rounded-full bg-slate-100 p-4 text-slate-300">
             <Plus size={32} />
           </div>
-          <p className="text-lg font-medium text-slate-600">暂无活动，请新建活动</p>
+          <p className="text-lg font-medium text-slate-600">{activeTab === "回收站" ? "活动回收站为空" : "暂无活动，请新建活动"}</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
@@ -285,7 +365,7 @@ export function EventsPage() {
                     </button>
                     {openMenuId === event.id && (
                       <div className="absolute right-0 top-7 z-20 w-40 rounded-xl border border-slate-100 bg-white p-1 shadow-lg" onClick={(clickEvent) => clickEvent.stopPropagation()}>
-                        {statusActions
+                        {activeTab !== "回收站" && statusActions
                           .filter((action) => action.status !== event.status)
                           .map((action) => {
                             const Icon = action.icon;
@@ -302,14 +382,35 @@ export function EventsPage() {
                             );
                           })}
                         <div className="my-1 h-px bg-slate-100" />
-                        <button
-                          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
-                          onClick={() => handleDeleteEvent(event)}
-                          type="button"
-                        >
-                          <Trash2 size={15} />
-                          删除活动
-                        </button>
+                        {activeTab === "回收站" ? (
+                          <>
+                            <button
+                              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-emerald-600 hover:bg-emerald-50"
+                              onClick={() => handleRestoreEvent(event)}
+                              type="button"
+                            >
+                              <RotateCcw size={15} />
+                              恢复活动
+                            </button>
+                            <button
+                              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+                              onClick={() => handlePurgeEvent(event)}
+                              type="button"
+                            >
+                              <Trash2 size={15} />
+                              永久删除
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+                            onClick={() => handleDeleteEvent(event)}
+                            type="button"
+                          >
+                            <Trash2 size={15} />
+                            删除活动
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
@@ -342,6 +443,7 @@ function statusBadgeClass(status: string): string {
   if (status === "active") return "bg-blue-500/90 text-white";
   if (status === "reviewing") return "bg-amber-500/90 text-white";
   if (status === "archived") return "bg-slate-700/90 text-white";
+  if (status === "deleted") return "bg-red-500/90 text-white";
   if (status === "draft") return "bg-white/90 text-slate-600";
   return "bg-white/90 text-slate-500";
 }

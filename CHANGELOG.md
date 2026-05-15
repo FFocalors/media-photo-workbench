@@ -14,7 +14,9 @@
 - **0.6.0**：修图流转
 - **0.7.0**：导出发布
 - **0.8.0**：活动归档
-- **0.9.0**：远程传输预留
+- **0.9.0**：回收站、恢复、永久删除
+- **0.10.0**：任务队列与批量 ZIP 下载
+- **0.11.0**：远程传输预留
 - **1.0.0**：第一个可用于实际活动的稳定版本
 
 ---
@@ -22,6 +24,29 @@
 ## [未发布] (Unreleased)
 
 ### 新增
+- v0.10.0-dev 任务队列与批量 ZIP 下载。
+- 新增内存任务管理器 `src-server/services/tasks.ts`，支持任务创建、更新、完成、失败、查询和取消占位。
+- 新增 `GET /api/tasks`、`GET /api/tasks/:taskId`、`POST /api/tasks/:taskId/cancel`；当前取消接口明确返回 `TASK_CANCEL_NOT_SUPPORTED`。
+- Socket.IO `task-updated` 已接入真实任务，任务状态变化会实时推送到前端。
+- 主机端和客户端新增侧边栏任务中心，显示进行中任务、最近完成任务、失败任务、进度条、错误列表和下载入口。
+- 新增 `POST /api/events/:eventId/download/zip`，支持按选中图片创建批量 ZIP 下载任务。
+- 批量 ZIP 下载支持 `original`、`preview`、`edited`、`best` 四种类型，`best` 会优先使用已修图，缺失时回退原图。
+- 新增 `GET /api/download-packages/:packageId/download` 下载批量 ZIP，并写入 `download_logs` 和 `operation_logs`。
+- 图片墙新增“下载所选 ZIP”，创建任务后在任务中心查看进度和下载结果。
+- 发布导出和活动归档 prepare 增加轻量任务记录，不改变原有接口返回。
+- Phase 9 回收站 / 恢复 / 永久删除闭环。
+- 新增 `GET /api/events/:eventId/images/trash`，支持查看活动图片回收站。
+- 新增 `PATCH /api/images/:id/restore`，支持恢复已逻辑删除图片。
+- 新增 `DELETE /api/images/:id/purge`，仅允许永久删除回收站图片，并清理原图、缩略图、预览图和已修图文件。
+- 新增 `GET /api/events/trash`，支持查看活动回收站。
+- 新增 `PATCH /api/events/:id/restore`，支持恢复已逻辑删除活动。
+- 新增 `DELETE /api/events/:id/purge`，仅允许永久删除 `status = deleted` 的活动，默认清理 working 工作区和主库记录，不删除 archive 归档目录。
+- 活动管理页新增回收站入口，支持恢复活动和输入活动名称二次确认后永久删除。
+- 图片墙新增主机端图片回收站入口，支持批量恢复和二次确认永久删除。
+- Phase 8 活动归档闭环。
+- 新增 `POST /api/events/:eventId/archive/prepare`、`POST /api/events/:eventId/archive/verify`、`POST /api/events/:eventId/archive/cleanup`。
+- 归档会生成 `archive/{event_slug}`，复制原图、已修图、导出文件和压缩包，并生成 `manifest.json`、`images.csv`、`operation_logs.csv` 和独立 `event.db`。
+- 归档验证通过后才允许清理 working 工作区，清理后活动状态更新为 `archived` 并写入 `archived_events` 摘要。
 - Phase 7 导出发布闭环。
 - 新增 `POST /api/events/:eventId/export`，支持手动选择、可发布、已修图、4 星及以上四种导出来源。
 - 发布导出优先使用已修图，缺失时回退原图；原图和已修图都缺失时跳过并记录 errors。
@@ -49,7 +74,7 @@
 - 新增客户端工作区布局和客户端上传页。
 - 新增 `POST /api/events/:eventId/upload`，支持 multipart 多文件 JPG/JPEG 上传。
 - 客户端上传复用现有图片处理管线，保存到 `原图/客户端上传`，生成 WebP 缩略图/预览图，读取 EXIF，写入 `images`，并广播 `image-created`。
-- 客户端上传支持摄影师、设备名和备注字段，使用 `file_hash` 去重，重复计入 `skipped`。
+- 客户端上传支持摄影师、设备名和备注字段，使用 `event_id + file_hash` 在同一活动内去重，重复计入 `skipped`。
 - Phase 5B Socket.IO 实时同步基础能力。
 - 后端新增 Socket.IO 服务，复用当前 Express HTTP server 端口，兼容 3030-3040 自动端口机制。
 - 新增实时广播模块，提供 `image-created`、`image-updated`、`image-deleted-logical` 和 `task-updated` 事件入口。
@@ -75,9 +100,9 @@
 - 新增 `POST /api/events/:eventId/import/scan`，支持非递归扫描本地 JPG/JPEG 文件夹。
 - 新增 `POST /api/events/:eventId/import/start`，支持同步导入主机本地图片。
 - 导入流程复制原图到 `原图/主机导入`，通过 `sharp` 生成 `缩略图` 和 `预览图` WebP 文件，并通过 `exifr` 尝试读取 EXIF。
-- 导入流程使用 sha256 `file_hash` 去重，重复图片计入 `skipped`。
+- 导入流程使用 sha256 `file_hash` 在同一活动内去重，重复图片计入 `skipped`。
 - 前端图片导入页接入真实活动、文件夹选择、扫描结果、导入结果和失败提示。
-- 新增 `idx_images_file_hash` 索引用于导入去重查询。
+- 新增 `idx_images_file_hash` 与 `idx_images_event_hash` 索引用于导入去重查询。
 - 新增 `GET /api/events/:eventId/images`，支持分页、星级、状态、来源和关键字筛选。
 - 新增 `GET /api/images/:id/thumb` 和 `GET /api/images/:id/preview`，按图片 ID 返回缩略图和预览图文件。
 - 新增图片星级、状态、分类、备注更新 API，并写入 `operation_logs`。
@@ -85,6 +110,7 @@
 - 图片预览弹窗保留打星、状态流转、左右切换和关闭快捷键。
 
 ### 修复
+- 修复图片导入去重范围过大的问题：`file_hash` 去重现在只在同一活动内生效，不同活动可以导入同一张图片。
 - 修复旧 SQLite 库升级到图片逻辑删除字段时，`idx_images_deleted` 先于字段迁移执行，导致后端服务启动失败的问题。
 - 修复运行中的旧后端尚未返回文件状态字段时，前端把 `undefined` 误判为文件缺失，导致图片墙全部显示“原图缺失/预览图缺失”的问题。
 - 修复图片墙批量操作菜单悬浮后难以点击菜单项的问题，改为点击展开的受控菜单。
@@ -110,10 +136,10 @@
 
 ### 计划实现
 - 将图片导入升级为任务队列和进度轮询。
-- 将待修包生成和大批量已修图回传升级为任务队列和进度轮询。
-- 补齐批量下载和客户端侧批量下载流程。
-- 补齐活动回收站与永久删除流程：查看已删除活动、恢复活动、二次确认后永久删除活动记录、图片记录和工作区文件。
-- 补齐图片回收站、恢复图片和永久删除图片文件流程。
+- 将待修包生成、大批量已修图回传、归档清理和永久删除继续接入任务系统。
+- 增加任务持久化、真正取消和重试能力。
+- 补齐归档活动只读打开。
+- 补齐远程传输预留入口。
 
 ---
 

@@ -156,7 +156,8 @@
 - `idx_images_event_id`：按活动查询图片。
 - `idx_images_status`：按图片状态筛选。
 - `idx_images_rating`：按星级筛选。
-- `idx_images_file_hash`：Phase 3 主机本地导入按 sha256 `file_hash` 去重；发现已有相同 hash 时跳过导入。
+- `idx_images_file_hash`：Phase 3 主机本地导入按 sha256 `file_hash` 去重；去重范围为同一活动，发现当前 `event_id` 下已有相同 hash 时跳过导入。
+- `idx_images_event_hash`：按 `event_id + file_hash` 加速同一活动内去重查询。
 - `idx_images_deleted`：默认图片墙查询过滤 `is_deleted = 0`。
 
 ### `events.status`
@@ -183,7 +184,9 @@
 - `publish`：可发布（直出标记可发 或 修片验收通过）
 - `published`：已实际导出或打包发布过（标记记录用）
 
-> 图片删除不复用 `images.status`，而是通过 `is_deleted/deleted_at` 表达生命周期。当前图片墙删除为逻辑删除，只隐藏记录，不删除原图、缩略图、预览图或已修图文件。
+> 图片删除不复用 `images.status`，而是通过 `is_deleted/deleted_at` 表达生命周期。图片墙删除为逻辑删除，只隐藏记录，不删除原图、缩略图、预览图或已修图文件；图片回收站可恢复，也可在二次确认后永久删除图片记录及其关联文件。
+
+> 活动删除通过 `events.status = deleted` 表达。活动回收站可恢复活动；永久删除仅允许对 `deleted` 活动执行，默认清理 working 工作区、活动图片记录和活动记录，不删除 archive 归档目录。
 
 ### `download_logs.download_type` (对应 `download_logs.type`)
 - `original`：获取单张或多张原图
@@ -198,3 +201,9 @@
 - `success`：全部处理成功
 - `failed`：中途报错中止或发生致命失败
 - `cancelled`：用户主动手动取消任务
+
+## 任务系统说明
+
+v0.10.0-dev 第一版任务系统使用内存任务管理器，不新增 `tasks` 表。任务字段包括 `id`、`type`、`eventId`、`title`、`status`、`total`、`finished`、`successCount`、`failedCount`、`skippedCount`、`errors`、`result`、`createdAt`、`updatedAt`、`finishedAt`。
+
+当前任务数据用于运行期进度展示和 Socket.IO `task-updated` 实时推送；应用重启后任务列表会清空。后续如需要跨重启追踪、重试或审计，再新增持久化任务表。

@@ -7,16 +7,21 @@ import {
   updateEvent,
   updateEventStatus,
   deleteEvent,
+  listDeletedEvents,
+  purgeEvent,
+  restoreEvent,
   CreateEventInput
 } from "../services/events";
 import { importImageFiles, importImages, scanImportFolder } from "../services/imageImport";
-import { getImageDtoById, listEventImages } from "../services/images";
+import { getImageDtoById, listEventImages, listEventTrashedImages } from "../services/images";
 import { getLogger } from "../utils/logger";
 import { emitImageCreated } from "../realtime/socket";
 import { parseMultipartForm } from "../utils/multipart";
 import { createEditPackage, uploadEditedImages } from "../services/editWorkflow";
 import { createPublishExport } from "../services/publishExport";
 import { cleanupEventArchive, prepareEventArchive, verifyEventArchive } from "../services/archive";
+import { createDownloadZipTask } from "../services/downloadPackages";
+import { createTask, failTask, finishTask, updateTask } from "../services/tasks";
 
 const router = Router();
 
@@ -57,6 +62,19 @@ router.get("/", (req, res) => {
 });
 
 /**
+ * GET /api/events/trash
+ * 获取已逻辑删除的活动列表。
+ */
+router.get("/trash", (_req, res) => {
+  try {
+    sendSuccess(res, listDeletedEvents());
+  } catch (err) {
+    getLogger().error({ err }, "获取活动回收站失败");
+    sendError(res, "LIST_EVENT_TRASH_FAILED", "获取活动回收站失败", 500);
+  }
+});
+
+/**
  * POST /api/events
  * 创建新活动。
  */
@@ -87,6 +105,31 @@ router.post("/", (req, res) => {
     } else {
       logger.error({ err }, "创建活动失败");
       sendError(res, "CREATE_EVENT_FAILED", "创建活动失败", 500);
+    }
+  }
+});
+
+/**
+ * GET /api/events/:id/images/trash
+ * 查询活动图片回收站。
+ */
+router.get("/:id/images/trash", (req, res) => {
+  try {
+    const result = listEventTrashedImages(req.params.id, {
+      page: req.query.page ? Number(req.query.page) : undefined,
+      pageSize: req.query.pageSize ? Number(req.query.pageSize) : undefined,
+      rating: req.query.rating ? Number(req.query.rating) : undefined,
+      status: typeof req.query.status === "string" ? req.query.status : undefined,
+      sourceType: typeof req.query.source_type === "string" ? req.query.source_type : undefined,
+      keyword: typeof req.query.keyword === "string" ? req.query.keyword : undefined
+    }, `${req.protocol}://${req.get("host")}`);
+    sendSuccess(res, result);
+  } catch (err: any) {
+    if (err?.code) {
+      sendError(res, err.code, err.message, 400);
+    } else {
+      getLogger().error({ err }, "查询图片回收站失败");
+      sendError(res, "LIST_IMAGE_TRASH_FAILED", "查询图片回收站失败", 500);
     }
   }
 });
@@ -285,11 +328,42 @@ router.post("/:id/edited/upload", async (req, res) => {
 });
 
 /**
+ * POST /api/events/:id/download/zip
+ * 创建批量 ZIP 下载任务。
+ */
+router.post("/:id/download/zip", (req, res) => {
+  try {
+    const result = createDownloadZipTask(req.params.id, {
+      imageIds: Array.isArray(req.body.imageIds) ? req.body.imageIds : [],
+      type: req.body.type,
+      filenameMode: req.body.filenameMode,
+      baseUrl: getBaseUrl(req)
+    });
+    sendSuccess(res, result, 202);
+  } catch (err: any) {
+    if (err?.code) {
+      const status = err.code === "EVENT_NOT_FOUND" ? 404 : 400;
+      sendError(res, err.code, err.message, status);
+    } else {
+      getLogger().error({ err }, "创建批量下载任务失败");
+      sendError(res, "CREATE_DOWNLOAD_ZIP_TASK_FAILED", "创建批量下载任务失败", 500);
+    }
+  }
+});
+
+/**
  * POST /api/events/:id/export
  * 生成正式发布图和发布 ZIP。
  */
 router.post("/:id/export", async (req, res) => {
+  const task = createTask({
+    type: "publish_export",
+    eventId: req.params.id,
+    title: "发布导出",
+    total: 1
+  });
   try {
+    updateTask(task.id, { status: "running" });
     const result = await createPublishExport({
       eventId: req.params.id,
       mode: req.body.mode,
@@ -301,8 +375,19 @@ router.post("/:id/export", async (req, res) => {
       limitFileSize10Mb: req.body.limitFileSize10Mb === true,
       baseUrl: getBaseUrl(req)
     });
+    finishTask(task.id, {
+      jobId: result.jobId,
+      downloadUrl: result.downloadUrl,
+      outputDir: result.outputDir,
+      zipPath: result.zipPath,
+      total: result.total,
+      success: result.success,
+      failed: result.failed,
+      errors: result.errors
+    });
     sendSuccess(res, result);
   } catch (err: any) {
+    failTask(task.id, [{ reason: err?.message || "发布导出失败" }]);
     if (err?.code) {
       const status = err.code === "EVENT_NOT_FOUND" ? 404 : 400;
       sendError(res, err.code, err.message, status);
@@ -318,10 +403,28 @@ router.post("/:id/export", async (req, res) => {
  * 生成活动归档目录、清单、CSV 和独立 event.db。
  */
 router.post("/:id/archive/prepare", async (req, res) => {
+  const task = createTask({
+    type: "archive_prepare",
+    eventId: req.params.id,
+    title: "生成活动归档",
+    total: 1
+  });
   try {
+    updateTask(task.id, { status: "running" });
     const result = await prepareEventArchive(req.params.id);
+    finishTask(task.id, {
+      archivePath: result.archivePath,
+      totalImages: result.totalImages,
+      originalCopied: result.originalCopied,
+      editedCopied: result.editedCopied,
+      exportCopied: result.exportCopied,
+      missingFiles: result.missingFiles,
+      manifestPath: result.manifestPath,
+      eventDbPath: result.eventDbPath
+    });
     sendSuccess(res, result);
   } catch (err: any) {
+    failTask(task.id, [{ reason: err?.message || "生成活动归档失败" }]);
     if (err?.code) {
       const status = err.code === "EVENT_NOT_FOUND" ? 404 : 400;
       sendError(res, err.code, err.message, status);
@@ -444,6 +547,29 @@ router.patch("/:id/status", (req, res) => {
 });
 
 /**
+ * PATCH /api/events/:id/restore
+ * 从活动回收站恢复活动。
+ */
+router.patch("/:id/restore", (req, res) => {
+  try {
+    const status = typeof req.body?.status === "string" ? req.body.status : "active";
+    const event = restoreEvent(req.params.id, status);
+    if (!event) {
+      sendError(res, "EVENT_NOT_FOUND", "活动不存在", 404);
+      return;
+    }
+    sendSuccess(res, event);
+  } catch (err: any) {
+    if (err?.code) {
+      sendError(res, err.code, err.message, 400);
+    } else {
+      getLogger().error({ err }, "恢复活动失败");
+      sendError(res, "RESTORE_EVENT_FAILED", "恢复活动失败", 500);
+    }
+  }
+});
+
+/**
  * DELETE /api/events/:id
  * 逻辑删除活动，只标记 status = deleted，不删除文件。
  */
@@ -458,6 +584,27 @@ router.delete("/:id", (req, res) => {
   } catch (err) {
     getLogger().error({ err }, "删除活动失败");
     sendError(res, "DELETE_EVENT_FAILED", "删除活动失败", 500);
+  }
+});
+
+/**
+ * DELETE /api/events/:id/purge
+ * 永久删除已进入回收站的活动。
+ */
+router.delete("/:id/purge", async (req, res) => {
+  try {
+    const result = await purgeEvent(req.params.id, {
+      includeArchive: req.body?.includeArchive === true
+    });
+    sendSuccess(res, result);
+  } catch (err: any) {
+    if (err?.code) {
+      const status = err.code === "EVENT_NOT_FOUND" ? 404 : 400;
+      sendError(res, err.code, err.message, status);
+    } else {
+      getLogger().error({ err }, "永久删除活动失败");
+      sendError(res, "PURGE_EVENT_FAILED", "永久删除活动失败", 500);
+    }
   }
 });
 

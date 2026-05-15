@@ -25,6 +25,7 @@ function runLightweightMigrations(db: Database.Database): void {
   }
 
   db.exec("CREATE INDEX IF NOT EXISTS idx_images_deleted ON images(is_deleted)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_images_event_hash ON images(event_id, file_hash)");
 }
 
 /**

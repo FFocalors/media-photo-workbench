@@ -255,15 +255,15 @@ working/{event_slug}/清单
   - `DELETE_EVENT_FAILED`：删除失败。
 - **备注**：这是逻辑删除，只写入 `status = deleted`，不删除 SQLite 记录、不删除原图、不删除缩略图/预览图、不清理活动工作区。
 
-### [计划中] 获取活动回收站列表
-- **用途**：查看已逻辑删除的活动，后续支持恢复或永久删除。
+### [已实现] 获取活动回收站列表
+- **用途**：查看已逻辑删除的活动，支持恢复或永久删除。
 - **请求方法**：`GET`
 - **路径**：`/api/events/trash`
 - **请求参数示例**：无
-- **响应示例**：略
+- **响应示例**：返回 `status = deleted` 的活动数组。
 - **备注**：只返回 `status = deleted` 的活动。
 
-### [计划中] 恢复已删除活动
+### [已实现] 恢复已删除活动
 - **用途**：将回收站中的活动恢复为可用状态。
 - **请求方法**：`PATCH`
 - **路径**：`/api/events/:id/restore`
@@ -271,29 +271,53 @@ working/{event_slug}/清单
   ```json
   { "status": "active" }
   ```
-- **响应示例**：略
-- **备注**：图片仍通过 `event_id` 归属该活动，恢复时不需要移动图片文件。
+- **响应示例**：返回恢复后的活动对象。
+- **错误码**：
+  - `EVENT_NOT_FOUND`：活动不存在。
+  - `EVENT_NOT_DELETED`：活动不在回收站中。
+  - `INVALID_RESTORE_STATUS`：恢复目标不是 `active | draft`。
+- **备注**：图片仍通过 `event_id` 归属该活动，恢复时不移动图片文件。
 
-### [计划中] 永久删除活动及工作区
+### [已实现] 永久删除活动及工作区
 - **用途**：彻底删除活动记录、图片记录和对应工作区文件。
 - **请求方法**：`DELETE`
 - **路径**：`/api/events/:id/purge`
 - **请求参数示例**：
   ```json
-  { "confirmName": "2026毕业典礼" }
+  { "includeArchive": false }
   ```
-- **响应示例**：略
-- **备注**：仅允许对 `status = deleted` 的活动执行。必须二次确认，删除前应展示图片数量和工作区路径，失败时返回明确错误并记录日志。
+- **响应示例**：
+  ```json
+  {
+    "ok": true,
+    "data": {
+      "eventId": "evt_xxx",
+      "deletedFiles": ["E:\\仓库\\working\\活动\\原图\\..."],
+      "deletedRecords": { "events": 1, "images": 12 },
+      "missingFiles": [],
+      "errors": [],
+      "workingPath": "E:\\仓库\\working\\活动",
+      "archivePath": "E:\\仓库\\archive\\活动"
+    },
+    "error": null
+  }
+  ```
+- **错误码**：
+  - `EVENT_NOT_FOUND`：活动不存在。
+  - `EVENT_NOT_DELETED`：活动不在回收站中。
+  - `REPOSITORY_NOT_READY`：仓库路径不可用。
+  - `EVENT_PURGE_FILE_FAILED`：工作区文件删除失败。
+- **备注**：仅允许对 `status = deleted` 的活动执行。前端必须二次确认并建议输入活动名称。默认不删除 `archive/{event_slug}`，只有明确传 `includeArchive = true` 时才删除归档目录。
 
-### [计划中] 触发活动归档
-- **用途**：执行活动归档流程。
+### [已实现] 准备活动归档
+- **用途**：执行活动归档准备流程。
 - **请求方法**：`POST`
-- **路径**：`/api/events/:id/archive`
+- **路径**：`/api/events/:eventId/archive/prepare`
 - **请求参数示例**：无
-- **响应示例**：略
-- **备注**：无
+- **响应示例**：返回归档目录、复制数量、缺失文件、`manifestPath` 和 `eventDbPath`。
+- **备注**：生成 `archive/{event_slug}`，复制原图、已修图、发布图和压缩包，并生成 `metadata/manifest.json`、`images.csv`、`operation_logs.csv` 和独立 `event.db`。
 
-### [计划中] 获取已归档活动列表
+### [已实现] 获取已归档活动列表
 - **用途**：获取历史已归档的只读活动列表摘要。
 - **请求方法**：`GET`
 - **路径**：`/api/archived-events`
@@ -460,6 +484,53 @@ working/{event_slug}/清单
   - `IMAGE_NOT_FOUND`：图片不存在。
 - **备注**：该接口只写入 `images.is_deleted = 1` 和 `deleted_at`，并写入 `operation_logs.type = image_deleted_logical`。默认图片查询不会再返回已逻辑删除图片。
 
+### [已实现] 查询图片回收站
+- **用途**：查看某个活动下已逻辑删除的图片。
+- **请求方法**：`GET`
+- **路径**：`/api/events/:eventId/images/trash`
+- **请求参数示例**：
+  ```text
+  ?page=1&pageSize=80
+  ```
+- **响应示例**：分页返回 `is_deleted = 1` 的图片，字段与普通图片查询保持一致，并额外包含 `original_path`、`thumb_path`、`preview_path`、`edited_path`，用于永久删除前展示。
+- **备注**：仅回收站视图返回文件路径，普通图片墙查询不暴露路径。
+
+### [已实现] 恢复图片
+- **用途**：把回收站图片恢复到图片墙。
+- **请求方法**：`PATCH`
+- **路径**：`/api/images/:id/restore`
+- **请求参数示例**：无
+- **响应示例**：返回恢复后的图片对象。
+- **错误码**：
+  - `IMAGE_NOT_FOUND`：图片不存在。
+  - `IMAGE_NOT_DELETED`：图片不在回收站中。
+- **备注**：恢复会写入 `operation_logs.type = image_restored`，并广播 `image-updated`。
+
+### [已实现] 永久删除图片
+- **用途**：永久删除回收站图片记录及其关联文件。
+- **请求方法**：`DELETE`
+- **路径**：`/api/images/:id/purge`
+- **请求参数示例**：无
+- **响应示例**：
+  ```json
+  {
+    "ok": true,
+    "data": {
+      "imageId": "img_xxx",
+      "eventId": "evt_xxx",
+      "deletedFiles": ["E:\\仓库\\working\\活动\\缩略图\\img_xxx.webp"],
+      "missingFiles": [],
+      "errors": [],
+      "deletedRecords": 1
+    },
+    "error": null
+  }
+  ```
+- **错误码**：
+  - `IMAGE_NOT_FOUND`：图片不存在。
+  - `IMAGE_NOT_DELETED`：图片不在回收站中。
+- **备注**：仅允许对 `is_deleted = 1` 的图片执行。文件不存在会进入 `missingFiles`，不会直接导致整个请求失败；如果某个文件仍被其他图片记录引用，后端会保留该文件并返回 warning。
+
 ---
 
 ## 五、Import 图片导入
@@ -550,16 +621,55 @@ working/{event_slug}/清单
   - 原图复制到 `working/{event_slug}/原图/主机导入`。
   - 缩略图写入 `working/{event_slug}/缩略图/{imageId}.webp`，长边 400px。
   - 预览图写入 `working/{event_slug}/预览图/{imageId}.webp`，长边 1600px。
-  - 通过 sha256 `file_hash` 去重，重复图片计入 `skipped`。
+  - 通过 sha256 `file_hash` 在同一活动内去重，当前活动已有相同图片时计入 `skipped`。
   - EXIF 读取失败不会导致导入失败。
 
-### [计划中] 获取任务进度
-- **用途**：轮询获取长时间任务的进度。
+### [已实现] 获取任务列表
+- **用途**：获取当前运行期内的任务列表。
+- **请求方法**：`GET`
+- **路径**：`/api/tasks`
+- **请求参数示例**：无
+- **响应示例**：返回任务数组，按创建时间倒序。
+- **备注**：v0.10.0-dev 第一版任务系统使用内存存储，应用重启后任务记录会清空。
+
+### [已实现] 获取任务详情
+- **用途**：获取单个任务的状态和结果。
 - **请求方法**：`GET`
 - **路径**：`/api/tasks/:taskId`
 - **请求参数示例**：无
-- **响应示例**：略
-- **备注**：用于前端进度条显示。
+- **响应示例**：
+  ```json
+  {
+    "ok": true,
+    "data": {
+      "id": "task_xxx",
+      "type": "download_zip",
+      "eventId": "evt_xxx",
+      "title": "生成批量下载 ZIP",
+      "status": "running",
+      "total": 10,
+      "finished": 4,
+      "successCount": 4,
+      "failedCount": 0,
+      "skippedCount": 0,
+      "errors": [],
+      "result": null,
+      "createdAt": "2026-05-15T10:00:00.000Z",
+      "updatedAt": "2026-05-15T10:00:01.000Z",
+      "finishedAt": ""
+    },
+    "error": null
+  }
+  ```
+
+### [已实现] 取消任务占位
+- **用途**：取消任务。
+- **请求方法**：`POST`
+- **路径**：`/api/tasks/:taskId/cancel`
+- **请求参数示例**：无
+- **错误码**：
+  - `TASK_CANCEL_NOT_SUPPORTED`：当前版本暂不支持真正取消。
+- **备注**：第一版先显式返回错误，避免静默假取消。
 
 ---
 
@@ -618,7 +728,7 @@ working/{event_slug}/清单
   - 后端会先将上传文件写入系统临时目录，导入完成后清理临时文件。
   - 原图复制到 `working/{event_slug}/原图/客户端上传`，不移动、不删除客户端源文件。
   - 缩略图和预览图仍写入活动的 `缩略图`、`预览图` 目录。
-  - 使用 sha256 `file_hash` 去重，重复图片计入 `skipped`。
+  - 使用 sha256 `file_hash` 在同一活动内去重，当前活动已有相同图片时计入 `skipped`。
   - 上传成功后广播 `image-created`。
 
 ### [计划中] 获取上传任务状态
@@ -667,16 +777,54 @@ working/{event_slug}/清单
   - `IMAGE_FILE_NOT_FOUND`：已修图文件不存在。
 - **备注**：后端按 `image.id` 查询 `edited_path` 后下载，不暴露仓库目录。下载成功后写入 `download_logs` 和 `operation_logs`。
 
-### [计划中] 生成 ZIP 下载包
+### [已实现] 生成 ZIP 下载包
 - **用途**：将选中的多张图打包成 ZIP 下载。
 - **请求方法**：`POST`
 - **路径**：`/api/events/:eventId/download/zip`
 - **请求参数示例**：
   ```json
-  { "imageIds": ["img_1", "img_2"] }
+  {
+    "imageIds": ["img_1", "img_2"],
+    "type": "best",
+    "filenameMode": "sequence"
+  }
   ```
-- **响应示例**：略
-- **备注**：无
+- **响应示例**：
+  ```json
+  {
+    "ok": true,
+    "data": {
+      "taskId": "task_xxx"
+    },
+    "error": null
+  }
+  ```
+- **type 支持**：
+  - `original`：原图。
+  - `preview`：预览图。
+  - `edited`：已修图。
+  - `best`：优先已修图，缺失时回退原图。
+- **filenameMode 支持**：
+  - `sequence`：按顺序加 `001_` 前缀。
+  - `original`：尽量保留原文件名。
+- **错误码**：
+  - `EVENT_NOT_FOUND`：活动不存在。
+  - `EVENT_NOT_DOWNLOADABLE`：活动不可下载。
+  - `NO_DOWNLOAD_IMAGES`：没有选择图片。
+  - `INVALID_DOWNLOAD_ZIP_TYPE`：下载类型无效。
+  - `INVALID_FILENAME_MODE`：文件命名方式无效。
+- **备注**：必须走任务系统。ZIP 写入 `working/{event_slug}/导出/压缩包`，缺失文件进入任务 `errors`，任务完成后 `result.downloadUrl` 可用于下载。
+
+### [已实现] 下载批量 ZIP 包
+- **用途**：下载已经生成的批量 ZIP。
+- **请求方法**：`GET`
+- **路径**：`/api/download-packages/:packageId/download`
+- **请求参数示例**：无
+- **响应示例**：返回 ZIP 文件流，并带 `Content-Disposition` 下载头。
+- **错误码**：
+  - `DOWNLOAD_PACKAGE_NOT_FOUND`：下载包不存在或服务已重启。
+  - `DOWNLOAD_PACKAGE_FILE_NOT_FOUND`：ZIP 文件不存在。
+- **备注**：下载成功写入 `download_logs.type = zip` 和 `operation_logs.type = download_zip_downloaded`。
 
 ---
 
@@ -923,29 +1071,32 @@ working/{event_slug}/清单
 
 ## 十、Archive 活动归档
 
-### [计划中] 准备归档
+### [已实现] 准备归档
 - **用途**：生成独立的归档目录及 `event.db`。
 - **请求方法**：`POST`
 - **路径**：`/api/events/:eventId/archive/prepare`
 - **请求参数示例**：无
-- **响应示例**：略
-- **备注**：无
+- **响应示例**：返回 `archivePath`、图片数量、原图/已修图/导出文件复制数量、缺失文件、`manifestPath` 和 `eventDbPath`。
+- **备注**：归档目录位于 `archive/{event_slug}`；如果目录已存在，会使用时间后缀避免覆盖。
 
-### [计划中] 验证归档完整性
+### [已实现] 验证归档完整性
 - **用途**：比对文件数量、hash，确保没有漏归档。
 - **请求方法**：`POST`
 - **路径**：`/api/events/:eventId/archive/verify`
 - **请求参数示例**：无
-- **响应示例**：略
-- **备注**：无
+- **响应示例**：返回 `verified`、`missingFiles` 和 `mismatchedFiles`。
+- **备注**：读取 `metadata/manifest.json` 验证归档文件。
 
-### [计划中] 清理工作区
+### [已实现] 清理工作区
 - **用途**：用户确认归档无误后，安全删除 working 目录下的原活动文件。
 - **请求方法**：`POST`
 - **路径**：`/api/events/:eventId/archive/cleanup`
-- **请求参数示例**：无
-- **响应示例**：略
-- **备注**：主数据库中仅保留该活动的摘要信息。
+- **请求参数示例**：
+  ```json
+  { "confirm": true }
+  ```
+- **响应示例**：返回清理后的 `workingPath`、活动状态和归档摘要。
+- **备注**：只有归档验证通过后才能清理。第一版保留主库图片详细记录，活动状态改为 `archived`，并写入 `archived_events` 摘要。
 
 ### [计划中] 读取历史归档数据
 - **用途**：打开只读的历史归档页面。
@@ -983,7 +1134,7 @@ working/{event_slug}/清单
 - `image-created`：主机本地导入或客户端上传成功后广播。
 - `image-updated`：图片星级、状态、分类或备注更新后广播。
 - `image-deleted-logical`：图片逻辑删除后广播。
-- `task-updated`：后台任务更新预留事件，目前未接入具体任务队列。
+- `task-updated`：任务状态变化后广播，当前已接入批量 ZIP 下载、发布导出和活动归档 prepare。
 - `export-created`：发布导出完成后广播，当前前端暂未消费该事件。
 
 图片事件 payload 示例：

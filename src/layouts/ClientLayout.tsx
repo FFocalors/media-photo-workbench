@@ -1,5 +1,6 @@
 import { ArrowLeft, LayoutGrid, LinkIcon, UploadCloud } from "lucide-react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { TaskCenter } from "../components/tasks/TaskCenter";
 import { Notice } from "../components/ui/States";
 import { getClientApiBase } from "../lib/api";
 import { cn } from "../lib/cn";
@@ -66,6 +67,10 @@ export function ClientLayout() {
               {item.label}
             </NavLink>
           ))}
+        </div>
+
+        <div className="border-t border-slate-50 px-3 py-3">
+          <TaskCenter />
         </div>
 
         <div className="border-t border-slate-50 p-4">

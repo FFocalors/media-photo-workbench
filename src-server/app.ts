@@ -8,6 +8,8 @@ import imagesRouter from "./routes/images";
 import editPackagesRouter from "./routes/editPackages";
 import exportsRouter from "./routes/exports";
 import archivedEventsRouter from "./routes/archivedEvents";
+import tasksRouter from "./routes/tasks";
+import downloadPackagesRouter from "./routes/downloadPackages";
 
 /**
  * 创建 Express 应用实例。
@@ -28,6 +30,8 @@ export function createApp(): express.Application {
   app.use("/api/edit-packages", editPackagesRouter);
   app.use("/api/exports", exportsRouter);
   app.use("/api/archived-events", archivedEventsRouter);
+  app.use("/api/tasks", tasksRouter);
+  app.use("/api/download-packages", downloadPackagesRouter);
 
   return app;
 }

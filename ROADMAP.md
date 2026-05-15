@@ -2,7 +2,7 @@
 
 ## 当前阶段状态
 
-项目已完成 Phase 7：导出发布。当前代码已经支持主机本地导入、真实图片墙、基础选片、单图下载、Socket.IO 实时同步、客户端上传协作、修图流转，以及按可发布、已修图、4 星及以上或手动选择生成发布图和 ZIP 发布包。
+项目已进入 v0.10.0-dev：任务队列与批量 ZIP 下载。当前代码已经支持主机本地导入、真实图片墙、基础选片、单图下载、Socket.IO 实时同步、客户端上传协作、修图流转、发布导出、活动归档、活动/图片回收站恢复和安全永久删除，并开始提供统一任务中心和批量 ZIP 下载。
 
 ## 已完成
 
@@ -34,7 +34,7 @@
 - 第一版只识别 JPG/JPEG。
 - 导入时只复制原图，不移动、不删除、不覆盖。
 - 复制到 `working/{event_slug}/原图/主机导入`。
-- 使用 sha256 `file_hash` 去重，重复图片计入 `skipped`。
+- 使用 sha256 `file_hash` 在同一活动内去重，重复图片计入 `skipped`。
 - 通过 `sharp` 生成 `缩略图/{imageId}.webp` 和 `预览图/{imageId}.webp`。
 - 通过 `exifr` 尝试读取 EXIF，失败不阻断导入。
 - 写入 `images` 表并更新活动图片总数。
@@ -76,7 +76,7 @@
 - 客户端模式隐藏主机专属的图片逻辑删除入口。
 - 新增 `POST /api/events/:eventId/upload`，支持 multipart 多文件 JPG/JPEG 上传。
 - 客户端上传复用图片导入管线，保存到 `原图/客户端上传`，生成缩略图/预览图，写入 `images`，`source = client_upload`。
-- 客户端上传使用 `file_hash` 去重，重复计入 `skipped`，成功后广播 `image-created`。
+- 客户端上传使用 `file_hash` 在同一活动内去重，重复计入 `skipped`，成功后广播 `image-created`。
 
 ### Phase 6：修图流转
 - `POST /api/events/:eventId/edit-package` 生成待修包。
@@ -103,24 +103,43 @@
 - 导出完成后广播 `export-created`。
 - 导出发布页接入真实 API，支持活动选择、来源选择、规格、质量、10MB 限制、命名规则、结果展示、ZIP 下载和打开导出目录。
 
+### Phase 8：活动归档
+- `POST /api/events/:eventId/archive/prepare` 生成活动归档目录。
+- 归档复制原图、已修图、导出发布图和压缩包到 `archive/{event_slug}`。
+- 生成 `metadata/manifest.json`、`images.csv`、`operation_logs.csv` 和独立 `event.db`。
+- `POST /api/events/:eventId/archive/verify` 验证归档文件存在性和 hash。
+- `POST /api/events/:eventId/archive/cleanup` 在验证通过后清理 `working/{event_slug}`，更新活动状态为 `archived`，并写入 `archived_events` 摘要。
+- 归档页接入真实流程，清理工作区前必须二次确认。
+
+### Phase 9：回收站 / 恢复 / 永久删除
+- `GET /api/events/:eventId/images/trash` 查看已逻辑删除图片。
+- `PATCH /api/images/:id/restore` 恢复回收站图片，恢复后图片墙重新显示。
+- `DELETE /api/images/:id/purge` 仅允许永久删除回收站图片，清理对应文件和 `images` 记录。
+- 图片墙新增主机端回收站入口，支持批量恢复和二次确认永久删除。
+- `GET /api/events/trash` 查看已逻辑删除活动。
+- `PATCH /api/events/:id/restore` 恢复活动到 `active` 或 `draft`。
+- `DELETE /api/events/:id/purge` 仅允许永久删除 `status = deleted` 的活动，默认删除 working 工作区、活动图片记录和活动记录，不删除 archive 归档目录。
+- 活动管理页新增回收站入口，永久删除前要求输入活动名称。
+
+### v0.10.0-dev：任务队列与批量 ZIP 下载
+- 新增内存任务管理器，提供 `pending`、`running`、`success`、`failed`、`cancelled` 状态。
+- 新增 `GET /api/tasks`、`GET /api/tasks/:taskId`、`POST /api/tasks/:taskId/cancel`。
+- 任务变化通过 Socket.IO `task-updated` 实时广播。
+- 主机和客户端侧边栏新增任务中心，显示进行中、最近完成、失败任务、进度条、错误列表和下载入口。
+- 新增 `POST /api/events/:eventId/download/zip`，按选中图片生成批量下载 ZIP。
+- 支持批量下载类型：原图、预览图、已修图、最佳版本（优先已修图，否则原图）。
+- 新增 `GET /api/download-packages/:packageId/download` 下载生成的批量 ZIP。
+- 发布导出和归档 prepare 保持原接口返回不变，同时增加轻量任务记录和进度可见性。
+
 ## 下一步
 
-### Phase 8：活动归档
-- 活动归档、归档验证、工作区清理。
+### 后续任务系统增强
+- 将导入、待修包生成、大批量已修图回传、归档清理和永久删除继续纳入统一任务模型。
+- 增加真正取消、任务持久化和重试能力。
+
+### 后续增强
 - 归档活动只读打开。
-
-### 待完善：活动回收站与永久删除
-- 当前活动“删除”只做逻辑删除：`status = deleted`，图片仍归属于该活动，不删除工作区文件。
-- 后续需要新增回收站入口，支持查看已删除活动、恢复活动。
-- 后续需要新增永久删除流程，删除前明确展示图片数量和工作区路径，并要求二次确认。
-- 永久删除应清理活动工作区文件、`images` 记录和 `events` 记录，避免孤儿图片或数据库指向不存在文件。
-- 永久删除失败时必须有错误提示和日志，不能静默失败。
-
-### 待完善：图片回收站与永久删除
-- 当前图片墙“删除所选”只做逻辑删除：`images.is_deleted = 1`，不删除任何图片文件。
-- 后续需要新增图片回收站入口，支持查看已删除图片、恢复图片。
-- 后续需要新增永久删除流程，明确展示将删除的原图、缩略图、预览图和已修图路径，并要求二次确认。
-- 永久删除应同时清理数据库记录和对应文件，避免孤儿文件或数据库指向不存在文件。
+- 远程传输预留入口和目录监听。
 
 ## 暂不做
 
