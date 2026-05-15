@@ -1,9 +1,65 @@
 import { Router } from "express";
+import os from "os";
 import { getConfig } from "../config/config";
 import { sendSuccess } from "../utils/response";
 import { checkRepository } from "../services/repository";
 
 const router = Router();
+
+function getLanAddresses() {
+  const interfaces = os.networkInterfaces();
+  const addresses: Array<{ name: string; address: string; family: string; internal: boolean }> = [];
+
+  for (const [name, entries] of Object.entries(interfaces)) {
+    if (!isPhysicalLanInterface(name)) continue;
+    for (const entry of entries ?? []) {
+      if (entry.family !== "IPv4" || entry.internal) continue;
+      addresses.push({
+        name,
+        address: entry.address,
+        family: entry.family,
+        internal: entry.internal
+      });
+    }
+  }
+
+  return addresses;
+}
+
+function isPhysicalLanInterface(name: string): boolean {
+  const lowerName = name.toLowerCase();
+  const virtualKeywords = [
+    "vmware",
+    "virtual",
+    "vethernet",
+    "hyper-v",
+    "wsl",
+    "docker",
+    "virtualbox",
+    "vbox",
+    "tailscale",
+    "zerotier",
+    "tap",
+    "tunnel",
+    "bluetooth",
+    "loopback",
+    "npcap",
+    "pseudo",
+    "vmnet"
+  ];
+  if (virtualKeywords.some((keyword) => lowerName.includes(keyword))) {
+    return false;
+  }
+
+  return [
+    "wi-fi",
+    "wifi",
+    "wlan",
+    "wireless",
+    "以太网",
+    "ethernet"
+  ].some((keyword) => lowerName.includes(keyword));
+}
 
 /**
  * GET /api/health
@@ -32,6 +88,11 @@ router.get("/", (_req, res) => {
       loaded: true,
       server: config.server,
       repository: config.repository
+    },
+    network: {
+      localhost: "127.0.0.1",
+      lanAddresses: getLanAddresses(),
+      hotspotAddress: "192.168.137.1"
     }
   });
 });

@@ -7,8 +7,8 @@
   "type": "module",
   "scripts": {
     "dev": "pnpm dev:electron",
-    "dev:web": "vite --host 127.0.0.1",
-    "dev:electron": "pnpm build:server && concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && electron .\"",
+    "dev:web": "vite --host 0.0.0.0",
+    "dev:electron": "pnpm build:server && concurrently -k \"vite --host 0.0.0.0\" \"wait-on tcp:5173 && electron .\"",
     "build:server": "tsc -p tsconfig.server.json",
     "setup:electron": "pnpm rebuild electron",
     "rebuild:sqlite": "pnpm rebuild better-sqlite3",

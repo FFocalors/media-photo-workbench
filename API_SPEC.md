@@ -41,15 +41,34 @@
   {
     "ok": true,
     "data": {
-      "status": "ok",
-      "server": { "port": 3030 },
+      "service": "media-photo-workbench",
+      "server": { "port": 3030, "status": "running" },
       "database": { "status": "connected" },
-      "repository": { "exists": true, "readable": true, "writable": true, "path": "D:\\photos" }
+      "repository": {
+        "configured": true,
+        "exists": true,
+        "readable": true,
+        "writable": true,
+        "freeSpace": null,
+        "path": "D:\\photos"
+      },
+      "config": {
+        "loaded": true,
+        "server": { "port": 3030 },
+        "repository": { "path": "D:\\photos" }
+      },
+      "network": {
+        "localhost": "127.0.0.1",
+        "lanAddresses": [
+          { "name": "Wi-Fi", "address": "192.168.1.23", "family": "IPv4", "internal": false }
+        ],
+        "hotspotAddress": "192.168.137.1"
+      }
     },
     "error": null
   }
   ```
-- **备注**：前端启动或客户端连接时首次调用，判断能否正常工作。
+- **备注**：前端启动、客户端连接和主机系统概览页会调用该接口。`network.lanAddresses` 来自当前主机非内网回环 IPv4 网卡；`freeSpace` 目前可能为 `null`，前端应显示“暂不可用”而不是假容量。
 
 ---
 
@@ -914,26 +933,72 @@ working/{event_slug}/清单
 ## 八、Edit Workflow 修图流转
 
 ### [已实现] 生成待修包
-- **用途**：将状态为 edit 的图片原图及 manifest 打包。
+- **用途**：将状态为 edit 的图片原图及 manifest 打包，支持全部单包、按数量平均拆包和自定义分包。
 - **请求方法**：`POST`
 - **路径**：`/api/events/:eventId/edit-package`
-- **请求参数示例**：无
+- **请求参数示例**：
+  平均拆包：
+  ```json
+  {
+    "splitMode": "count",
+    "packageCount": 3
+  }
+  ```
+  自定义分包：
+  ```json
+  {
+    "splitMode": "custom",
+    "packages": [
+      {
+        "name": "领导特写",
+        "imageIds": ["img_1", "img_2", "img_3"]
+      },
+      {
+        "name": "舞台全景",
+        "imageIds": ["img_4", "img_5"]
+      }
+    ]
+  }
+  ```
 - **响应示例**：
   ```json
   {
     "ok": true,
     "data": {
-      "packageId": "pkg_xxx",
-      "packagePath": "E:\\MediaPhotoWorkspace\\working\\event\\导出\\压缩包\\待修包_event_20260514_120000_pkg_xxx.zip",
-      "downloadUrl": "http://localhost:3030/api/edit-packages/pkg_xxx/download",
+      "eventId": "evt_xxx",
+      "splitMode": "custom",
+      "packageCount": 3,
+      "packages": [
+        {
+          "packageId": "pkg_xxx",
+          "name": "领导特写",
+          "packageIndex": 1,
+          "packageTotal": 3,
+          "packagePath": "E:\\MediaPhotoWorkspace\\working\\event\\导出\\压缩包\\待修包_领导特写_20260515_120000_第1包_共3包_pkg_xxx.zip",
+          "downloadUrl": "http://localhost:3030/api/edit-packages/pkg_xxx/download",
+          "total": 4,
+          "success": 4,
+          "skipped": 0,
+          "status": "success",
+          "createdAt": "2026-05-15 12:00:00",
+          "errors": []
+        }
+      ],
       "total": 12,
-      "success": 11,
-      "skipped": 1,
+      "success": 12,
+      "skipped": 0,
       "errors": [
         {
           "imageId": "img_xxx",
           "filename": "IMG_0001.JPG",
           "reason": "原图文件不存在，已跳过"
+        }
+      ],
+      "warnings": [
+        {
+          "type": "duplicatedImageIds",
+          "imageIds": ["img_1"],
+          "reason": "部分图片被分配到多个待修包，已按请求继续生成"
         }
       ]
     },
@@ -952,6 +1017,10 @@ working/{event_slug}/清单
   ```json
   [
     {
+      "package_id": "pkg_xxx",
+      "package_name": "领导特写",
+      "package_index": 1,
+      "package_total": 3,
       "image_id": "img_xxx",
       "event_id": "evt_xxx",
       "original_filename": "IMG_0001.JPG",
@@ -966,14 +1035,50 @@ working/{event_slug}/清单
   - `EVENT_NOT_FOUND`：活动不存在。
   - `EVENT_NOT_EDITABLE`：活动已归档或删除，不能执行修图流转。
   - `NO_EDIT_IMAGES`：没有 `status = edit` 的待修图。
+  - `EMPTY_CUSTOM_PACKAGES`：自定义分包模式没有提供包列表。
+  - `INVALID_PACKAGE_NAME`：自定义包名称为空。
+  - `EMPTY_PACKAGE_IMAGES`：自定义包没有选择图片。
 - **备注**：
-  - 只查询 `status = edit` 且 `is_deleted = 0` 的图片。
+  - `splitMode = count` 时，`packageCount` 默认 `1`，最小 `1`，最大 `20`；前端默认用 `packageCount = 1` 生成一个完整待修包。
+  - 当 `packageCount > 1` 时，系统将待修图平均分配到多个独立 ZIP；如果待修图数量少于请求包数，不生成空包。
+  - `splitMode = custom` 时，后端按 `packages[].imageIds` 逐包生成 ZIP；不存在、跨活动、已删除或非 `status = edit` 的图片进入 `errors` 或 `skipped`。
+  - 同一张图片被放入多个自定义包时第一版允许继续生成，并在 `warnings` 中返回 `duplicatedImageIds`。
+  - 非自定义模式只查询 `status = edit` 且 `is_deleted = 0` 的图片。
   - 原图缺失的图片会跳过并写入 `errors`。
   - 待修包保存到 `working/{event_slug}/导出/压缩包`。
-  - 待修包 ZIP 文件名使用中文前缀 `待修包_...zip`。
+  - 待修包 ZIP 文件名使用中文前缀 `待修包_...zip`；自定义包会把安全化后的包名写入 ZIP 文件名。
   - ZIP 内预置 `已修图回传` 文件夹，文件夹内包含一份同内容的 `edit_manifest.json`，修图人员可把修好的 JPG/JPEG 放入该目录后直接拖入整个文件夹回传。
   - ZIP 不额外生成逐图标记文件；图片对应关系以 `edit_manifest.json` 为准，缺失 manifest 时只做文件名兜底。
   - 当前同步生成 ZIP，后续大批量活动应改为任务队列。
+
+### [已实现] 获取活动待修包列表
+- **用途**：读取当前活动已经生成的待修包，供主机和客户端修图任务页展示。
+- **请求方法**：`GET`
+- **路径**：`/api/events/:eventId/edit-packages`
+- **响应示例**：
+  ```json
+  {
+    "ok": true,
+    "data": [
+      {
+        "packageId": "pkg_xxx",
+        "name": "领导特写",
+        "packageIndex": 1,
+        "packageTotal": 3,
+        "total": 4,
+        "success": 4,
+        "skipped": 0,
+        "status": "success",
+        "packagePath": "E:\\MediaPhotoWorkspace\\working\\event\\导出\\压缩包\\待修包_领导特写_...",
+        "downloadUrl": "http://localhost:3030/api/edit-packages/pkg_xxx/download",
+        "createdAt": "2026-05-15 12:00:00",
+        "updatedAt": "2026-05-15 12:00:00"
+      }
+    ],
+    "error": null
+  }
+  ```
+- **备注**：待修包列表复用 `export_jobs`，记录使用 `type = edit_package`，包名与拆包序号写入 `spec.package_name`、`spec.package_index` 和 `spec.package_total`。旧记录没有 `package_name` 时前端显示“第 x / y 包”或“待修包”。
 
 ### [已实现] 下载待修包
 - **用途**：下载已经生成的待修包 ZIP。
@@ -985,6 +1090,33 @@ working/{event_slug}/清单
   - `EDIT_PACKAGE_NOT_FOUND`：待修包记录不存在。
   - `EDIT_PACKAGE_FILE_NOT_FOUND`：待修包 ZIP 文件不存在。
 - **备注**：待修包记录复用 `export_jobs`，`type = edit_package`。下载成功后写入 `download_logs.type = zip` 和 `operation_logs.type = edit_package_downloaded`。
+
+### [已实现] 删除待修包
+- **用途**：主机端删除已经生成的待修包 ZIP 和对应记录，不影响待修图片、原图或已修图。
+- **请求方法**：`DELETE`
+- **路径**：`/api/edit-packages/:packageId`
+- **响应示例**：
+  ```json
+  {
+    "ok": true,
+    "data": {
+      "packageId": "pkg_xxx",
+      "eventId": "evt_xxx",
+      "deletedFiles": [
+        "E:\\MediaPhotoWorkspace\\working\\event\\导出\\压缩包\\待修包_领导特写_20260515_120000_pkg_xxx.zip"
+      ],
+      "missingFiles": [],
+      "deletedRecords": {
+        "exportJobs": 1
+      }
+    },
+    "error": null
+  }
+  ```
+- **错误码**：
+  - `EDIT_PACKAGE_NOT_FOUND`：待修包记录不存在。
+  - `EDIT_PACKAGE_DELETE_FILE_FAILED`：待修包 ZIP 文件被占用或删除失败。
+- **备注**：删除成功写入 `operation_logs.type = edit_package_deleted`。客户端页面不提供删除入口。
 
 ### [已实现] 批量回传已修图
 - **用途**：修片师将修好的 JPG 连同 manifest 一起上传。

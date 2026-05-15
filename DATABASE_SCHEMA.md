@@ -130,7 +130,7 @@
 | `updated_at`| TEXT | 最后更新时间 | NOT NULL, DEFAULT `now` |
 
 当前已使用的 `type`：
-- `edit_package`：Phase 6 待修包 ZIP 记录，`output_path` 指向 ZIP 文件。
+- `edit_package`：Phase 6 / v0.11.5 待修包 ZIP 记录，`output_path` 指向 ZIP 文件；单包、平均拆包和自定义分包信息写入 `spec` JSON，例如 `package_name`、`package_index`、`package_total`、`manifest_count`。
 
 ### 8. `archived_events` (归档活动摘要表)
 **用途**：当原活动归档并清出主库后，在此留下不可修改的摘要索引，供主页展示历史。

@@ -1,4 +1,4 @@
-import { ArrowLeft, CheckCircle2, LinkIcon, QrCode, Wifi } from "lucide-react";
+import { ArrowLeft, CheckCircle2, LinkIcon, PenTool, QrCode, Wifi } from "lucide-react";
 import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
@@ -144,12 +144,18 @@ export function ClientConnectPage() {
             </div>
 
             {health && (
-              <div className="grid grid-cols-2 gap-6">
+              <div className="grid grid-cols-3 gap-6">
                 <ClientActionCard
                   body="查看缩略图、预览图，完成打星、状态流转、分类、备注和单图下载。"
                   icon={<CheckCircle2 size={24} />}
                   onClick={() => navigate("/client/photos")}
                   title="进入图片墙"
+                />
+                <ClientActionCard
+                  body="查看主机生成的待修包，下载修图素材，并回传已修图。"
+                  icon={<PenTool size={24} />}
+                  onClick={() => navigate("/client/retouch")}
+                  title="修图任务"
                 />
                 <ClientActionCard
                   body="选择 JPG/JPEG 文件上传到当前活动，由主机生成缩略图并实时广播。"

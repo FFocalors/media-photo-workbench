@@ -70,8 +70,7 @@ async function request<T>(
   options?: RequestInit
 ): Promise<ApiResponse<T>> {
   const res = await fetch(`${getApiBase()}${path}`, options);
-  const json = await res.json();
-  return json as ApiResponse<T>;
+  return parseApiResponse<T>(res);
 }
 
 async function requestFromBase<T>(
@@ -80,8 +79,27 @@ async function requestFromBase<T>(
   options?: RequestInit
 ): Promise<ApiResponse<T>> {
   const res = await fetch(`${normalizeApiBaseUrl(baseUrl)}${path}`, options);
-  const json = await res.json();
-  return json as ApiResponse<T>;
+  return parseApiResponse<T>(res);
+}
+
+async function parseApiResponse<T>(res: Response): Promise<ApiResponse<T>> {
+  const contentType = res.headers.get("Content-Type") || "";
+  if (contentType.includes("application/json")) {
+    return await res.json() as ApiResponse<T>;
+  }
+
+  const text = await res.text();
+  const looksLikeHtml = /^\s*<!doctype html/i.test(text) || /^\s*<html/i.test(text);
+  return {
+    ok: false,
+    data: null as T,
+    error: {
+      code: `HTTP_${res.status || "NON_JSON_RESPONSE"}`,
+      message: looksLikeHtml
+        ? "接口返回了前端页面而不是 JSON。请重启完整应用，确认本地后端已加载最新接口。"
+        : (text.trim() || `接口返回非 JSON 响应，HTTP ${res.status}`)
+    }
+  };
 }
 
 // ---------- Health ----------
@@ -102,6 +120,11 @@ export interface HealthData {
     loaded: boolean;
     server: { port: number };
     repository: { path: string };
+  };
+  network?: {
+    localhost: string;
+    lanAddresses: Array<{ name: string; address: string; family: string; internal: boolean }>;
+    hotspotAddress: string;
   };
 }
 
@@ -695,17 +718,70 @@ export interface EditPackageError {
 
 export interface EditPackageData {
   packageId: string;
+  name: string;
+  packageIndex: number;
+  packageTotal: number;
   packagePath: string;
   downloadUrl: string;
   total: number;
   success: number;
   skipped: number;
+  status: string;
+  createdAt: string;
+  updatedAt?: string;
   errors: EditPackageError[];
 }
 
-export async function createEditPackage(eventId: string): Promise<ApiResponse<EditPackageData>> {
-  return request<EditPackageData>(`/api/events/${eventId}/edit-package`, {
-    method: "POST"
+export interface DeleteEditPackageData {
+  packageId: string;
+  eventId: string;
+  deletedFiles: string[];
+  missingFiles: string[];
+  deletedRecords: {
+    exportJobs: number;
+  };
+}
+
+export interface EditPackageWarning {
+  type: "duplicatedImageIds";
+  imageIds: string[];
+  reason: string;
+}
+
+export interface EditPackagesData {
+  eventId: string;
+  splitMode: "count" | "custom";
+  packageCount: number;
+  packages: EditPackageData[];
+  total: number;
+  success: number;
+  skipped: number;
+  errors: EditPackageError[];
+  warnings: EditPackageWarning[];
+}
+
+export async function createEditPackage(
+  eventId: string,
+  input: {
+    splitMode?: "count" | "custom";
+    packageCount?: number;
+    packages?: Array<{ name: string; imageIds: string[] }>;
+  } = {}
+): Promise<ApiResponse<EditPackagesData>> {
+  return request<EditPackagesData>(`/api/events/${eventId}/edit-package`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+}
+
+export async function fetchEditPackages(eventId: string): Promise<ApiResponse<EditPackageData[]>> {
+  return request<EditPackageData[]>(`/api/events/${eventId}/edit-packages`);
+}
+
+export async function deleteEditPackage(packageId: string): Promise<ApiResponse<DeleteEditPackageData>> {
+  return request<DeleteEditPackageData>(`/api/edit-packages/${encodeURIComponent(packageId)}`, {
+    method: "DELETE"
   });
 }
 

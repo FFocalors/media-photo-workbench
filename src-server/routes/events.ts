@@ -17,7 +17,7 @@ import { getImageDtoById, listEventImages, listEventTrashedImages } from "../ser
 import { getLogger } from "../utils/logger";
 import { emitImageCreated } from "../realtime/socket";
 import { parseMultipartForm } from "../utils/multipart";
-import { createEditPackage, uploadEditedImages } from "../services/editWorkflow";
+import { createEditPackage, listEditPackages, uploadEditedImages } from "../services/editWorkflow";
 import { createPublishExport } from "../services/publishExport";
 import { cleanupEventArchive, prepareEventArchive, verifyEventArchive } from "../services/archive";
 import { createDownloadZipTask } from "../services/downloadPackages";
@@ -271,7 +271,11 @@ router.post("/:id/upload", async (req, res) => {
  */
 router.post("/:id/edit-package", async (req, res) => {
   try {
-    const result = await createEditPackage(req.params.id, getBaseUrl(req));
+    const result = await createEditPackage(req.params.id, getBaseUrl(req), {
+      splitMode: req.body?.splitMode,
+      packageCount: req.body?.packageCount,
+      packages: req.body?.packages
+    });
     sendSuccess(res, result);
   } catch (err: any) {
     if (err?.code) {
@@ -280,6 +284,24 @@ router.post("/:id/edit-package", async (req, res) => {
     } else {
       getLogger().error({ err }, "生成待修包失败");
       sendError(res, "CREATE_EDIT_PACKAGE_FAILED", "生成待修包失败", 500);
+    }
+  }
+});
+
+/**
+ * GET /api/events/:id/edit-packages
+ * 查询当前活动已生成的待修包列表。
+ */
+router.get("/:id/edit-packages", (req, res) => {
+  try {
+    sendSuccess(res, listEditPackages(req.params.id, getBaseUrl(req)));
+  } catch (err: any) {
+    if (err?.code) {
+      const status = err.code === "EVENT_NOT_FOUND" ? 404 : 400;
+      sendError(res, err.code, err.message, status);
+    } else {
+      getLogger().error({ err }, "获取待修包列表失败");
+      sendError(res, "LIST_EDIT_PACKAGES_FAILED", "获取待修包列表失败", 500);
     }
   }
 });

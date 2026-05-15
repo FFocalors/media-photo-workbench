@@ -17,6 +17,10 @@ export interface EditPackageError {
 }
 
 export interface EditPackageManifestItem {
+  package_id?: string;
+  package_name?: string;
+  package_index?: number;
+  package_total?: number;
   image_id: string;
   event_id: string;
   original_filename: string;
@@ -28,12 +32,59 @@ export interface EditPackageManifestItem {
 
 export interface EditPackageResult {
   packageId: string;
+  name: string;
+  packageIndex: number;
+  packageTotal: number;
   packagePath: string;
   downloadUrl: string;
   total: number;
   success: number;
   skipped: number;
+  status: "success" | "failed";
+  createdAt: string;
   errors: EditPackageError[];
+}
+
+export interface CreateEditPackageOptions {
+  splitMode?: "count" | "custom";
+  packageCount?: number;
+  packages?: Array<{
+    name?: string;
+    imageIds?: unknown[];
+  }>;
+}
+
+export interface EditPackageWarning {
+  type: "duplicatedImageIds";
+  imageIds: string[];
+  reason: string;
+}
+
+export interface CreateEditPackagesResult {
+  eventId: string;
+  splitMode: "count" | "custom";
+  packageCount: number;
+  packages: EditPackageResult[];
+  total: number;
+  success: number;
+  skipped: number;
+  errors: EditPackageError[];
+  warnings: EditPackageWarning[];
+}
+
+export interface EditPackageListItem {
+  packageId: string;
+  name: string;
+  packageIndex: number;
+  packageTotal: number;
+  total: number;
+  success: number;
+  skipped: number;
+  status: string;
+  packagePath: string;
+  downloadUrl: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface EditPackageDownload {
@@ -41,6 +92,16 @@ export interface EditPackageDownload {
   eventId: string;
   filePath: string;
   filename: string;
+}
+
+export interface DeleteEditPackageResult {
+  packageId: string;
+  eventId: string;
+  deletedFiles: string[];
+  missingFiles: string[];
+  deletedRecords: {
+    exportJobs: number;
+  };
 }
 
 export interface EditedUploadError {
@@ -269,10 +330,27 @@ function getExportJob(packageId: string): ExportJobRow | undefined {
   `).get(packageId) as ExportJobRow | undefined;
 }
 
+function parsePackageSpec(spec: string): {
+  package_name?: string;
+  package_index?: number;
+  package_total?: number;
+  manifest_count?: number;
+} {
+  try {
+    const parsed = JSON.parse(spec || "{}");
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 function recordExportJob(input: {
   packageId: string;
   eventId: string;
   packagePath: string;
+  packageName: string;
+  packageIndex: number;
+  packageTotal: number;
   total: number;
   success: number;
   skipped: number;
@@ -288,7 +366,12 @@ function recordExportJob(input: {
   `).run(
     input.packageId,
     input.eventId,
-    JSON.stringify({ manifest_count: input.manifest.length }),
+    JSON.stringify({
+      manifest_count: input.manifest.length,
+      package_name: input.packageName,
+      package_index: input.packageIndex,
+      package_total: input.packageTotal
+    }),
     input.total,
     input.total,
     input.success,
@@ -299,27 +382,40 @@ function recordExportJob(input: {
   );
 }
 
-export async function createEditPackage(eventId: string, baseUrl: string): Promise<EditPackageResult> {
-  const event = ensureEventReady(eventId);
-  ensureEventWorkingDirs(event.slug);
+function normalizePackageCount(value: unknown): number {
+  const parsed = Number(value ?? 1);
+  if (!Number.isFinite(parsed)) return 1;
+  return Math.min(Math.max(Math.trunc(parsed), 1), 20);
+}
 
-  const images = getEditImages(eventId);
-  if (images.length === 0) {
-    throw { code: "NO_EDIT_IMAGES", message: "暂无待修图片，请先在图片墙将图片标记为“待修图”" };
-  }
+function splitImagesByCount(images: ImageRow[], packageCount: number): ImageRow[][] {
+  const count = Math.min(packageCount, Math.max(images.length, 1));
+  const groups = Array.from({ length: count }, () => [] as ImageRow[]);
+  images.forEach((image, index) => {
+    groups[index % count].push(image);
+  });
+  return groups.filter((group) => group.length > 0);
+}
 
-  const repositoryPath = getConfig().repository.path;
-  const workspace = getEventWorkspacePaths(repositoryPath, event.slug);
-  await fs.ensureDir(workspace.editQueueDir);
-  await fs.ensureDir(workspace.zipExportDir);
-
+async function createSingleEditPackage(input: {
+  event: ReturnType<typeof ensureEventReady>;
+  workspace: ReturnType<typeof getEventWorkspacePaths>;
+  images: ImageRow[];
+  packageName: string;
+  packageIndex: number;
+  packageTotal: number;
+  baseUrl: string;
+  createdAt: string;
+  requestedTotal?: number;
+  initialErrors?: EditPackageError[];
+}): Promise<EditPackageResult> {
   const usedFilenames = new Set<string>();
   const manifest: EditPackageManifestItem[] = [];
-  const errors: EditPackageError[] = [];
+  const errors: EditPackageError[] = [...(input.initialErrors ?? [])];
   const entries: ZipFileEntry[] = [];
   const packageId = generatePackageId();
 
-  for (const image of images) {
+  for (const image of input.images) {
     if (!image.original_path || !(await fs.pathExists(image.original_path))) {
       errors.push({
         imageId: image.id,
@@ -331,6 +427,10 @@ export async function createEditPackage(eventId: string, baseUrl: string): Promi
 
     const exportFilename = makeUniqueExportFilename(image.original_filename, image.id, usedFilenames);
     manifest.push({
+      package_id: packageId,
+      package_name: input.packageName,
+      package_index: input.packageIndex,
+      package_total: input.packageTotal,
       image_id: image.id,
       event_id: image.event_id,
       original_filename: image.original_filename,
@@ -359,26 +459,38 @@ export async function createEditPackage(eventId: string, baseUrl: string): Promi
     content: RETURN_FOLDER_README
   });
 
-  const packagePath = path.join(workspace.zipExportDir, `待修包_${sanitizeFilename(event.slug)}_${formatDateForFilename()}_${packageId}.zip`);
+  const packagePart = input.packageTotal > 1 ? `_第${input.packageIndex}包_共${input.packageTotal}包` : "";
+  const packageLabel = sanitizeFilename(input.packageName || input.event.slug);
+  const packagePath = path.join(
+    input.workspace.zipExportDir,
+    `待修包_${packageLabel}_${formatDateForFilename()}${packagePart}_${packageId}.zip`
+  );
   await createZipArchive(entries, packagePath);
 
   recordExportJob({
     packageId,
-    eventId,
+    eventId: input.event.id,
     packagePath,
-    total: images.length,
+    packageName: input.packageName,
+    packageIndex: input.packageIndex,
+    packageTotal: input.packageTotal,
+    total: input.requestedTotal ?? input.images.length,
     success: manifest.length,
     skipped: errors.length,
     manifest
   });
+
   writeOperationLog({
     type: "edit_package_created",
     targetType: "edit_package",
     targetId: packageId,
-    eventId,
+    eventId: input.event.id,
     detail: {
       package_path: packagePath,
-      total: images.length,
+      package_name: input.packageName,
+      package_index: input.packageIndex,
+      package_total: input.packageTotal,
+      total: input.requestedTotal ?? input.images.length,
       success: manifest.length,
       skipped: errors.length
     }
@@ -386,13 +498,210 @@ export async function createEditPackage(eventId: string, baseUrl: string): Promi
 
   return {
     packageId,
+    name: input.packageName,
+    packageIndex: input.packageIndex,
+    packageTotal: input.packageTotal,
     packagePath,
-    downloadUrl: `${baseUrl}/api/edit-packages/${encodeURIComponent(packageId)}/download`,
-    total: images.length,
+    downloadUrl: `${input.baseUrl}/api/edit-packages/${encodeURIComponent(packageId)}/download`,
+    total: input.requestedTotal ?? input.images.length,
     success: manifest.length,
     skipped: errors.length,
+    status: "success",
+    createdAt: input.createdAt,
     errors
   };
+}
+
+function getAnyImageById(imageId: string): ImageRow | undefined {
+  return getDatabase().prepare(`
+    SELECT * FROM images
+    WHERE id = ?
+  `).get(imageId) as ImageRow | undefined;
+}
+
+function normalizeImageIds(value: unknown[] | undefined): string[] {
+  return (value ?? [])
+    .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    .map((item) => item.trim());
+}
+
+function buildCustomPackageGroups(eventId: string, packages: CreateEditPackageOptions["packages"]): {
+  groups: Array<{ name: string; images: ImageRow[]; requestedTotal: number; errors: EditPackageError[] }>;
+  warnings: EditPackageWarning[];
+  totalRequested: number;
+} {
+  if (!Array.isArray(packages) || packages.length === 0) {
+    throw { code: "EMPTY_CUSTOM_PACKAGES", message: "自定义分包至少需要一个包" };
+  }
+
+  const seen = new Set<string>();
+  const duplicated = new Set<string>();
+  const groups: Array<{ name: string; images: ImageRow[]; requestedTotal: number; errors: EditPackageError[] }> = [];
+
+  for (const item of packages) {
+    const name = (item?.name ?? "").trim();
+    if (!name) {
+      throw { code: "INVALID_PACKAGE_NAME", message: "自定义包名称不能为空" };
+    }
+
+    const imageIds = normalizeImageIds(item?.imageIds);
+    if (imageIds.length === 0) {
+      throw { code: "EMPTY_PACKAGE_IMAGES", message: `“${name}”没有选择任何待修图片` };
+    }
+
+    const images: ImageRow[] = [];
+    const errors: EditPackageError[] = [];
+    for (const imageId of imageIds) {
+      if (seen.has(imageId)) {
+        duplicated.add(imageId);
+      }
+      seen.add(imageId);
+
+      const image = getAnyImageById(imageId);
+      if (!image) {
+        errors.push({ imageId, filename: imageId, reason: "图片不存在，已跳过" });
+        continue;
+      }
+      if (image.event_id !== eventId) {
+        errors.push({ imageId, filename: image.original_filename, reason: "图片不属于当前活动，已跳过" });
+        continue;
+      }
+      if (image.is_deleted) {
+        errors.push({ imageId, filename: image.original_filename, reason: "图片已删除，已跳过" });
+        continue;
+      }
+      if (image.status !== "edit") {
+        errors.push({ imageId, filename: image.original_filename, reason: "图片不是待修图状态，已跳过" });
+        continue;
+      }
+      images.push(image);
+    }
+
+    groups.push({ name, images, requestedTotal: imageIds.length, errors });
+  }
+
+  return {
+    groups,
+    totalRequested: groups.reduce((sum, group) => sum + group.requestedTotal, 0),
+    warnings: duplicated.size > 0
+      ? [{
+        type: "duplicatedImageIds",
+        imageIds: Array.from(duplicated),
+        reason: "部分图片被加入多个自定义待修包，第一版允许重复打包"
+      }]
+      : []
+  };
+}
+
+export async function createEditPackage(
+  eventId: string,
+  baseUrl: string,
+  options: CreateEditPackageOptions = {}
+): Promise<CreateEditPackagesResult> {
+  const event = ensureEventReady(eventId);
+  ensureEventWorkingDirs(event.slug);
+
+  const repositoryPath = getConfig().repository.path;
+  const workspace = getEventWorkspacePaths(repositoryPath, event.slug);
+  await fs.ensureDir(workspace.editQueueDir);
+  await fs.ensureDir(workspace.zipExportDir);
+
+  const createdAt = nowTimestamp();
+  const packages: EditPackageResult[] = [];
+  const splitMode = options.splitMode === "custom" ? "custom" : "count";
+  let total = 0;
+  let warnings: EditPackageWarning[] = [];
+
+  if (splitMode === "custom") {
+    const custom = buildCustomPackageGroups(eventId, options.packages);
+    warnings = custom.warnings;
+    total = custom.totalRequested;
+
+    for (let index = 0; index < custom.groups.length; index += 1) {
+      const group = custom.groups[index];
+      packages.push(await createSingleEditPackage({
+        event,
+        workspace,
+        images: group.images,
+        packageName: group.name,
+        packageIndex: index + 1,
+        packageTotal: custom.groups.length,
+        baseUrl,
+        createdAt,
+        requestedTotal: group.requestedTotal,
+        initialErrors: group.errors
+      }));
+    }
+  } else {
+    const images = getEditImages(eventId);
+    if (images.length === 0) {
+      throw { code: "NO_EDIT_IMAGES", message: "暂无待修图片，请先在图片墙将图片标记为“待修图”" };
+    }
+
+    const requestedCount = normalizePackageCount(options.packageCount);
+    const groups = splitImagesByCount(images, requestedCount);
+    total = images.length;
+    for (let index = 0; index < groups.length; index += 1) {
+      packages.push(await createSingleEditPackage({
+        event,
+        workspace,
+        images: groups[index],
+        packageName: groups.length === 1 ? "待修包" : `第${index + 1}包`,
+        packageIndex: index + 1,
+        packageTotal: groups.length,
+        baseUrl,
+        createdAt
+      }));
+    }
+  }
+
+  const errors = packages.flatMap((item) => item.errors);
+  return {
+    eventId,
+    splitMode,
+    packageCount: packages.length,
+    packages,
+    total,
+    success: packages.reduce((sum, item) => sum + item.success, 0),
+    skipped: packages.reduce((sum, item) => sum + item.skipped, 0),
+    errors,
+    warnings
+  };
+}
+
+export function listEditPackages(eventId: string, baseUrl: string): EditPackageListItem[] {
+  ensureEventReady(eventId);
+  const rows = getDatabase().prepare(`
+    SELECT id, event_id, type, output_path, status, spec, total, success_count, failed_count, created_at, updated_at
+    FROM export_jobs
+    WHERE event_id = ? AND type = 'edit_package'
+    ORDER BY created_at DESC, id DESC
+  `).all(eventId) as Array<ExportJobRow & {
+    spec: string;
+    total: number;
+    success_count: number;
+    failed_count: number;
+    created_at: string;
+    updated_at: string;
+  }>;
+
+  return rows.map((row) => {
+    const spec = parsePackageSpec(row.spec);
+    return {
+      packageId: row.id,
+      name: spec.package_name ?? "",
+      packageIndex: spec.package_index ?? 1,
+      packageTotal: spec.package_total ?? 1,
+      total: row.total,
+      success: row.success_count,
+      skipped: row.failed_count,
+      status: row.status,
+      packagePath: row.output_path,
+      downloadUrl: `${baseUrl}/api/edit-packages/${encodeURIComponent(row.id)}/download`,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    };
+  });
 }
 
 export function assertEditPackageDownload(packageId: string): EditPackageDownload {
@@ -425,6 +734,57 @@ export function recordEditPackageDownload(download: EditPackageDownload): void {
     eventId: download.eventId,
     detail: { file_path: download.filePath }
   });
+}
+
+export async function deleteEditPackage(packageId: string): Promise<DeleteEditPackageResult> {
+  const job = getExportJob(packageId);
+  if (!job) {
+    throw { code: "EDIT_PACKAGE_NOT_FOUND", message: "待修包不存在" };
+  }
+
+  const deletedFiles: string[] = [];
+  const missingFiles: string[] = [];
+  const outputPath = job.output_path;
+
+  if (outputPath) {
+    if (await fs.pathExists(outputPath)) {
+      try {
+        await fs.remove(outputPath);
+        deletedFiles.push(outputPath);
+      } catch (err: any) {
+        throw {
+          code: "EDIT_PACKAGE_DELETE_FILE_FAILED",
+          message: `待修包文件删除失败：${outputPath}。请关闭正在访问该 ZIP 的程序后重试。原始错误：${err?.message || "删除失败"}`
+        };
+      }
+    } else {
+      missingFiles.push(outputPath);
+    }
+  }
+
+  writeOperationLog({
+    type: "edit_package_deleted",
+    targetType: "edit_package",
+    targetId: job.id,
+    eventId: job.event_id,
+    detail: {
+      file_path: outputPath,
+      deleted_files: deletedFiles,
+      missing_files: missingFiles
+    }
+  });
+
+  const deletedExportJobs = getDatabase().prepare("DELETE FROM export_jobs WHERE id = ? AND type = 'edit_package'").run(job.id).changes;
+
+  return {
+    packageId: job.id,
+    eventId: job.event_id,
+    deletedFiles,
+    missingFiles,
+    deletedRecords: {
+      exportJobs: deletedExportJobs
+    }
+  };
 }
 
 function parseManifestFile(file: EditedUploadSourceFile | undefined): EditPackageManifestItem[] {

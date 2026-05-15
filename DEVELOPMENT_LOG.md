@@ -28,6 +28,135 @@
 
 ## 开发记录
 
+### v0.11.5-dev：修图协作与导航流程优化
+- **日期**：2026-05-15
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - `POST /api/events/:eventId/edit-package` 在保留 `splitMode = count` 平均拆包的基础上，新增 `splitMode = custom` 自定义分包。
+  - 自定义分包支持包名和指定图片 ID，适合按领导特写、舞台全景、观众互动、合影等内容或人员分工自由组包。
+  - 自定义分包会校验空包名、空图片列表、跨活动图片、已删除图片和非待修图状态；重复分配图片第一版允许继续生成，并返回 `duplicatedImageIds` warning。
+  - 待修包 ZIP 文件名可包含安全化后的包名；`edit_manifest.json` 新增 `package_name`，并继续保留 `package_id`、`package_index`、`package_total`。
+  - 新增 `DELETE /api/edit-packages/:packageId`，主机端可删除已生成待修包 ZIP 和对应 `export_jobs` 记录，不影响待修图片、原图或已修图。
+  - 主机修图流转页新增“一包 / 平均拆包 / 自定义分包”三种模式；自定义模式支持创建包、重命名包、选择当前包、点击图片加入或移出包，并提示未分配图片数量。
+  - 主机和客户端待修包列表支持显示自定义包名；旧包缺少包名时继续显示“第 x / y 包”或“待修包”。
+  - 主机修图流转页“已生成待修包”列表新增删除按钮，删除前使用项目统一确认弹窗。
+  - 主机侧边栏顺序调整为“首页、活动管理、导入图片、图片墙、待修图、已修图、导出发布、归档管理、系统设置”。
+  - 客户端侧边栏顺序调整为“上传图片、图片墙、修图任务”。
+  - 主机首页局域网地址列表过滤虚拟网卡，只显示 WiFi/WLAN 和以太网地址；首页不再固定显示 Windows 热点候选行。
+- **修改文件**：
+  - `src-server/services/editWorkflow.ts`
+  - `src-server/routes/editPackages.ts`
+  - `src-server/routes/events.ts`
+  - `src/lib/api.ts`
+  - `src/pages/host/Retouch.tsx`
+  - `src/pages/client/ClientRetouch.tsx`
+  - `src/layouts/HostLayout.tsx`
+  - `src/layouts/ClientLayout.tsx`
+  - `README.md`
+  - `ROADMAP.md`
+  - `API_SPEC.md`
+  - `CHANGELOG.md`
+  - `DATABASE_SCHEMA.md`
+  - `AGENTS.md`
+  - `DEVELOPMENT_LOG.md`
+- **验证方式**：
+  - `pnpm build` 通过。
+  - 建议手工验证：默认生成一个待修包；平均拆成 2 个包；创建“领导特写”“舞台全景”等自定义包并分别选择图片；下载 ZIP 后确认每个包只包含对应图片，manifest 中含 `package_name`；删除一个待修包，确认 ZIP 文件和列表记录消失但图片仍为待修状态；客户端修图任务页能显示包名、下载并回传已修图；旧包仍能显示和下载；主机和客户端侧边栏顺序符合工作流。
+- **未完成事项**：
+  - 自定义分包第一版不做拖拽排序。
+  - 同一图片分配到多个包时当前允许继续生成，只通过 warnings 提醒，后续可根据实际流程改为硬性禁止。
+  - 客户端仍只允许下载待修包和回传已修图，不允许生成或删除待修包。
+- **下一步计划**：
+  - 进入 v0.12.0-dev：真实局域网 / 手机网页 / 多设备测试修复。
+
+### v0.11.4-dev：客户端修图协作基础增强
+- **日期**：2026-05-15
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - `POST /api/events/:eventId/edit-package` 增加 `splitMode = count` 和 `packageCount`，支持将待修图平均拆分为多个独立待修包。
+  - 每个待修包 ZIP 继续包含 `edit_manifest.json`、`待修原图/`、`已修图回传/edit_manifest.json` 和 `已修图回传/请把修好的JPG放在这里.txt`。
+  - 待修包 manifest 新增 `package_id`、`package_index`、`package_total`，便于多人分包修图时追踪来源。
+  - 新增 `GET /api/events/:eventId/edit-packages`，从 `export_jobs(type = edit_package)` 读取活动待修包列表。
+  - 主机修图流转页新增拆分包数输入、多个待修包列表和逐包下载按钮。
+  - 客户端侧边栏新增“修图任务”，客户端可选择活动、查看待修包列表、下载待修包，并拖拽“已修图回传”文件夹上传已修图。
+  - 客户端已修图回传复用现有 `POST /api/events/:eventId/edited/upload`，成功后继续触发 `image-updated` 实时同步。
+- **修改文件**：
+  - `src-server/services/editWorkflow.ts`
+  - `src-server/routes/events.ts`
+  - `src/lib/api.ts`
+  - `src/pages/host/Retouch.tsx`
+  - `src/pages/client/ClientRetouch.tsx`
+  - `src/pages/client/ClientConnect.tsx`
+  - `src/layouts/ClientLayout.tsx`
+  - `src/App.tsx`
+  - `README.md`
+  - `ROADMAP.md`
+  - `API_SPEC.md`
+  - `CHANGELOG.md`
+  - `DATABASE_SCHEMA.md`
+  - `DEVELOPMENT_LOG.md`
+- **验证方式**：
+  - `pnpm build` 通过。
+  - 建议手工验证：主机将多张图片标记为“待修图”，在修图流转页输入包数并生成多个待修包；逐个下载 ZIP，确认包含 manifest、`待修原图/` 和 `已修图回传/`；客户端连接主机后进入“修图任务”，确认能看到同一活动的待修包列表并下载；将修好的 JPG/JPEG 放入 `已修图回传` 后拖入客户端页面上传，确认图片状态变为 `edited`、预览图刷新、主机图片墙实时更新；重复回传同一张图，确认只保留最新已修版本。
+- **未完成事项**：
+  - 客户端第一版只允许下载待修包和回传已修图，不允许生成或删除待修包。
+  - 待修包生成仍为同步接口，后续大活动可继续纳入统一任务队列。
+- **下一步计划**：
+  - 进入 v0.11.5-dev：修图协作与导航流程优化。
+
+### v0.11.3-dev：Vite 前端开发服务局域网访问
+- **日期**：2026-05-15
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - Vite 前端开发服务改为监听 `0.0.0.0:5173`，解决后端 API 可通过 WLAN IP 访问但前端 `5173` 拒绝连接的问题。
+  - `pnpm dev:web` 使用 `vite --host 0.0.0.0`。
+  - `pnpm dev:electron` 中的 Vite 子进程同步使用 `vite --host 0.0.0.0`，不改变 Electron 和后端启动流程。
+  - `vite.config.ts` 固定 `server.host = "0.0.0.0"`、`server.port = 5173`、`strictPort = true`，保持前端开发端口稳定。
+  - 主机首页局域网提示文案调整为：开发模式前端地址需要 Vite 使用 `--host 0.0.0.0`，生产打包后以前端实际托管方式为准。
+- **修改文件**：
+  - `package.json`
+  - `vite.config.ts`
+  - `src/pages/host/Overview.tsx`
+  - `README.md`
+  - `ROADMAP.md`
+  - `CHANGELOG.md`
+  - `DEVELOPMENT_LOG.md`
+  - `AGENTS.md`
+- **验证方式**：
+  - `pnpm build` 通过。
+  - 建议手工验证：运行 `pnpm dev`，终端应出现 Vite `Network: http://<局域网IP>:5173/`；在主机或同局域网设备浏览器打开该地址应能访问前端页面。
+  - 同时访问 `http://<局域网IP>:3030/api/health` 或主机首页显示的真实后端端口，确认后端 API 局域网访问仍正常。
+- **未完成事项**：
+  - 真实双设备访问仍可能受 Windows 防火墙、校园网设备隔离或热点网络策略影响，需要在 v0.12.0-dev 阶段继续实机补测。
+- **下一步计划**：
+  - 继续 v0.12.0-dev：真实局域网 / 手机网页 / 多设备测试修复。
+
+### v0.11.2-dev：主机系统概览页真实数据
+- **日期**：2026-05-15
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - 主机首页 / 系统概览页移除 mock 数据，改为读取真实 API。
+  - 首页加载 `GET /api/health`，显示后端服务状态、真实端口、数据库状态和仓库状态。
+  - 首页加载 `GET /api/settings` 与 `GET /api/repository/check`，显示已保存仓库路径、存在性、可读、可写和剩余空间；后端未提供真实剩余空间时显示“暂不可用”。
+  - 首页按 `active -> reviewing` 顺序读取当前活动，显示真实活动名称、日期、状态和图片数量；没有活动时显示空状态。
+  - `/api/health` 新增 `network` 字段，返回非回环 IPv4 局域网地址列表和 Windows 热点候选地址。
+  - 首页显示本机 API 地址、过滤后的局域网 API 地址和前端开发访问候选地址，并提供复制按钮。
+  - 二维码暂不生成，避免开发模式下生成不可访问地址。
+- **修改文件**：
+  - `src-server/routes/health.ts`
+  - `src/lib/api.ts`
+  - `src/pages/host/Overview.tsx`
+  - `README.md`
+  - `CHANGELOG.md`
+  - `API_SPEC.md`
+- **验证方式**：
+  - `pnpm build` 通过。
+  - 建议手工验证：通过 `pnpm dev` 启动完整应用，进入首页确认仓库路径、活动、真实端口和局域网地址均来自真实接口；仓库未配置时显示明确提示；复制按钮可复制地址。
+- **未完成事项**：
+  - 首页二维码暂未生成；后续应在确认前端真实可访问地址后再接入二维码。
+- **下一步计划**：
+  - 继续 v0.12.0-dev：真实局域网 / 手机网页 / 多设备测试修复。
+
 ### v0.11.1-dev：轻量归档策略与归档删除
 - **日期**：2026-05-15
 - **开发者 / 工具**：Codex

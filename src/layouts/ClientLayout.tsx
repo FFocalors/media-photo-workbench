@@ -1,4 +1,4 @@
-import { ArrowLeft, LayoutGrid, LinkIcon, UploadCloud } from "lucide-react";
+import { ArrowLeft, LayoutGrid, LinkIcon, PenTool, UploadCloud } from "lucide-react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { TaskCenter } from "../components/tasks/TaskCenter";
 import { Notice } from "../components/ui/States";
@@ -6,8 +6,9 @@ import { getClientApiBase } from "../lib/api";
 import { cn } from "../lib/cn";
 
 const navItems = [
+  { icon: UploadCloud, label: "上传图片", to: "/client/upload" },
   { icon: LayoutGrid, label: "图片墙", to: "/client/photos" },
-  { icon: UploadCloud, label: "上传图片", to: "/client/upload" }
+  { icon: PenTool, label: "修图任务", to: "/client/retouch" }
 ];
 
 export function ClientLayout() {

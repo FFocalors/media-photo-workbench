@@ -1,15 +1,18 @@
-import { AlertTriangle, CheckCircle2, Download, FileArchive, ImageOff, PackageCheck, UploadCloud } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Download, FileArchive, ImageOff, PackageCheck, Plus, Trash2, UploadCloud } from "lucide-react";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { Notice } from "../../components/ui/States";
 import {
   createEditPackage,
+  deleteEditPackage,
   downloadEditPackage,
   EditedUploadData,
   EditPackageData,
   EventData,
   EventImageData,
+  fetchEditPackages,
   fetchEventImages,
   fetchEvents,
   uploadEditedImages
@@ -18,6 +21,26 @@ import { cn } from "../../lib/cn";
 
 const visibleStatuses = new Set(["active", "reviewing", "draft"]);
 const supportedEditedExtensions = new Set([".jpg", ".jpeg"]);
+
+type PackageMode = "single" | "count" | "custom";
+
+interface CustomPackageDraft {
+  id: string;
+  name: string;
+  imageIds: string[];
+}
+
+function createCustomPackageDraft(index: number): CustomPackageDraft {
+  return {
+    id: `custom_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+    name: `自定义包 ${index}`,
+    imageIds: []
+  };
+}
+
+function getEditPackageLabel(editPackage: Pick<EditPackageData, "name" | "packageIndex" | "packageTotal">): string {
+  return editPackage.name || `第 ${editPackage.packageIndex} / ${editPackage.packageTotal} 包`;
+}
 
 interface DroppedFileSystemEntry {
   isFile: boolean;
@@ -95,14 +118,25 @@ export function RetouchPage() {
   const [editTotal, setEditTotal] = useState(0);
   const [editedTotal, setEditedTotal] = useState(0);
   const [lastPackage, setLastPackage] = useState<EditPackageData | null>(null);
+  const [editPackages, setEditPackages] = useState<EditPackageData[]>([]);
+  const [packageMode, setPackageMode] = useState<PackageMode>("single");
+  const [packageCount, setPackageCount] = useState(1);
+  const [customPackages, setCustomPackages] = useState<CustomPackageDraft[]>(() => [createCustomPackageDraft(1)]);
+  const [activeCustomPackageId, setActiveCustomPackageId] = useState("");
   const [uploadResult, setUploadResult] = useState<EditedUploadData | null>(null);
   const [message, setMessage] = useState<{ tone: "success" | "warning" | "danger" | "info"; title: string; body: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [creatingPackage, setCreatingPackage] = useState(false);
-  const [downloadingPackage, setDownloadingPackage] = useState(false);
+  const [downloadingPackageId, setDownloadingPackageId] = useState("");
   const [uploadingEdited, setUploadingEdited] = useState(false);
+  const [deletePackageTarget, setDeletePackageTarget] = useState<EditPackageData | null>(null);
+  const [deletingPackageId, setDeletingPackageId] = useState("");
 
   const originalMissingCount = useMemo(() => editImages.filter((image) => !image.original_exists).length, [editImages]);
+  const activeCustomPackage = useMemo(
+    () => customPackages.find((item) => item.id === activeCustomPackageId) ?? customPackages[0],
+    [activeCustomPackageId, customPackages]
+  );
 
   const loadEvents = useCallback(async () => {
     try {
@@ -150,6 +184,12 @@ export function RetouchPage() {
       } else {
         setMessage({ tone: "danger", title: "已修图读取失败", body: editedRes.error?.message || "无法读取已修图。" });
       }
+
+      const packageRes = await fetchEditPackages(selectedEventId);
+      if (packageRes.ok && packageRes.data) {
+        setEditPackages(packageRes.data);
+        setLastPackage(packageRes.data[0] ?? null);
+      }
     } catch {
       setMessage({ tone: "danger", title: "修图数据读取失败", body: "请求失败，请确认后端服务已启动。" });
     } finally {
@@ -165,16 +205,34 @@ export function RetouchPage() {
     void loadStats();
   }, [loadStats]);
 
+  useEffect(() => {
+    setActiveCustomPackageId((current) => current || customPackages[0]?.id || "");
+  }, [customPackages]);
+
   const handleCreatePackage = async () => {
     if (!selectedEventId) return;
     setCreatingPackage(true);
     setMessage(null);
 
     try {
-      const res = await createEditPackage(selectedEventId);
+      const input = packageMode === "custom"
+        ? {
+          splitMode: "custom" as const,
+          packages: customPackages.map((item) => ({
+            name: item.name.trim(),
+            imageIds: item.imageIds
+          }))
+        }
+        : {
+          splitMode: "count" as const,
+          packageCount: packageMode === "single" ? 1 : packageCount
+        };
+      const res = await createEditPackage(selectedEventId, input);
       if (res.ok && res.data) {
-        setLastPackage(res.data);
-        setMessage({ tone: "success", title: "待修包已生成", body: `成功打包 ${res.data.success} 张，跳过 ${res.data.skipped} 张。` });
+        setEditPackages(res.data.packages);
+        setLastPackage(res.data.packages[0] ?? null);
+        const warningText = res.data.warnings.length ? ` ${res.data.warnings[0].reason}。` : "";
+        setMessage({ tone: "success", title: "待修包已生成", body: `生成 ${res.data.packageCount} 个包，成功打包 ${res.data.success} 张，跳过 ${res.data.skipped} 张。${warningText}` });
       } else {
         const tone = res.error?.code === "NO_EDIT_IMAGES" ? "warning" : "danger";
         setMessage({ tone, title: "待修包生成失败", body: res.error?.message || "生成待修包失败。" });
@@ -186,16 +244,37 @@ export function RetouchPage() {
     }
   };
 
-  const handleDownloadPackage = async () => {
-    if (!lastPackage) return;
-    setDownloadingPackage(true);
+  const handleDownloadPackage = async (editPackage: EditPackageData) => {
+    setDownloadingPackageId(editPackage.packageId);
     try {
-      await downloadEditPackage(lastPackage.packageId);
+      await downloadEditPackage(editPackage.packageId);
       setMessage({ tone: "success", title: "下载已开始", body: "待修包 ZIP 已开始下载。" });
     } catch (err: any) {
       setMessage({ tone: "danger", title: "待修包下载失败", body: err?.message || "下载失败。" });
     } finally {
-      setDownloadingPackage(false);
+      setDownloadingPackageId("");
+    }
+  };
+
+  const handleDeletePackage = async () => {
+    if (!deletePackageTarget) return;
+    setDeletingPackageId(deletePackageTarget.packageId);
+    try {
+      const res = await deleteEditPackage(deletePackageTarget.packageId);
+      if (res.ok && res.data) {
+        const nextPackages = editPackages.filter((item) => item.packageId !== deletePackageTarget.packageId);
+        setEditPackages(nextPackages);
+        setLastPackage(nextPackages[0] ?? null);
+        setDeletePackageTarget(null);
+        const missingText = res.data.missingFiles.length > 0 ? ` 原 ZIP 文件已不存在，已清理记录。` : "";
+        setMessage({ tone: "success", title: "待修包已删除", body: `已删除待修包记录和 ZIP 文件。${missingText}` });
+      } else {
+        setMessage({ tone: "danger", title: "待修包删除失败", body: res.error?.message || "删除待修包失败。" });
+      }
+    } catch (err: any) {
+      setMessage({ tone: "danger", title: "待修包删除失败", body: err?.message || "请求失败。" });
+    } finally {
+      setDeletingPackageId("");
     }
   };
 
@@ -260,12 +339,22 @@ export function RetouchPage() {
         <RetouchTodo
           canCreate={Boolean(selectedEventId)}
           creatingPackage={creatingPackage}
-          downloadingPackage={downloadingPackage}
+          downloadingPackageId={downloadingPackageId}
           editImages={editImages}
+          editPackages={editPackages}
           editTotal={editTotal}
           lastPackage={lastPackage}
+          packageMode={packageMode}
+          packageCount={packageCount}
+          activeCustomPackageId={activeCustomPackage?.id || ""}
+          customPackages={customPackages}
           onCreatePackage={handleCreatePackage}
+          onCustomPackagesChange={setCustomPackages}
+          onDeletePackage={setDeletePackageTarget}
           onDownloadPackage={handleDownloadPackage}
+          onPackageModeChange={setPackageMode}
+          onPackageCountChange={setPackageCount}
+          onSelectCustomPackage={setActiveCustomPackageId}
         />
       ) : (
         <RetouchDone
@@ -276,6 +365,23 @@ export function RetouchPage() {
           onResult={handleUploadComplete}
           onSetMessage={setMessage}
           onUploadingChange={setUploadingEdited}
+        />
+      )}
+
+      {deletePackageTarget && (
+        <ConfirmDialog
+          confirmLabel="删除待修包"
+          confirming={deletingPackageId === deletePackageTarget.packageId}
+          description="此操作只删除已生成的待修包 ZIP 和待修包记录，不会删除待修图片、原图或已修图。"
+          details={[
+            { label: "待修包", value: getEditPackageLabel(deletePackageTarget) },
+            { label: "图片数", value: `${deletePackageTarget.success}/${deletePackageTarget.total}` },
+            { label: "路径", value: deletePackageTarget.packagePath || "未记录" }
+          ]}
+          onCancel={() => setDeletePackageTarget(null)}
+          onConfirm={() => void handleDeletePackage()}
+          title="删除待修包"
+          tone="danger"
         />
       )}
     </div>
@@ -299,28 +405,114 @@ function MetricCard({ icon, label, value, textValue, loading = false, tone = "de
   );
 }
 
-function RetouchTodo({ canCreate, creatingPackage, downloadingPackage, editImages, editTotal, lastPackage, onCreatePackage, onDownloadPackage }: {
+function RetouchTodo({
+  canCreate,
+  creatingPackage,
+  downloadingPackageId,
+  editImages,
+  editPackages,
+  editTotal,
+  lastPackage,
+  packageMode,
+  packageCount,
+  activeCustomPackageId,
+  customPackages,
+  onCreatePackage,
+  onCustomPackagesChange,
+  onDeletePackage,
+  onDownloadPackage,
+  onPackageModeChange,
+  onPackageCountChange,
+  onSelectCustomPackage
+}: {
   canCreate: boolean;
   creatingPackage: boolean;
-  downloadingPackage: boolean;
+  downloadingPackageId: string;
   editImages: EventImageData[];
+  editPackages: EditPackageData[];
   editTotal: number;
   lastPackage: EditPackageData | null;
+  packageMode: PackageMode;
+  packageCount: number;
+  activeCustomPackageId: string;
+  customPackages: CustomPackageDraft[];
   onCreatePackage: () => void;
-  onDownloadPackage: () => void;
+  onCustomPackagesChange: (packages: CustomPackageDraft[]) => void;
+  onDeletePackage: (editPackage: EditPackageData) => void;
+  onDownloadPackage: (editPackage: EditPackageData) => void;
+  onPackageModeChange: (mode: PackageMode) => void;
+  onPackageCountChange: (value: number) => void;
+  onSelectCustomPackage: (id: string) => void;
 }) {
   const missing = editImages.filter((image) => !image.original_exists);
+  const assignedImageIds = useMemo(() => new Set(customPackages.flatMap((item) => item.imageIds)), [customPackages]);
+  const activePackage = customPackages.find((item) => item.id === activeCustomPackageId) ?? customPackages[0];
+  const activeSelectedIds = new Set(activePackage?.imageIds ?? []);
+  const unassignedCount = Math.max(editTotal - assignedImageIds.size, 0);
+
+  const updateCustomPackage = (id: string, patch: Partial<CustomPackageDraft>) => {
+    onCustomPackagesChange(customPackages.map((item) => item.id === id ? { ...item, ...patch } : item));
+  };
+
+  const toggleImageInActivePackage = (imageId: string) => {
+    if (!activePackage) return;
+    const exists = activePackage.imageIds.includes(imageId);
+    updateCustomPackage(activePackage.id, {
+      imageIds: exists ? activePackage.imageIds.filter((id) => id !== imageId) : [...activePackage.imageIds, imageId]
+    });
+  };
+
+  const removeCustomPackage = (id: string) => {
+    if (customPackages.length <= 1) return;
+    const next = customPackages.filter((item) => item.id !== id);
+    onCustomPackagesChange(next);
+    if (activeCustomPackageId === id) {
+      onSelectCustomPackage(next[0]?.id || "");
+    }
+  };
 
   return (
     <div className="flex min-h-[520px] flex-1 flex-col rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
-      <div className="mb-6 flex items-center justify-between gap-4">
+      <div className="mb-6 flex items-start justify-between gap-4">
         <div>
           <h3 className="font-medium text-slate-900">待修包生成</h3>
           <p className="mt-1 text-xs text-slate-500">
             当前活动有 {editTotal.toLocaleString()} 张图片被标记为“待修图”。
           </p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex items-end gap-3">
+          <div className="flex rounded-lg bg-slate-100 p-1">
+            {[
+              ["single", "一个包"],
+              ["count", "平均拆包"],
+              ["custom", "自定义分包"]
+            ].map(([value, label]) => (
+              <button
+                className={cn(
+                  "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+                  packageMode === value ? "bg-white text-blue-600 shadow-sm" : "text-slate-500 hover:text-slate-800"
+                )}
+                key={value}
+                onClick={() => onPackageModeChange(value as PackageMode)}
+                type="button"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {packageMode === "count" && (
+          <label className="w-32">
+            <span className="mb-1 block text-[11px] font-medium text-slate-400">拆分包数</span>
+            <input
+              className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-blue-500"
+              max={20}
+              min={1}
+              onChange={(event) => onPackageCountChange(Math.min(Math.max(Number(event.target.value) || 1, 1), 20))}
+              type="number"
+              value={packageCount}
+            />
+          </label>
+          )}
           <button
             className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
             disabled={!canCreate || creatingPackage}
@@ -329,15 +521,6 @@ function RetouchTodo({ canCreate, creatingPackage, downloadingPackage, editImage
           >
             <FileArchive size={16} />
             {creatingPackage ? "生成中..." : "生成待修包"}
-          </button>
-          <button
-            className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-            disabled={!lastPackage || downloadingPackage}
-            onClick={onDownloadPackage}
-            type="button"
-          >
-            <Download size={16} />
-            {downloadingPackage ? "下载中..." : "下载待修包"}
           </button>
         </div>
       </div>
@@ -350,28 +533,130 @@ function RetouchTodo({ canCreate, creatingPackage, downloadingPackage, editImage
           <p className="text-sm font-medium text-slate-700">暂无待修图片，请先在图片墙将图片标记为“待修图”。</p>
         </div>
       ) : (
-        <div className="grid flex-1 grid-cols-[1fr_320px] gap-6">
+        <div className={cn("grid flex-1 gap-6", packageMode === "custom" ? "grid-cols-[1fr_380px]" : "grid-cols-[1fr_320px]")}>
           <div className="rounded-xl border border-slate-100 bg-slate-50 p-4">
-            <h4 className="mb-3 text-sm font-medium text-slate-700">待修图片预览</h4>
+            <div className="mb-3 flex items-center justify-between gap-4">
+              <h4 className="text-sm font-medium text-slate-700">待修图片预览</h4>
+              {packageMode === "custom" && <span className="text-xs text-slate-400">未分配 {unassignedCount} 张</span>}
+            </div>
             <div className="grid grid-cols-4 gap-3">
-              {editImages.slice(0, 12).map((image) => (
-                <div className="overflow-hidden rounded-lg border border-slate-100 bg-white" key={image.id}>
+              {(packageMode === "custom" ? editImages : editImages.slice(0, 12)).map((image) => (
+                <button
+                  className={cn(
+                    "overflow-hidden rounded-lg border bg-white text-left transition",
+                    packageMode === "custom"
+                      ? activeSelectedIds.has(image.id)
+                        ? "border-blue-500 ring-2 ring-blue-100"
+                        : assignedImageIds.has(image.id)
+                          ? "border-emerald-200"
+                          : "border-slate-100 hover:border-blue-200"
+                      : "border-slate-100"
+                  )}
+                  disabled={packageMode !== "custom"}
+                  key={image.id}
+                  onClick={() => toggleImageInActivePackage(image.id)}
+                  type="button"
+                >
                   <img alt={image.original_filename} className="h-20 w-full object-cover" src={image.thumb_url} />
-                  <p className="truncate px-2 py-1 text-xs text-slate-500">{image.original_filename}</p>
-                </div>
+                  <div className="px-2 py-1">
+                    <p className="truncate text-xs text-slate-500">{image.original_filename}</p>
+                    {packageMode === "custom" && (
+                      <p className={cn("mt-0.5 truncate text-[11px]", assignedImageIds.has(image.id) ? "text-emerald-600" : "text-slate-400")}>
+                        {customPackages.filter((item) => item.imageIds.includes(image.id)).map((item) => item.name || "未命名").join(" / ") || "未分配"}
+                      </p>
+                    )}
+                  </div>
+                </button>
               ))}
             </div>
           </div>
 
           <aside className="space-y-4">
+            {packageMode === "custom" && (
+              <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <h4 className="text-sm font-medium text-slate-700">自定义包</h4>
+                  <button
+                    className="flex items-center gap-1 rounded-md bg-white px-2.5 py-1.5 text-xs font-medium text-blue-600 shadow-sm hover:bg-blue-50"
+                    onClick={() => {
+                      const next = [...customPackages, createCustomPackageDraft(customPackages.length + 1)];
+                      onCustomPackagesChange(next);
+                      onSelectCustomPackage(next[next.length - 1].id);
+                    }}
+                    type="button"
+                  >
+                    <Plus size={13} />
+                    新增包
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {customPackages.map((item) => (
+                    <div className={cn("rounded-lg border bg-white p-3", activeCustomPackageId === item.id ? "border-blue-300" : "border-slate-100")} key={item.id}>
+                      <div className="mb-2 flex items-center gap-2">
+                        <button
+                          className="min-w-0 flex-1 text-left text-xs font-medium text-slate-500"
+                          onClick={() => onSelectCustomPackage(item.id)}
+                          type="button"
+                        >
+                          {activeCustomPackageId === item.id ? "当前编辑" : "选择编辑"} · {item.imageIds.length} 张
+                        </button>
+                        <button
+                          className="text-slate-300 hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-40"
+                          disabled={customPackages.length <= 1}
+                          onClick={() => removeCustomPackage(item.id)}
+                          type="button"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                      <input
+                        className="w-full rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-sm text-slate-700 outline-none focus:border-blue-400"
+                        onChange={(event) => updateCustomPackage(item.id, { name: event.target.value })}
+                        value={item.name}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="rounded-xl border border-slate-100 p-4">
-              <h4 className="text-sm font-medium text-slate-700">最近生成</h4>
-              {lastPackage ? (
-                <div className="mt-3 text-xs leading-6 text-slate-500">
-                  <p>总数：{lastPackage.total}</p>
-                  <p>成功：{lastPackage.success}</p>
-                  <p>跳过：{lastPackage.skipped}</p>
-                  <p className="truncate" title={lastPackage.packagePath}>路径：{lastPackage.packagePath}</p>
+              <h4 className="text-sm font-medium text-slate-700">已生成待修包</h4>
+              {editPackages.length > 0 ? (
+                <div className="mt-3 space-y-3">
+                  {editPackages.slice(0, 8).map((item) => (
+                    <div className="rounded-lg border border-slate-100 bg-slate-50 p-3" key={item.packageId}>
+                      <div className="mb-2 flex items-center justify-between gap-3">
+                        <p className="min-w-0 truncate text-sm font-medium text-slate-700">{getEditPackageLabel(item)}</p>
+                        <div className="flex shrink-0 items-center gap-2">
+                          <button
+                            className="flex items-center gap-1 rounded-md bg-blue-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:bg-slate-300"
+                            disabled={downloadingPackageId === item.packageId}
+                            onClick={() => onDownloadPackage(item)}
+                            type="button"
+                          >
+                            <Download size={13} />
+                            {downloadingPackageId === item.packageId ? "下载中" : "下载"}
+                          </button>
+                          <button
+                            className="flex h-8 w-8 items-center justify-center rounded-md border border-red-100 bg-white text-red-500 hover:bg-red-50 disabled:opacity-50"
+                            onClick={() => onDeletePackage(item)}
+                            title="删除待修包"
+                            type="button"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 text-xs text-slate-500">
+                        {item.name && <span className="col-span-3">第 {item.packageIndex} / {item.packageTotal} 包</span>}
+                        <span>总数 {item.total}</span>
+                        <span>成功 {item.success}</span>
+                        <span>跳过 {item.skipped}</span>
+                      </div>
+                    </div>
+                  ))}
+                  {lastPackage && <p className="truncate text-xs text-slate-400" title={lastPackage.packagePath}>最近路径：{lastPackage.packagePath}</p>}
                 </div>
               ) : (
                 <p className="mt-3 text-sm text-slate-400">尚未生成待修包。</p>

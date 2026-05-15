@@ -1,6 +1,6 @@
 import { Router } from "express";
-import { sendError } from "../utils/response";
-import { assertEditPackageDownload, recordEditPackageDownload } from "../services/editWorkflow";
+import { sendError, sendSuccess } from "../utils/response";
+import { assertEditPackageDownload, deleteEditPackage, recordEditPackageDownload } from "../services/editWorkflow";
 import { getLogger } from "../utils/logger";
 
 const router = Router();
@@ -26,6 +26,23 @@ router.get("/:packageId/download", (req, res) => {
     }
     getLogger().error({ err }, "待修包下载失败");
     sendError(res, "EDIT_PACKAGE_DOWNLOAD_FAILED", "待修包下载失败", 500);
+  }
+});
+
+router.delete("/:packageId", async (req, res) => {
+  try {
+    sendSuccess(res, await deleteEditPackage(req.params.packageId));
+  } catch (err: any) {
+    if (err?.code === "EDIT_PACKAGE_NOT_FOUND") {
+      sendError(res, err.code, err.message, 404);
+      return;
+    }
+    if (err?.code === "EDIT_PACKAGE_DELETE_FILE_FAILED") {
+      sendError(res, err.code, err.message, 409);
+      return;
+    }
+    getLogger().error({ err, packageId: req.params.packageId }, "删除待修包失败");
+    sendError(res, "DELETE_EDIT_PACKAGE_FAILED", "删除待修包失败", 500);
   }
 });
 

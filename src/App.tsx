@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { ClientLayout } from "./layouts/ClientLayout";
 import { HostLayout } from "./layouts/HostLayout";
 import { ClientConnectPage } from "./pages/client/ClientConnect";
+import { ClientRetouchPage } from "./pages/client/ClientRetouch";
 import { ClientUploadPage } from "./pages/client/ClientUpload";
 import { Startup } from "./pages/Startup";
 import { ArchivePage } from "./pages/host/Archive";
@@ -32,6 +33,9 @@ export default function App() {
       <Route path="/client" element={<ClientConnectPage />} />
       <Route path="/client/photos" element={<ClientLayout />}>
         <Route index element={<PhotoWallPage mode="client" />} />
+      </Route>
+      <Route path="/client/retouch" element={<ClientLayout />}>
+        <Route index element={<ClientRetouchPage />} />
       </Route>
       <Route path="/client/upload" element={<ClientLayout />}>
         <Route index element={<ClientUploadPage />} />

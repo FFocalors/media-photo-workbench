@@ -16,8 +16,8 @@ import { TaskCenter } from "../components/tasks/TaskCenter";
 const navItems = [
   { icon: Home, label: "首页", to: "/host/overview" },
   { icon: FolderKanban, label: "活动管理", to: "/host/events" },
-  { icon: LayoutGrid, label: "图片墙", to: "/host/photos" },
   { icon: ImagePlus, label: "导入图片", to: "/host/import" },
+  { icon: LayoutGrid, label: "图片墙", to: "/host/photos" },
   { icon: PenTool, label: "待修图", to: "/host/retouch" },
   { icon: CheckCircle, label: "已修图", to: "/host/done" },
   { icon: UploadCloud, label: "导出发布", to: "/host/export" },
