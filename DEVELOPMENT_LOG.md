@@ -28,6 +28,61 @@
 
 ## 开发记录
 
+### v0.13.0-dev：Windows 打包发布
+- **日期**：2026-05-17
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - 后端 Express 增加生产模式前端静态托管，能从 `dist/` 返回前端资源。
+  - 非 `/api`、非 `/socket.io` 的 GET/HEAD 请求回退到 `index.html`，保证 React Router 页面刷新不 404。
+  - Electron 生产模式改为在本机后端启动后加载 `http://127.0.0.1:{serverPort}`；开发模式继续加载 Vite `http://127.0.0.1:5173`。
+  - 前端 API 和 Socket.IO 基址增加生产同源逻辑：当页面由后端端口托管时默认使用当前 origin，局域网客户端不会误请求自己的 `localhost:3030`。
+  - 新增运行时端口状态：`startServer` 返回的真实端口会写入 runtime，`/api/health` 返回真实监听端口，不再把冲突后的端口写回 `config.json`。
+  - Electron preload 通过同步 IPC 暴露 `getRuntimeInfo()`，开发模式 Vite 页面可在初始化阶段拿到真实后端端口。
+  - 主机首页按开发/生产模式区分地址显示；开发模式保留 `5173` 前端候选，生产模式显示客户端访问地址和 API 健康检查地址。
+  - 主机首页接入真实仓库磁盘剩余空间和二维码：开发模式二维码指向前端 `5173`，生产模式二维码指向真实后端统一端口。
+  - `package.json` 增加 `dist:portable`、`dist:win` 脚本和 electron-builder 配置，输出目录为 `release-pack/`。
+  - `dist:portable` 调整为生成 Windows 便携 ZIP 包；解压后的 `Media Photo Workbench.exe` 作为当前便携交付形式。
+  - `build:server` 生成 `dist-server/package.json`，显式声明 `{ "type": "commonjs" }`，避免根目录 `"type": "module"` 导致打包后后端被当成 ESM。
+  - `.npmrc` 增加 `node-linker=hoisted`，规避 pnpm + electron-builder 下运行时传递依赖漏打包问题。
+  - Electron 主进程增加 `startup.log` 和启动失败错误页，用于定位打包后白屏、端口和原生模块问题。
+  - electron-builder 配置加入 ZIP、NSIS、`asarUnpack` 和运行时文件白名单，避免提交 `release-pack/`、`dist/`、`dist-server/`、运行时数据和真实仓库。
+- **修改文件**：
+  - `src-server/app.ts`
+  - `src-server/index.ts`
+  - `src-server/runtime.ts`
+  - `src-server/routes/health.ts`
+  - `src-server/services/repository.ts`
+  - `electron/main.cjs`
+  - `electron/preload.cjs`
+  - `src/lib/api.ts`
+  - `src/pages/host/Overview.tsx`
+  - `package.json`
+  - `.npmrc`
+  - `.gitignore`
+  - `README.md`
+  - `ROADMAP.md`
+  - `CHANGELOG.md`
+  - `API_SPEC.md`
+  - `AGENTS.md`
+- **验证方式**：
+  - Node.js 已确认为 `v22.22.2`。
+  - `pnpm exec electron-builder --version` 返回 `26.8.1`。
+  - `pnpm build` 通过。
+  - `dist-server/package.json` 生成 `{ "type": "commonjs" }`。
+  - `pnpm dist:portable` 已切换为便携 ZIP 打包路线；`win-unpacked` 目录下的程序已验证可正常打开。
+  - `pnpm exec electron-builder --win zip --config.directories.output=release-pack-zip-test` 通过，生成 `MediaPhotoWorkbench-0.13.0-dev-x64.zip`。
+- **遇到的问题**：
+  - 单文件 self-extract portable EXE 曾出现双击后无可见窗口的问题；同一构建下的 `win-unpacked/Media Photo Workbench.exe` 可正常启动。
+  - 旧的 `Media Photo Workbench.exe` / node 进程可能占用 `release-pack/win-unpacked/resources/app.asar`，导致重新打包无法覆盖旧产物。
+- **解决方案**：
+  - 当前便携交付改为 ZIP 包：解压后运行 `Media Photo Workbench.exe`，不再把单文件 portable 自解压 EXE 作为主交付物。
+  - 重新打包前必须关闭旧 exe 和相关 node/electron 进程，再删除旧 `release-pack/`；如果仍提示 `app.asar` 被占用，需要重启电脑后先删除 `release-pack/`，再运行打包命令。
+- **未完成事项**：
+  - NSIS 安装包仍需继续端到端补测。
+  - 打包后的 Electron 首页、Socket.IO 真实端口、客户端访问、导入、修图、导出和归档仍需端到端人工验证。
+- **下一步计划**：
+  - 重新执行 `pnpm dist:portable` 生成 ZIP，解压后启动 `Media Photo Workbench.exe`，确认 `/api/health`、Electron 首页、Socket.IO、首页地址和二维码全部使用真实端口。
+
 ### v0.12.0-dev：窗口适配、真实压力测试与问题修复
 - **日期**：2026-05-15
 - **开发者 / 工具**：Codex
@@ -106,7 +161,7 @@
   - 同一图片分配到多个包时当前允许继续生成，只通过 warnings 提醒，后续可根据实际流程改为硬性禁止。
   - 客户端仍只允许下载待修包和回传已修图，不允许生成或删除待修包。
 - **下一步计划**：
-  - 进入 v0.12.0-dev：真实局域网 / 手机网页 / 多设备测试修复。
+  - 进入 v0.12.0-dev：窗口适配、真实压力测试与问题修复。
 
 ### v0.11.4-dev：客户端修图协作基础增强
 - **日期**：2026-05-15
@@ -168,7 +223,7 @@
 - **未完成事项**：
   - 真实双设备访问仍可能受 Windows 防火墙、校园网设备隔离或热点网络策略影响，需要在 v0.12.0-dev 阶段继续实机补测。
 - **下一步计划**：
-  - 继续 v0.12.0-dev：真实局域网 / 手机网页 / 多设备测试修复。
+  - 继续 v0.12.0-dev：窗口适配、真实压力测试与问题修复。
 
 ### v0.11.2-dev：主机系统概览页真实数据
 - **日期**：2026-05-15
@@ -194,7 +249,7 @@
 - **未完成事项**：
   - 首页二维码暂未生成；后续应在确认前端真实可访问地址后再接入二维码。
 - **下一步计划**：
-  - 继续 v0.12.0-dev：真实局域网 / 手机网页 / 多设备测试修复。
+  - 继续 v0.12.0-dev：窗口适配、真实压力测试与问题修复。
 
 ### v0.11.1-dev：轻量归档策略与归档删除
 - **日期**：2026-05-15
@@ -226,7 +281,7 @@
 - **未完成事项**：
   - 旧版本已经生成的完整归档不会自动瘦身；可以只读打开，也可以手动删除后重新按轻量策略生成。
 - **下一步计划**：
-  - 继续 v0.12.0-dev：真实局域网 / 手机网页 / 多设备测试修复。
+  - 继续 v0.12.0-dev：窗口适配、真实压力测试与问题修复。
 
 ### v0.11.0-dev：归档活动只读打开
 - **日期**：2026-05-15
@@ -256,7 +311,7 @@
   - 当前只读详情以 metadata 和 CSV 为主，不提供 archived event.db 的独立浏览 UI。
   - 归档图片只展示元数据列表，暂不做归档缩略图墙。
 - **下一步计划**：
-  - 进入 v0.12.0-dev：真实局域网 / 手机网页 / 多设备测试修复。
+  - 进入 v0.12.0-dev：窗口适配、真实压力测试与问题修复。
 
 ### v0.10.0-dev：任务队列与批量 ZIP 下载
 - **日期**：2026-05-15
@@ -832,7 +887,7 @@
 - **开发者 / 工具**：Antigravity (AI 智能体)
 - **完成内容**：
   - **API 标准化**：全面重构前后端 API，后端引入 `sendSuccess`/`sendError` 统一抛出 `{ ok, data, error }` 格式；前端使用泛型 `ApiResponse<T>` 封装。
-  - **端口冲突自愈**：在 `index.ts` 中实现端口被占用时的自动探测与递增重试逻辑（尝试范围 3030-3040），将最终可用端口动态更新到 `config.json`。
+  - **端口冲突自愈**：在 `index.ts` 中实现端口被占用时的自动探测与递增重试逻辑（尝试范围 3030-3040）。v0.13 起，最终真实监听端口通过运行时状态和 `/api/health` 暴露，不再写回 `config.json`。
   - **IPC 动态端口下发**：Electron `main.cjs` 捕获到实际运行端口后，通过 `webContents.send` 将端口动态传递给渲染进程的 `preload.cjs`，彻底解决前后端端口失联问题。
   - **活动 CRUD 实现**：在服务端建立 `services/events.ts` 业务层，基于 better-sqlite3 实现了针对 `events` 表的获取列表、查询单条、创建活动、更新信息及状态流转。
   - **自动建立物理工作区**：按照 `AGENTS.md` 规范，在新建活动时会校验 Repository 设置，自动在宿主本地硬盘创建 `working/{slug}/原图`、`缩略图`、`已修图` 等 11 个分类协作目录。

@@ -3,21 +3,73 @@ const { contextBridge, ipcRenderer } = require("electron");
 /**
  * Preload 脚本。
  * 通过 contextBridge 暴露安全的 API 给渲染进程。
- * apiBaseUrl 由主进程通过 IPC 在启动后设置（因为端口可能因冲突而变化）。
+ *
+ * 生产模式下，页面由后端统一端口托管，renderer 直接使用 window.location.origin
+ * 作为 API / Socket.IO 基址，不需要 preload 注入端口。
+ *
+ * 开发模式下，前端运行在 Vite 5173，需要 preload 告知真实后端端口。
  */
 
-let _apiBaseUrl = "http://localhost:3030"; // 默认值
+let _runtimeInfo = {
+  isPackaged: false,
+  isDev: true,
+  serverPort: 0,
+  apiBaseUrl: "",
+  clientBaseUrl: ""
+};
 
-// 监听主进程发来的真实端口
+function normalizeRuntimeInfo(info) {
+  if (!info || typeof info !== "object") {
+    return;
+  }
+
+  _runtimeInfo = {
+    isPackaged: Boolean(info.isPackaged),
+    isDev: Boolean(info.isDev),
+    serverPort: Number(info.serverPort) || 0,
+    apiBaseUrl: String(info.apiBaseUrl || ""),
+    clientBaseUrl: String(info.clientBaseUrl || "")
+  };
+}
+
+try {
+  normalizeRuntimeInfo(ipcRenderer.sendSync("runtime:get-info-sync"));
+} catch (_) {
+  // 主进程尚未准备好时保持空运行时信息，后续 IPC 会补齐。
+}
+
+// 监听主进程发来的真实运行时信息
+ipcRenderer.on("set-runtime-info", (_event, info) => {
+  normalizeRuntimeInfo(info);
+});
+
+// 兼容旧版 IPC（仅端口号）
 ipcRenderer.on("set-api-port", (_event, port) => {
-  _apiBaseUrl = `http://localhost:${port}`;
+  const p = Number(port) || 0;
+  if (p > 0) {
+    _runtimeInfo.serverPort = p;
+    _runtimeInfo.apiBaseUrl = `http://localhost:${p}`;
+    _runtimeInfo.clientBaseUrl = `http://localhost:${p}`;
+  }
 });
 
 contextBridge.exposeInMainWorld("mediaPhotoWorkbench", {
   platform: process.platform,
+
+  /**
+   * 获取完整的运行时信息（开发模式使用）。
+   * 生产模式 renderer 应优先使用 window.location.origin。
+   */
+  getRuntimeInfo: () => ({ ..._runtimeInfo }),
+
+  /**
+   * 兼容旧代码：直接返回 apiBaseUrl。
+   * 生产模式 renderer 不应依赖此值（会优先用同源地址）。
+   */
   get apiBaseUrl() {
-    return _apiBaseUrl;
+    return _runtimeInfo.apiBaseUrl;
   },
+
   selectDirectory: () => ipcRenderer.invoke("dialog:select-directory"),
   openPath: (path) => ipcRenderer.invoke("shell:open-path", path)
 });

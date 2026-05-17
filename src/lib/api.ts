@@ -24,7 +24,7 @@ export function setClientApiBase(baseUrl: string): string {
 }
 
 export function getClientApiBase(): string {
-  return localStorage.getItem(CLIENT_API_BASE_KEY) ?? "";
+  return localStorage.getItem(CLIENT_API_BASE_KEY) ?? getSameOriginApiBase() ?? "";
 }
 
 export function clearClientApiBase(): void {
@@ -50,7 +50,35 @@ export function getApiBase(): string {
     const clientBase = getClientApiBase();
     if (clientBase) return clientBase;
   }
-  return (window as any).mediaPhotoWorkbench?.apiBaseUrl ?? "http://localhost:3030";
+
+  // 生产 / 打包模式：页面由后端统一端口托管，直接使用当前页面同源地址。
+  const sameOrigin = getSameOriginApiBase();
+  if (sameOrigin) return sameOrigin;
+
+  // 开发模式（Vite 5173）：使用 Electron preload 注入的真实 API 端口。
+  const runtimeInfo = (window as any).mediaPhotoWorkbench?.getRuntimeInfo?.();
+  if (runtimeInfo?.apiBaseUrl) return runtimeInfo.apiBaseUrl;
+
+  // 兜底：preload legacy apiBaseUrl property
+  const legacyApiBase = (window as any).mediaPhotoWorkbench?.apiBaseUrl;
+  if (legacyApiBase) return legacyApiBase;
+
+  // 最终兜底
+  return "http://localhost:3030";
+}
+
+function getSameOriginApiBase(): string | null {
+  const { protocol, host, port } = window.location;
+  if ((protocol !== "http:" && protocol !== "https:") || !host) {
+    return null;
+  }
+
+  // Vite 开发服务（5173）不提供 API，不要使用同源地址。
+  if (port === "5173") {
+    return null;
+  }
+
+  return `${protocol}//${host}`;
 }
 
 // ---------- 统一响应类型 ----------
@@ -106,7 +134,7 @@ async function parseApiResponse<T>(res: Response): Promise<ApiResponse<T>> {
 
 export interface HealthData {
   service: string;
-  server: { port: number; status: string };
+  server: { port: number; configuredPort?: number; status: string };
   database: { status: string };
   repository: {
     configured: boolean;
@@ -114,6 +142,13 @@ export interface HealthData {
     readable: boolean;
     writable: boolean;
     freeSpace: number | null;
+    totalSpace: number | null;
+    freeSpaceBytes?: number | null;
+    totalSpaceBytes?: number | null;
+    usedSpaceBytes?: number | null;
+    freeSpaceText?: string;
+    totalSpaceText?: string;
+    capacityError?: string;
     path: string;
   };
   config: {
@@ -155,6 +190,13 @@ export interface RepositoryCheckData {
   readable: boolean;
   writable: boolean;
   freeSpace: number | null;
+  totalSpace: number | null;
+  freeSpaceBytes?: number | null;
+  totalSpaceBytes?: number | null;
+  usedSpaceBytes?: number | null;
+  freeSpaceText?: string;
+  totalSpaceText?: string;
+  capacityError?: string;
   path: string;
 }
 

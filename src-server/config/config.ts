@@ -23,6 +23,18 @@ const DEFAULT_CONFIG: AppConfig = {
 let _configDir = "";
 let _config: AppConfig = { ...DEFAULT_CONFIG };
 
+function normalizePreferredPort(port: unknown): number {
+  const parsedPort = Number(port);
+  if (parsedPort === DEFAULT_CONFIG.server.port) {
+    return DEFAULT_CONFIG.server.port;
+  }
+
+  // v0.13 之前曾把端口冲突后的实际端口写回 config.json。
+  // 当前第一版没有真实的端口设置保存入口，因此配置中的首选端口固定回 3030；
+  // 启动时如被占用仍会临时顺延到 3031-3040，但不会再污染配置。
+  return DEFAULT_CONFIG.server.port;
+}
+
 /**
  * 加载配置文件。如果不存在则创建默认配置。
  */
@@ -36,12 +48,16 @@ export function loadConfig(configDir: string): AppConfig {
       const raw = fs.readJsonSync(configPath);
       _config = {
         server: {
-          port: raw?.server?.port ?? DEFAULT_CONFIG.server.port
+          port: normalizePreferredPort(raw?.server?.port)
         },
         repository: {
           path: raw?.repository?.path ?? DEFAULT_CONFIG.repository.path
         }
       };
+      if (raw?.server?.port !== _config.server.port) {
+        fs.writeJsonSync(configPath, _config, { spaces: 2 });
+        logger.info({ configPath, preferredPort: _config.server.port }, "已重置主机服务默认端口配置");
+      }
       logger.info({ configPath }, "配置文件已加载");
     } catch (err) {
       logger.warn({ err, configPath }, "配置文件读取失败，使用默认配置");

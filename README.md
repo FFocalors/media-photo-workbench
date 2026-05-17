@@ -17,9 +17,9 @@ Media Photo Workbench 是面向校园融媒体中心、新闻中心及影像部�
 
 ## 当前开发状态
 
-**当前版本：0.12.0-dev（窗口适配、真实压力测试与问题修复阶段）**
+**当前版本：0.13.0-dev（Windows 打包发布阶段）**
 
-项目已打通从主机建活动、本地导入、真实图片墙、单图下载、Socket.IO 实时同步、客户端上传协作、待修包生成、已修图回传、正式发布导出 ZIP、活动归档，到活动/图片回收站恢复和安全永久删除的核心闭环。当前已接入统一任务中心、批量 ZIP 下载、归档活动只读打开、客户端修图任务页、自定义待修分包和桌面端非最大化窗口适配，仍处于开发阶段，后续重点转向真实局域网多设备补测与 Windows 打包发布。
+项目已打通从主机建活动、本地导入、真实图片墙、单图下载、Socket.IO 实时同步、客户端上传协作、待修包生成、已修图回传、正式发布导出 ZIP、活动归档，到活动/图片回收站恢复和安全永久删除的核心闭环。当前已接入统一任务中心、批量 ZIP 下载、归档活动只读打开、客户端修图任务页、自定义待修分包和桌面端非最大化窗口适配，正在补齐生产模式前端托管和 Windows 便携 ZIP / NSIS 打包能力。
 
 ### 当前已实现功能
 - Electron 桌面主进程与前端通信集成，实现原生弹窗（文件夹选择）与文件浏览器调用。
@@ -87,7 +87,9 @@ pnpm dev
 - `pnpm dev:web`：仅启动 Vite 前端开发服务，固定使用 `5173` 端口并允许局域网访问。
 - `pnpm dev:electron`：启动底层服务、Vite 前端和 Electron；后端仍使用 `3030-3040` 自动端口机制。
 - `pnpm build:server`：编译后端 `src-server/` 代码至 `dist-server/`。
-- `pnpm build`：打包前端与 Electron 用于生产发布。
+- `pnpm build`：编译后端并构建前端 `dist/`。
+- `pnpm dist:portable`：先执行 `pnpm build`，再生成 Windows 便携 ZIP 包到 `release-pack/`。
+- `pnpm dist:win`：先执行 `pnpm build`，再生成 Windows NSIS 安装包到 `release-pack/`。
 - `pnpm rebuild:sqlite`：专门针对当前的 Electron 版本重编译 better-sqlite3 原生模块（如果出现 Node module version 报错时使用）。
 
 ## 局域网开发访问
@@ -106,7 +108,50 @@ http://主机局域网IP:3030/api/health
 
 如果 `3030` 被占用，后端会自动递增到 `3031-3040`，请以主机首页或 `/api/health` 返回的真实端口为准。若局域网前端页面无法打开，优先检查 Vite 是否通过 `pnpm dev` 启动、Windows 防火墙是否放行、校园网是否存在设备隔离。
 
+## 生产打包与客户端访问
+
+生产模式不再依赖 Vite `5173`。执行 `pnpm build` 后，Express 会托管前端 `dist/`：
+
+```text
+http://localhost:{serverPort}
+http://主机局域网IP:{serverPort}
+http://主机局域网IP:{serverPort}/api/health
+```
+
+其中 `{serverPort}` 仍由后端 `3030-3040` 自动端口机制决定。打包后的 Electron 主窗口会加载 `http://127.0.0.1:{serverPort}`，局域网客户端浏览器也访问同一个端口；前端页面、`/api` 接口和 Socket.IO 都复用该端口。
+
+打包命令：
+
+```bash
+pnpm build
+pnpm dist:portable
+pnpm dist:win
+```
+
+打包产物输出到 `release-pack/`。`pnpm dist:portable` 当前使用 ZIP 便携包作为交付物：解压 ZIP 后运行其中的 `Media Photo Workbench.exe`。不要把单文件 self-extract portable EXE 作为当前主交付物；该形式在当前项目中出现过双击无可见窗口的问题，而 `win-unpacked` / ZIP 解压后的程序已验证可正常启动。
+
+重新打包前必须关闭旧的 `Media Photo Workbench.exe` 并删除旧 `release-pack/`，否则旧 `app.asar` 被占用时 electron-builder 无法写入新产物。`release/`、`release-pack/`、`release-win/`、`dist/`、`dist-server/`、`data/`、`logs/`、`config/config.json`、真实数据库、真实图片、`working/`、`archive/` 和各类 ZIP 产物均不得提交到 Git。
+
 第一版重点保证 Windows 桌面端不同窗口尺寸下可用。手机和平板浏览器只作为轻量访问入口，用于查看、预览和简单状态操作；不把批量上传、批量下载、导出、归档和永久删除作为移动端完整适配目标。
+
+## 窗口适配与压力测试清单
+
+v0.12.0-dev 当前重点是 Windows 桌面端非最大化窗口可用性。建议每次 UI 或工作流改动后至少检查：
+
+- `1920x1080` 最大化或接近最大化窗口。
+- `1440x900` 常见笔记本窗口。
+- `1366x768` 低分辨率窗口。
+- `1280x720` 紧凑窗口。
+- `1200x760` Electron 当前最小窗口尺寸。
+
+重点页面：
+
+- 图片墙：工具栏文字不得竖排；筛选栏和元数据栏可折叠；图片缩略图区域保持可用。
+- 待修图：单包、平均拆包、自定义分包、待修包删除、已修图回传在非最大化窗口下可操作。
+- 客户端：上传图片、图片墙、修图任务页在连接主机后可用。
+- 长任务：批量 ZIP 下载、待修包生成、发布导出、归档流程能在任务中心看到状态。
+
+真实压力测试建议使用 50 / 300 / 500 张 JPG/JPEG 分批验证导入、图片墙滚动、批量下载、待修包、导出发布和归档。第一版暂不把手机端作为完整工作流适配目标。
 
 ## 项目目录结构
 
@@ -118,6 +163,7 @@ MediaPhotoWorkbench/
 ├── dist-server/        # 后端 TypeScript 编译后的 JS 产物
 ├── electron/           # Electron 主进程 (main.cjs, preload.cjs)
 ├── logs/               # 系统运行日志目录
+├── release-pack/       # Windows 打包产物目录（不提交 Git）
 ├── src/                # 前端 React 源代码
 ├── src-server/         # 后端 Express 及 SQLite 核心源代码
 ├── AGENTS.md           # 详细的产品开发要求与设计规范
@@ -132,8 +178,7 @@ MediaPhotoWorkbench/
 
 详情请见 `CHANGELOG.md` 与 `AGENTS.md`。
 
-下阶段重点：
-- v0.12.0-dev：窗口适配、真实压力测试与问题修复。
+当前与后续重点：
 - v0.13.0-dev：Windows 打包发布。
 - v0.14.0-rc：真实活动压力测试与发布前问题修复。
 - v1.1.0 之后再探索远程传输预留 / 远程连接。

@@ -1,10 +1,37 @@
 const { app, BrowserWindow, shell, Menu, ipcMain, dialog } = require("electron");
 const path = require("node:path");
+const fs = require("node:fs");
 
 const isDev = !app.isPackaged;
 
 /** @type {import('../dist-server/index').ServerHandle | null} */
 let serverHandle = null;
+/** @type {BrowserWindow | null} */
+let mainWindow = null;
+let runtimeInfo = {
+  isPackaged: app.isPackaged,
+  isDev,
+  serverPort: 0,
+  apiBaseUrl: "",
+  clientBaseUrl: ""
+};
+let startupLogsDir = null;
+
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) {
+        mainWindow.restore();
+      }
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+}
 
 /**
  * 获取应用数据根目录。
@@ -18,12 +45,33 @@ function getAppDataRoot() {
   return app.getPath("userData");
 }
 
-function createWindow() {
-  const mainWindow = new BrowserWindow({
+/**
+ * Write startup diagnostic log to a file in userData.
+ */
+function writeStartupLog(logsDir, message) {
+  try {
+    fs.mkdirSync(logsDir, { recursive: true });
+    const logPath = path.join(logsDir, "startup.log");
+    const timestamp = new Date().toISOString();
+    fs.appendFileSync(logPath, `[${timestamp}] ${message}\n`);
+  } catch (_) {
+    // best effort
+  }
+}
+
+function createWindow(serverPort, logsDir) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.show();
+    mainWindow.focus();
+    return mainWindow;
+  }
+
+  mainWindow = new BrowserWindow({
     width: 1360,
     height: 860,
     minWidth: 1200,
     minHeight: 760,
+    show: false,
     backgroundColor: "#f6f8fb",
     title: "Media Photo Workbench",
     webPreferences: {
@@ -33,16 +81,66 @@ function createWindow() {
     }
   });
 
+  mainWindow.on("closed", () => {
+    mainWindow = null;
+  });
+
+  mainWindow.once("ready-to-show", () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.show();
+      mainWindow.focus();
+      if (logsDir) {
+        writeStartupLog(logsDir, "BrowserWindow ready-to-show，窗口已显示");
+      }
+    }
+  });
+
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: "deny" };
   });
 
+  let loadURL = "";
   if (isDev) {
-    mainWindow.loadURL("http://127.0.0.1:5173");
+    loadURL = "http://127.0.0.1:5173";
+  } else if (serverPort) {
+    loadURL = `http://127.0.0.1:${serverPort}`;
   } else {
-    mainWindow.loadFile(path.join(__dirname, "../dist/index.html"));
+    loadURL = `data:text/html;charset=utf-8,${encodeURIComponent(renderErrorPage())}`;
   }
+  if (logsDir) {
+    writeStartupLog(logsDir, `final loadURL: ${loadURL.startsWith("data:") ? "data:error-page" : loadURL}`);
+  }
+  mainWindow.loadURL(loadURL);
+  return mainWindow;
+}
+
+/**
+ * Render a simple error page when backend fails to start.
+ */
+function renderErrorPage() {
+  const logsDir = path.join(app.getPath("userData"), "logs");
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>启动失败</title>
+<style>
+  body { font-family: "Microsoft YaHei", sans-serif; background: #fef2f2; color: #991b1b; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
+  .card { background: #fff; border: 1px solid #fca5a5; border-radius: 12px; padding: 32px; max-width: 520px; width: 100%; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+  h1 { font-size: 20px; margin: 0 0 12px; }
+  p { font-size: 14px; line-height: 1.6; margin: 8px 0; color: #7f1d1d; }
+  code { background: #fee2e2; padding: 2px 6px; border-radius: 4px; font-family: "Cascadia Code", monospace; font-size: 13px; }
+  .log-path { font-size: 12px; color: #9ca3af; margin-top: 16px; }
+</style></head>
+<body>
+  <div class="card">
+    <h1>⚠ 本地服务启动失败</h1>
+    <p>Media Photo Workbench 后端服务未能成功启动。</p>
+    <p>请检查日志文件获取详细错误信息：</p>
+    <p><code>${logsDir.replace(/\\/g, "\\\\")}\\\\startup.log</code></p>
+    <p>常见原因：端口被占用、数据目录无写入权限、原生模块不兼容。</p>
+    <p class="log-path">userData 目录：<code>${app.getPath("userData").replace(/\\/g, "\\\\")}</code></p>
+  </div>
+</body></html>`;
 }
 
 function setChineseMenu() {
@@ -136,7 +234,24 @@ function setChineseMenu() {
 }
 
 app.whenReady().then(async () => {
+  if (!gotSingleInstanceLock) {
+    return;
+  }
+
   const appDataRoot = getAppDataRoot();
+  const logsDir = path.join(appDataRoot, "logs");
+  startupLogsDir = logsDir;
+
+  // Log startup diagnostics
+  writeStartupLog(logsDir, "=== Media Photo Workbench 启动 ===");
+  writeStartupLog(logsDir, `isPackaged: ${app.isPackaged}`);
+  writeStartupLog(logsDir, `isDev: ${isDev}`);
+  writeStartupLog(logsDir, `__dirname: ${__dirname}`);
+  writeStartupLog(logsDir, `process.cwd(): ${process.cwd()}`);
+  writeStartupLog(logsDir, `process.resourcesPath: ${process.resourcesPath}`);
+  writeStartupLog(logsDir, `app.getAppPath(): ${app.getAppPath()}`);
+  writeStartupLog(logsDir, `app.getPath("userData"): ${app.getPath("userData")}`);
+  writeStartupLog(logsDir, `appDataRoot: ${appDataRoot}`);
 
   // 注册 IPC 处理程序
   ipcMain.handle("dialog:select-directory", async () => {
@@ -154,44 +269,86 @@ app.whenReady().then(async () => {
     return shell.openPath(fullPath);
   });
 
+  ipcMain.on("runtime:get-info-sync", (event) => {
+    event.returnValue = { ...runtimeInfo };
+  });
+
   // 启动后端服务
+  /** @type {string|null} */
+  let startErrorStack = null;
+
   try {
-    const { startServer } = require("../dist-server/index");
-    serverHandle = await startServer(appDataRoot);
+    // Resolve dist-server entry path
+    const distServerEntry = path.resolve(__dirname, "..", "dist-server", "index.js");
+    writeStartupLog(logsDir, `distServerEntry: ${distServerEntry}`);
+    writeStartupLog(logsDir, `distServerEntry exists: ${fs.existsSync(distServerEntry)}`);
+
+    // Resolve frontend dist path
+    const frontendDistPath = path.resolve(__dirname, "..", "dist");
+    writeStartupLog(logsDir, `frontendDistPath: ${frontendDistPath}`);
+    writeStartupLog(logsDir, `frontendDistPath/index.html exists: ${fs.existsSync(path.join(frontendDistPath, "index.html"))}`);
+
+    writeStartupLog(logsDir, "正在加载后端模块...");
+    const distServer = require(distServerEntry);
+    const { startServer } = distServer;
+
+    writeStartupLog(logsDir, "后端模块加载成功，正在 startServer...");
+    serverHandle = await startServer(appDataRoot, {
+      frontendDistPath,
+      serveFrontend: true
+    });
+    runtimeInfo = {
+      isPackaged: app.isPackaged,
+      isDev,
+      serverPort: serverHandle.port,
+      apiBaseUrl: `http://localhost:${serverHandle.port}`,
+      clientBaseUrl: `http://localhost:${serverHandle.port}`
+    };
+    writeStartupLog(logsDir, `startServer 成功，端口: ${serverHandle.port}`);
+    writeStartupLog(logsDir, `runtimeInfo: ${JSON.stringify(runtimeInfo)}`);
     console.log(`[main] 后端服务已启动，端口: ${serverHandle.port}`);
   } catch (err) {
+    startErrorStack = err && err.stack ? err.stack : String(err);
+    writeStartupLog(logsDir, `startServer 失败: ${startErrorStack}`);
     console.error("[main] 后端服务启动失败:", err);
-    // 后端启动失败不阻塞窗口打开，前端会回退到 mock 数据
   }
 
   setChineseMenu();
-  createWindow();
+  createWindow(serverHandle?.port, logsDir);
 
-  // 将真实端口发送给渲染进程
+  // 将真实运行时信息发送给渲染进程
   if (serverHandle) {
     const allWindows = BrowserWindow.getAllWindows();
     for (const win of allWindows) {
-      win.webContents.on("did-finish-load", () => {
-        win.webContents.send("set-api-port", serverHandle.port);
-      });
+      const sendInfo = () => {
+        win.webContents.send("set-runtime-info", runtimeInfo);
+        win.webContents.send("set-api-port", serverHandle.port); // 兼容旧 preload
+      };
+      win.webContents.on("did-finish-load", sendInfo);
       // 如果页面已经加载完毕，立即发送
       if (!win.webContents.isLoading()) {
-        win.webContents.send("set-api-port", serverHandle.port);
+        sendInfo();
       }
     }
   }
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
+      createWindow(serverHandle?.port, logsDir);
     }
   });
 });
 
 app.on("before-quit", () => {
+  if (startupLogsDir) {
+    writeStartupLog(startupLogsDir, "应用即将退出，准备关闭后端服务");
+  }
   if (serverHandle) {
     serverHandle.close();
     serverHandle = null;
+    if (startupLogsDir) {
+      writeStartupLog(startupLogsDir, "后端服务 close 已调用");
+    }
   }
 });
 

@@ -3,6 +3,7 @@ import os from "os";
 import { getConfig } from "../config/config";
 import { sendSuccess } from "../utils/response";
 import { checkRepository } from "../services/repository";
+import { getRuntimeServerPort } from "../runtime";
 
 const router = Router();
 
@@ -67,14 +68,29 @@ function isPhysicalLanInterface(name: string): boolean {
  */
 router.get("/", (_req, res) => {
   const config = getConfig();
+  const actualPort = getRuntimeServerPort() ?? config.server.port;
   const repoCheck = config.repository.path
     ? checkRepository(config.repository.path)
-    : { exists: false, readable: false, writable: false, freeSpace: null, path: "" };
+    : {
+        exists: false,
+        readable: false,
+        writable: false,
+        freeSpace: null,
+        totalSpace: null,
+        freeSpaceBytes: null,
+        totalSpaceBytes: null,
+        usedSpaceBytes: null,
+        freeSpaceText: "",
+        totalSpaceText: "",
+        capacityError: "未配置仓库路径",
+        path: ""
+      };
 
   sendSuccess(res, {
     service: "media-photo-workbench",
     server: {
-      port: config.server.port,
+      port: actualPort,
+      configuredPort: config.server.port,
       status: "running"
     },
     database: {

@@ -1,15 +1,21 @@
 import http from "http";
 import { createApp } from "./app";
-import { loadConfig, getConfig, saveConfig } from "./config/config";
+import { loadConfig } from "./config/config";
 import { initDatabase, closeDatabase } from "./db/database";
 import { initRealtime, getRealtime } from "./realtime/socket";
 import { initLogger, getLogger } from "./utils/logger";
 import { ensureDataDirs, getDatabasePath, getConfigDir, getLogsDir } from "./utils/paths";
 import { setAppDataRoot } from "./routes/settings";
+import { setRuntimeServerPort } from "./runtime";
 
 export interface ServerHandle {
   port: number;
   close: () => void;
+}
+
+export interface StartServerOptions {
+  frontendDistPath?: string;
+  serveFrontend?: boolean;
 }
 
 const MIN_PORT = 3030;
@@ -60,7 +66,10 @@ function tryListen(
  *   开发环境：项目根目录
  *   生产环境：app.getPath("userData")
  */
-export async function startServer(appDataRoot: string): Promise<ServerHandle> {
+export async function startServer(
+  appDataRoot: string,
+  options: StartServerOptions = {}
+): Promise<ServerHandle> {
   // 1. 确保数据目录存在
   ensureDataDirs(appDataRoot);
 
@@ -80,16 +89,19 @@ export async function startServer(appDataRoot: string): Promise<ServerHandle> {
   initDatabase(dbPath);
 
   // 6. 创建 Express 应用
-  const app = createApp();
+  const app = createApp({
+    frontendDistPath: options.frontendDistPath,
+    serveFrontend: options.serveFrontend
+  });
   const server = http.createServer(app);
   initRealtime(server);
 
   // 7. 带端口冲突处理的启动
   const actualPort = await tryListen(server, preferredPort);
+  setRuntimeServerPort(actualPort);
 
-  // 如果最终端口和配置里的不一样，更新配置
+  // config.server.port 是首选端口，不代表本次实际监听端口；不要把冲突后的端口写回配置。
   if (actualPort !== preferredPort) {
-    saveConfig({ server: { port: actualPort } });
     logger.info(
       { preferredPort, actualPort },
       `端口已自动切换：${preferredPort} -> ${actualPort}`

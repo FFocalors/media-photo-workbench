@@ -1,8 +1,34 @@
 # Media Photo Workbench / 融媒体图片工作台 - API 规范
 
+## 当前阶段说明
+
+当前开发阶段为 **v0.13.0-dev：Windows 打包发布**。
+
+本阶段不新增业务 API，但调整生产模式访问方式：打包后 Express 托管前端 `dist/`，前端页面、`/api` 接口和 Socket.IO 复用同一个后端端口。开发模式仍使用 Vite `5173` 访问前端、`3030-3040` 访问后端 API。
+
 ## 统一规范
 
 所有 API 前缀统一为 `/api`。
+
+### 开发与生产访问方式
+
+开发模式：
+
+```text
+前端页面：http://主机局域网IP:5173
+后端 API：http://主机局域网IP:{serverPort}/api/health
+Socket.IO：http://主机局域网IP:{serverPort}
+```
+
+生产 / 打包模式：
+
+```text
+前端页面：http://主机局域网IP:{serverPort}
+后端 API：http://主机局域网IP:{serverPort}/api/health
+Socket.IO：http://主机局域网IP:{serverPort}
+```
+
+其中 `{serverPort}` 由后端 `3030-3040` 自动端口机制决定。生产模式下非 `/api`、非 `/socket.io` 的前端路由请求会回退到 `index.html`，用于支持 React Router 刷新。
 
 ### 统一响应格式
 
@@ -42,14 +68,21 @@
     "ok": true,
     "data": {
       "service": "media-photo-workbench",
-      "server": { "port": 3030, "status": "running" },
+      "server": { "port": 3031, "configuredPort": 3030, "status": "running" },
       "database": { "status": "connected" },
       "repository": {
         "configured": true,
         "exists": true,
         "readable": true,
         "writable": true,
-        "freeSpace": null,
+        "freeSpace": 137438953472,
+        "totalSpace": 1099511627776,
+        "freeSpaceBytes": 137438953472,
+        "totalSpaceBytes": 1099511627776,
+        "usedSpaceBytes": 962072674304,
+        "freeSpaceText": "128.0 GB",
+        "totalSpaceText": "1.0 TB",
+        "capacityError": "",
         "path": "D:\\photos"
       },
       "config": {
@@ -68,7 +101,7 @@
     "error": null
   }
   ```
-- **备注**：前端启动、客户端连接和主机系统概览页会调用该接口。`network.lanAddresses` 来自当前主机非内网回环 IPv4 网卡；`freeSpace` 目前可能为 `null`，前端应显示“暂不可用”而不是假容量。
+- **备注**：前端启动、客户端连接和主机系统概览页会调用该接口。`server.port` 是本次真实监听端口，`server.configuredPort` 是配置中的首选端口。`network.lanAddresses` 来自当前主机 Wi-Fi / WLAN / 以太网 IPv4 网卡，已过滤 VMware、Docker、WSL、Hyper-V 等虚拟网卡。容量读取失败时 `freeSpace` / `totalSpace` 可能为 `null`，前端应显示“暂不可用”而不是假容量。
 
 ---
 
@@ -106,13 +139,20 @@
       "exists": true,
       "readable": true,
       "writable": true,
-      "freeSpace": null,
+      "freeSpace": 137438953472,
+      "totalSpace": 1099511627776,
+      "freeSpaceBytes": 137438953472,
+      "totalSpaceBytes": 1099511627776,
+      "usedSpaceBytes": 962072674304,
+      "freeSpaceText": "128.0 GB",
+      "totalSpaceText": "1.0 TB",
+      "capacityError": "",
       "path": "D:\\photos"
     },
     "error": null
   }
   ```
-- **备注**：当前实现只检查 `config/config.json` 中已保存的 `repository.path`。Windows 剩余空间暂返回 `null`。
+- **备注**：当前实现检查 `config/config.json` 中已保存的 `repository.path`，并尝试读取仓库所在磁盘容量。容量读取失败不会导致接口整体失败，相关字段会返回 `null` 并通过 `capacityError` 说明原因。
 
 ### [已实现] 更新仓库路径
 - **用途**：修改系统使用的全局图片仓库路径。
@@ -133,7 +173,14 @@
       "exists": true,
       "readable": true,
       "writable": true,
-      "freeSpace": null,
+      "freeSpace": 137438953472,
+      "totalSpace": 1099511627776,
+      "freeSpaceBytes": 137438953472,
+      "totalSpaceBytes": 1099511627776,
+      "usedSpaceBytes": 962072674304,
+      "freeSpaceText": "128.0 GB",
+      "totalSpaceText": "1.0 TB",
+      "capacityError": "",
       "path": "D:\\new_photos_folder"
     },
     "error": null

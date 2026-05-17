@@ -1,4 +1,5 @@
-import { Archive, CheckCircle2, Clipboard, Database, FolderKanban, HardDrive, ImagePlus, LayoutGrid, Network, QrCode, Settings, UploadCloud, WifiOff } from "lucide-react";
+import { Archive, Clipboard, Database, FolderKanban, HardDrive, ImagePlus, LayoutGrid, Settings, UploadCloud, WifiOff } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
@@ -71,19 +72,52 @@ export function OverviewPage() {
     void loadOverview();
   }, [loadOverview]);
 
-  const serverPort = health?.server.port ?? parsePortFromApiBase() ?? settings?.server.port ?? 3030;
+  const runtimeInfo = (window as any).mediaPhotoWorkbench?.getRuntimeInfo?.();
+  const serverPort = health?.server.port ?? runtimeInfo?.serverPort ?? parsePortFromApiBase() ?? settings?.server.port ?? 3030;
   const repositoryReady = Boolean(repository?.path && repository.exists && repository.readable && repository.writable);
   const databaseReady = health?.database.status === "connected";
   const serverReady = health?.server.status === "running";
   const overallStatus = serverReady && databaseReady && repositoryReady ? "系统运行正常" : "系统需要处理";
   const apiLocalAddress = `http://localhost:${serverPort}`;
   const lanAddresses = health?.network?.lanAddresses ?? [];
-  const frontendPort = window.location.port || String(serverPort);
-  const frontendProtocol = window.location.protocol || "http:";
-  const frontendLanAddresses = lanAddresses.map((item) => ({
-    ...item,
-    url: `${frontendProtocol}//${item.address}:${frontendPort}`
-  }));
+  const isDevelopmentFrontend = window.location.port === "5173";
+
+  // 二维码内容：开发模式指向前端 5173 地址，生产模式指向后端统一端口
+  const qrCodeUrl = useMemo(() => {
+    if (!serverReady) return null;
+    if (isDevelopmentFrontend && lanAddresses.length > 0) {
+      return `${window.location.protocol}//${lanAddresses[0].address}:5173`;
+    }
+    if (!isDevelopmentFrontend && lanAddresses.length > 0) {
+      return `http://${lanAddresses[0].address}:${serverPort}`;
+    }
+    // 没有局域网 IP 时不生成二维码
+    return null;
+  }, [isDevelopmentFrontend, lanAddresses, serverPort, serverReady]);
+
+  // 生产模式下的客户端访问地址列表
+  const clientLanAddresses = isDevelopmentFrontend
+    ? []
+    : lanAddresses.map((item) => ({
+        ...item,
+        url: `http://${item.address}:${serverPort}`
+      }));
+
+  // 开发模式下的前端访问地址列表
+  const frontendLanAddresses = isDevelopmentFrontend
+    ? lanAddresses.map((item) => ({
+        ...item,
+        url: `${window.location.protocol}//${item.address}:5173`
+      }))
+    : [];
+
+  // 开发模式下的 API 地址列表
+  const apiLanAddresses = isDevelopmentFrontend
+    ? lanAddresses.map((item) => ({
+        ...item,
+        url: `http://${item.address}:${serverPort}`
+      }))
+    : [];
 
   const quickActions = useMemo(() => {
     const hasEvent = Boolean(currentEvent);
@@ -185,11 +219,33 @@ export function OverviewPage() {
 
             <div className="flex items-center rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
               <div className="flex-1">
-                <h3 className="mb-2 text-sm font-medium text-slate-500">剩余空间</h3>
-                <div className="flex items-baseline gap-2">
-                  <span className="text-2xl font-bold text-slate-900">{formatBytes(repository?.freeSpace)}</span>
-                </div>
-                <p className="mt-1 text-xs text-slate-400">{repository?.freeSpace == null ? "当前后端暂未提供真实剩余空间" : "仓库所在磁盘可用空间"}</p>
+                <h3 className="mb-2 text-sm font-medium text-slate-500">存储空间</h3>
+                {repository?.freeSpace != null && repository.totalSpace != null ? (
+                  <>
+                    <div className="mb-1 flex items-baseline gap-2">
+                      <span className="text-2xl font-bold text-slate-900">{repository.freeSpaceText || formatBytes(repository.freeSpace)}</span>
+                      <span className="text-xs text-slate-400">可用</span>
+                    </div>
+                    <div className="mb-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                      <div
+                        className="h-full rounded-full bg-blue-500 transition-all"
+                        style={{ width: `${Math.min(100, Math.max(0, ((repository.totalSpace - repository.freeSpace) / repository.totalSpace) * 100))}%` }}
+                      />
+                    </div>
+                    <p className="text-xs text-slate-400">共 {repository.totalSpaceText || formatBytes(repository.totalSpace)}</p>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-2xl font-bold text-slate-900">{formatBytes(repository?.freeSpace)}</span>
+                    </div>
+                    <p className="mt-1 text-xs text-slate-400">
+                      {repository?.path
+                        ? (repository.capacityError || "无法读取磁盘空间信息")
+                        : "请先在设置中配置仓库路径"}
+                    </p>
+                  </>
+                )}
               </div>
               <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
                 <HardDrive size={28} strokeWidth={1.6} />
@@ -200,44 +256,95 @@ export function OverviewPage() {
               <div className="mb-4 flex items-start justify-between gap-5">
                 <div>
                   <h3 className="text-sm font-medium text-slate-500">局域网访问地址</h3>
-                  <p className="mt-1 text-xs text-slate-400">端口来自真实后端状态。二维码暂不生成，避免开发模式下生成不可访问地址。</p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    {isDevelopmentFrontend
+                      ? "开发模式：前端 Vite 5173，后端 API 独立端口；二维码指向前端地址，客户端浏览器需先打开前端页面。"
+                      : "生产模式：客户端浏览器直接访问后端端口，前端页面、API 和 Socket.IO 使用同一地址。"}
+                  </p>
                 </div>
-                <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-slate-50 text-slate-400">
-                  <QrCode size={34} strokeWidth={1.5} />
-                </div>
+                {qrCodeUrl ? (
+                  <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl bg-white p-1">
+                    <QRCodeSVG
+                      bgColor="#ffffff"
+                      fgColor="#1e293b"
+                      includeMargin={false}
+                      level="L"
+                      size={56}
+                      value={qrCodeUrl}
+                    />
+                  </div>
+                ) : (
+                  <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-slate-50 text-slate-400">
+                    <span className="text-[10px] text-slate-400">无可用地址</span>
+                  </div>
+                )}
               </div>
 
               <div className="space-y-3">
-                <AddressRow copied={copied === "local"} label="本机 API" onCopy={() => copyAddress(apiLocalAddress, "local")} value={apiLocalAddress} />
+                <AddressRow
+                  copied={copied === "local"}
+                  label={isDevelopmentFrontend ? "本机 API" : "本机客户端访问"}
+                  onCopy={() => copyAddress(apiLocalAddress, "local")}
+                  value={apiLocalAddress}
+                />
+                {!isDevelopmentFrontend && (
+                  <AddressRow
+                    copied={copied === "local-health"}
+                    label="本机 API 健康检查"
+                    onCopy={() => copyAddress(`${apiLocalAddress}/api/health`, "local-health")}
+                    value={`${apiLocalAddress}/api/health`}
+                  />
+                )}
+                {qrCodeUrl && (
+                  <div className="flex items-center gap-2 rounded-xl bg-blue-50 px-3 py-2">
+                    <span className="text-xs font-medium text-blue-700">扫码访问</span>
+                    <code className="truncate text-xs text-blue-600" title={qrCodeUrl}>{qrCodeUrl}</code>
+                  </div>
+                )}
                 {lanAddresses.length > 0 ? (
-                  lanAddresses.map((item, index) => (
-                    <AddressRow
-                      copied={copied === `lan-${index}`}
-                      key={`${item.name}-${item.address}`}
-                      label={`局域网 API / ${item.name}`}
-                      onCopy={() => copyAddress(`http://${item.address}:${serverPort}`, `lan-${index}`)}
-                      value={`http://${item.address}:${serverPort}`}
-                    />
-                  ))
+                  <>
+                    {isDevelopmentFrontend ? (
+                      <>
+                        <p className="text-[11px] font-medium text-slate-400">前端开发地址</p>
+                        {frontendLanAddresses.map((item, index) => (
+                          <AddressRow
+                            copied={copied === `frontend-${index}`}
+                            key={`frontend-${item.name}-${item.address}`}
+                            label={item.name}
+                            onCopy={() => copyAddress(item.url, `frontend-${index}`)}
+                            value={item.url}
+                          />
+                        ))}
+                        <p className="text-[11px] font-medium text-slate-400">后端 API 地址</p>
+                        {apiLanAddresses.map((item, index) => (
+                          <AddressRow
+                            copied={copied === `api-${index}`}
+                            key={`api-${item.name}-${item.address}`}
+                            label={item.name}
+                            onCopy={() => copyAddress(item.url, `api-${index}`)}
+                            value={item.url}
+                          />
+                        ))}
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-[11px] font-medium text-slate-400">客户端访问地址</p>
+                        {clientLanAddresses.map((item, index) => (
+                          <AddressRow
+                            copied={copied === `client-${index}`}
+                            key={`client-${item.name}-${item.address}`}
+                            label={item.name}
+                            onCopy={() => copyAddress(item.url, `client-${index}`)}
+                            value={item.url}
+                          />
+                        ))}
+                      </>
+                    )}
+                  </>
                 ) : (
                   <div className="flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-500">
                     <WifiOff size={15} />
                     暂未检测到可用局域网 IPv4 地址
-                  </div>
-                )}
-                {frontendLanAddresses.length > 0 && (
-                  <div className="border-t border-slate-100 pt-3">
-                    <p className="mb-2 text-xs font-medium text-slate-500">前端开发访问候选</p>
-                    {frontendLanAddresses.map((item, index) => (
-                      <AddressRow
-                        copied={copied === `frontend-${index}`}
-                        key={`frontend-${item.name}-${item.address}`}
-                        label={item.name}
-                        onCopy={() => copyAddress(item.url, `frontend-${index}`)}
-                        value={item.url}
-                      />
-                    ))}
-                    <p className="mt-2 text-[11px] leading-5 text-amber-600">开发模式前端地址需要 Vite 使用 --host 0.0.0.0；生产打包后以前端实际托管方式为准。</p>
                   </div>
                 )}
               </div>

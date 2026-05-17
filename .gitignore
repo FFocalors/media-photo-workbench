@@ -2,8 +2,9 @@ node_modules/
 dist/
 dist-electron/
 dist-server/
-!dist-server/package.json
 release/
+release-*/
+release-pack/
 out/
 .vite/
 
@@ -17,9 +18,21 @@ config/config.json
 logs/
 *.log
 
+working/
+archive/
+
+*.zip
+*.7z
+*.rar
+*.tar
+*.gz
+
 .env
 .env.local
 .env.*.local
+
+package-lock.json
+yarn.lock
 
 .DS_Store
 Thumbs.db
