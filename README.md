@@ -19,7 +19,7 @@ Media Photo Workbench 是面向校园融媒体中心、新闻中心及影像部�
 
 **当前版本：0.13.0-dev（Windows 打包发布阶段）**
 
-项目已打通从主机建活动、本地导入、真实图片墙、单图下载、Socket.IO 实时同步、客户端上传协作、待修包生成、已修图回传、正式发布导出 ZIP、活动归档，到活动/图片回收站恢复和安全永久删除的核心闭环。当前已接入统一任务中心、批量 ZIP 下载、归档活动只读打开、客户端修图任务页、自定义待修分包和桌面端非最大化窗口适配，正在补齐生产模式前端托管和 Windows 便携 ZIP / NSIS 打包能力。
+项目已打通从主机建活动、本地导入、真实图片墙、单图下载、Socket.IO 实时同步、客户端上传协作、待修包生成、已修图回传、正式发布导出 ZIP、活动归档，到活动/图片回收站恢复和安全永久删除的核心闭环。当前已接入统一任务中心、批量 ZIP 下载、归档活动只读打开、客户端修图任务页、自定义待修分包和桌面端非最大化窗口适配。v0.13.0-dev 已完成 Windows ZIP 便携包打包主链路验证。
 
 ### 当前已实现功能
 - Electron 桌面主进程与前端通信集成，实现原生弹窗（文件夹选择）与文件浏览器调用。
@@ -128,11 +128,25 @@ pnpm dist:portable
 pnpm dist:win
 ```
 
-打包产物输出到 `release-pack/`。`pnpm dist:portable` 当前使用 ZIP 便携包作为交付物：解压 ZIP 后运行其中的 `Media Photo Workbench.exe`。不要把单文件 self-extract portable EXE 作为当前主交付物；该形式在当前项目中出现过双击无可见窗口的问题，而 `win-unpacked` / ZIP 解压后的程序已验证可正常启动。
+打包产物输出到 `release-pack/`。`pnpm dist:portable` 当前使用 ZIP 便携包作为推荐交付物：解压 ZIP 后运行其中的 `Media Photo Workbench.exe`。当前已验证通过的交付物为：
+
+```text
+release-pack-zip-test/MediaPhotoWorkbench-0.13.0-dev-x64.zip
+```
+
+使用方式：
+
+```text
+解压 ZIP → 双击 Media Photo Workbench.exe
+```
+
+不要把单文件 self-extract portable EXE 作为当前主交付物；该形式在当前项目中出现过双击无可见窗口的问题，而 `win-unpacked` / ZIP 解压后的程序已验证可正常启动。NSIS 安装包安装 / 卸载流程保留到 v0.14.0-rc 补测。
 
 重新打包前必须关闭旧的 `Media Photo Workbench.exe` 并删除旧 `release-pack/`，否则旧 `app.asar` 被占用时 electron-builder 无法写入新产物。`release/`、`release-pack/`、`release-win/`、`dist/`、`dist-server/`、`data/`、`logs/`、`config/config.json`、真实数据库、真实图片、`working/`、`archive/` 和各类 ZIP 产物均不得提交到 Git。
 
 第一版重点保证 Windows 桌面端不同窗口尺寸下可用。手机和平板浏览器只作为轻量访问入口，用于查看、预览和简单状态操作；不把批量上传、批量下载、导出、归档和永久删除作为移动端完整适配目标。
+
+校园网环境可能存在设备隔离，即使同一个 Wi-Fi 下也可能无法互访。如果客户端无法访问主机，优先确认 Windows 防火墙和主机首页显示的真实地址；同 Wi-Fi 仍不可用时，推荐使用主机 Windows 热点，其他设备连接该热点后访问主机。
 
 ## 窗口适配与压力测试清单
 
@@ -179,6 +193,6 @@ MediaPhotoWorkbench/
 详情请见 `CHANGELOG.md` 与 `AGENTS.md`。
 
 当前与后续重点：
-- v0.13.0-dev：Windows 打包发布。
-- v0.14.0-rc：真实活动压力测试与发布前问题修复。
+- v0.13.0-dev：Windows ZIP 便携包打包发布主链路已验证完成。
+- v0.14.0-rc：真实活动压力测试、ZIP 便携包跨设备测试、防火墙 / 热点 / 校园网场景测试、NSIS 安装包补测和发布前修复。
 - v1.1.0 之后再探索远程传输预留 / 远程连接。

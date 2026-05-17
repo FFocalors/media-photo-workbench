@@ -2,9 +2,9 @@
 
 ## 当前阶段说明
 
-当前开发阶段为 **v0.13.0-dev：Windows 打包发布**。
+当前开发阶段为 **v0.13.0-dev：Windows ZIP 便携包打包发布**。
 
-本阶段不新增业务 API，但调整生产模式访问方式：打包后 Express 托管前端 `dist/`，前端页面、`/api` 接口和 Socket.IO 复用同一个后端端口。开发模式仍使用 Vite `5173` 访问前端、`3030-3040` 访问后端 API。
+本阶段不新增业务 API，但调整生产模式访问方式：打包后 Express 托管前端 `dist/`，前端页面、`/api` 接口和 Socket.IO 复用同一个后端端口。开发模式仍使用 Vite `5173` 访问前端、`3030-3040` 访问后端 API。当前推荐交付物为 ZIP 便携包，解压后运行 `Media Photo Workbench.exe`；单文件 self-extract portable EXE 暂不作为推荐交付物。
 
 ## 统一规范
 
@@ -29,6 +29,8 @@ Socket.IO：http://主机局域网IP:{serverPort}
 ```
 
 其中 `{serverPort}` 由后端 `3030-3040` 自动端口机制决定。生产模式下非 `/api`、非 `/socket.io` 的前端路由请求会回退到 `index.html`，用于支持 React Router 刷新。
+
+校园网环境可能存在设备隔离；如果同 Wi-Fi 下客户端无法访问主机，推荐使用主机 Windows 热点，其他设备连接热点后再访问主机首页显示的真实地址。
 
 ### 统一响应格式
 

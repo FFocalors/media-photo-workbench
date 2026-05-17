@@ -22,6 +22,7 @@ working/
 archive/
 
 *.zip
+*.exe
 *.7z
 *.rar
 *.tar

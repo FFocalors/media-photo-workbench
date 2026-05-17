@@ -28,7 +28,7 @@
 
 ## 开发记录
 
-### v0.13.0-dev：Windows 打包发布
+### v0.13.0-dev：Windows ZIP 便携包打包发布
 - **日期**：2026-05-17
 - **开发者 / 工具**：Codex
 - **完成内容**：
@@ -42,6 +42,8 @@
   - 主机首页接入真实仓库磁盘剩余空间和二维码：开发模式二维码指向前端 `5173`，生产模式二维码指向真实后端统一端口。
   - `package.json` 增加 `dist:portable`、`dist:win` 脚本和 electron-builder 配置，输出目录为 `release-pack/`。
   - `dist:portable` 调整为生成 Windows 便携 ZIP 包；解压后的 `Media Photo Workbench.exe` 作为当前便携交付形式。
+  - ZIP 便携包主链路已验证完成；推荐交付物为 `release-pack-zip-test/MediaPhotoWorkbench-0.13.0-dev-x64.zip`。
+  - 校园网设备隔离场景记录为已知现场风险；同 Wi-Fi 无法互访时推荐使用主机 Windows 热点。
   - `build:server` 生成 `dist-server/package.json`，显式声明 `{ "type": "commonjs" }`，避免根目录 `"type": "module"` 导致打包后后端被当成 ESM。
   - `.npmrc` 增加 `node-linker=hoisted`，规避 pnpm + electron-builder 下运行时传递依赖漏打包问题。
   - Electron 主进程增加 `startup.log` 和启动失败错误页，用于定位打包后白屏、端口和原生模块问题。
@@ -71,6 +73,7 @@
   - `dist-server/package.json` 生成 `{ "type": "commonjs" }`。
   - `pnpm dist:portable` 已切换为便携 ZIP 打包路线；`win-unpacked` 目录下的程序已验证可正常打开。
   - `pnpm exec electron-builder --win zip --config.directories.output=release-pack-zip-test` 通过，生成 `MediaPhotoWorkbench-0.13.0-dev-x64.zip`。
+  - 用户已验证 ZIP 解压后的 `Media Photo Workbench.exe` 可正常启动。
 - **遇到的问题**：
   - 单文件 self-extract portable EXE 曾出现双击后无可见窗口的问题；同一构建下的 `win-unpacked/Media Photo Workbench.exe` 可正常启动。
   - 旧的 `Media Photo Workbench.exe` / node 进程可能占用 `release-pack/win-unpacked/resources/app.asar`，导致重新打包无法覆盖旧产物。
@@ -79,9 +82,9 @@
   - 重新打包前必须关闭旧 exe 和相关 node/electron 进程，再删除旧 `release-pack/`；如果仍提示 `app.asar` 被占用，需要重启电脑后先删除 `release-pack/`，再运行打包命令。
 - **未完成事项**：
   - NSIS 安装包仍需继续端到端补测。
-  - 打包后的 Electron 首页、Socket.IO 真实端口、客户端访问、导入、修图、导出和归档仍需端到端人工验证。
+  - ZIP 便携包仍需在更多真实 Windows 设备和真实活动素材下做压力测试。
 - **下一步计划**：
-  - 重新执行 `pnpm dist:portable` 生成 ZIP，解压后启动 `Media Photo Workbench.exe`，确认 `/api/health`、Electron 首页、Socket.IO、首页地址和二维码全部使用真实端口。
+  - 进入 v0.14.0-rc：真实活动压力测试、ZIP 便携包跨设备测试、防火墙 / 热点 / 校园网场景测试、NSIS 安装包补测和发布前修复。
 
 ### v0.12.0-dev：窗口适配、真实压力测试与问题修复
 - **日期**：2026-05-15
