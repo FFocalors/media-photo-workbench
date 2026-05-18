@@ -28,6 +28,69 @@
 
 ## 开发记录
 
+### v0.13.2-dev：Windows ZIP 便携包发布收尾
+- **日期**：2026-05-18
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - 同步记录 v0.13.2-dev 发布前结论：Windows ZIP 便携包已生成并可正常使用，ZIP 解压后 `Media Photo Workbench.exe` 可正常启动。
+  - 记录本机测试、多设备测试和主机 Windows 热点连接测试均已通过。
+  - 明确当前推荐交付物为 `MediaPhotoWorkbench-0.13.0-dev-x64.zip`，使用方式为“解压 ZIP -> 双击 Media Photo Workbench.exe”。
+  - 记录客户端访问方式：主机首页复制局域网访问地址，或扫描主机首页二维码。
+  - 记录校园网可能存在设备隔离；同 Wi-Fi 不可互访时推荐使用 Windows 热点。
+  - 明确当前第一版仅支持 JPG/JPEG。
+  - 明确单文件 portable EXE 暂不作为推荐交付物，NSIS 安装包安装 / 卸载流程放到 v0.14.0-rc 补测。
+- **修改文件**：
+  - `README.md`
+  - `ROADMAP.md`
+  - `CHANGELOG.md`
+  - `DEVELOPMENT_LOG.md`
+- **验证方式**：
+  - 根据用户反馈，ZIP 便携包解压启动、本机测试、多设备测试和主机热点测试均已通过。
+  - 检查 `.gitignore` 已覆盖 `release/`、`release-win/`、`release-pack/`、`dist/`、`dist-server/`、`data/`、`logs/`、`config/config.json`、数据库文件、`working/`、`archive/`、ZIP/EXE 和真实仓库产物。
+- **未完成事项**：
+  - NSIS 安装包仍未作为推荐交付物，需在 v0.14.0-rc 补测安装、卸载和升级流程。
+- **下一步计划**：
+  - 进入 v0.14.0-rc：发布候选测试、NSIS 安装包补测、真实活动压力测试和发布前问题修复。
+
+### v0.13.0-dev：发布前轻量 UI 优化
+- **日期**：2026-05-17
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - 新增通用 `RoundedQRCode` 组件，用现有 `qrcode.react` 生成二维码矩阵后重新绘制为连接式圆滑模块，避免只做外框圆角，也避免分离点阵风格。
+  - `QRCodeCard` 改为承载圆滑二维码，并继续保留真实地址文本、复制按钮和空状态。
+  - 主机系统概览页二维码继续使用真实客户端访问地址；客户端“连接到主机”页右侧从占位图标改为根据输入框主机地址实时生成圆滑二维码。
+  - 客户端连接页二维码显示当前扫码地址、复制按钮和校园网 / Windows 热点提示。
+  - 启动页标题顺序调整为“融媒体图片工作台”在上、“Media Photo Workbench”在下，中文字号更大、英文弱化。
+  - 新增 `BrandLogo` 和 `brand` 资源解析逻辑；正式 PNG 未放入前使用红底“勤信青年”占位，不再使用旧蓝底 `M`。
+  - 接入 Logo 放置路径：前端 `src/assets/brand/app-icon.png`，Electron 图标源图 `build/icon.png`，Windows ICO `build/icon.ico`。
+  - `electron-builder` 配置 `build/icon.ico` 作为 Windows 图标。
+  - Electron 窗口标题和 `index.html` 标题同步为“融媒体图片工作台 · Media Photo Workbench”。
+- **修改文件**：
+  - `src/components/common/RoundedQRCode.tsx`
+  - `src/components/common/QRCodeCard.tsx`
+  - `src/components/common/BrandLogo.tsx`
+  - `src/lib/brand.ts`
+  - `src/assets/brand/.gitkeep`
+  - `build/.gitkeep`
+  - `src/layouts/HostLayout.tsx`
+  - `src/layouts/ClientLayout.tsx`
+  - `src/pages/host/Overview.tsx`
+  - `src/pages/client/ClientConnect.tsx`
+  - `src/pages/Startup.tsx`
+  - `src/pages/host/Settings.tsx`
+  - `src/global.d.ts`
+  - `electron/main.cjs`
+  - `index.html`
+  - `package.json`
+  - `CHANGELOG.md`
+  - `DEVELOPMENT_LOG.md`
+- **验证方式**：
+  - `pnpm build` 通过。
+- **遇到的问题**：
+  - 尝试安装 `qr-code-styling` 时受网络权限限制失败；改为复用当前已安装的 `qrcode.react`，在前端组件内解析其 SVG 路径并重新绘制圆角点阵，避免新增依赖和打包风险。
+- **未完成事项**：
+  - Windows 可执行文件图标需要下一次重新打包后人工确认。
+
 ### v0.13.0-dev：Windows ZIP 便携包打包发布
 - **日期**：2026-05-17
 - **开发者 / 工具**：Codex
@@ -42,7 +105,7 @@
   - 主机首页接入真实仓库磁盘剩余空间和二维码：开发模式二维码指向前端 `5173`，生产模式二维码指向真实后端统一端口。
   - `package.json` 增加 `dist:portable`、`dist:win` 脚本和 electron-builder 配置，输出目录为 `release-pack/`。
   - `dist:portable` 调整为生成 Windows 便携 ZIP 包；解压后的 `Media Photo Workbench.exe` 作为当前便携交付形式。
-  - ZIP 便携包主链路已验证完成；推荐交付物为 `release-pack-zip-test/MediaPhotoWorkbench-0.13.0-dev-x64.zip`。
+  - ZIP 便携包主链路已验证完成；推荐交付物为 `MediaPhotoWorkbench-0.13.0-dev-x64.zip`。
   - 校园网设备隔离场景记录为已知现场风险；同 Wi-Fi 无法互访时推荐使用主机 Windows 热点。
   - `build:server` 生成 `dist-server/package.json`，显式声明 `{ "type": "commonjs" }`，避免根目录 `"type": "module"` 导致打包后后端被当成 ESM。
   - `.npmrc` 增加 `node-linker=hoisted`，规避 pnpm + electron-builder 下运行时传递依赖漏打包问题。
@@ -72,7 +135,7 @@
   - `pnpm build` 通过。
   - `dist-server/package.json` 生成 `{ "type": "commonjs" }`。
   - `pnpm dist:portable` 已切换为便携 ZIP 打包路线；`win-unpacked` 目录下的程序已验证可正常打开。
-  - `pnpm exec electron-builder --win zip --config.directories.output=release-pack-zip-test` 通过，生成 `MediaPhotoWorkbench-0.13.0-dev-x64.zip`。
+  - `pnpm exec electron-builder --win zip` 通过，生成 `MediaPhotoWorkbench-0.13.0-dev-x64.zip`。
   - 用户已验证 ZIP 解压后的 `Media Photo Workbench.exe` 可正常启动。
 - **遇到的问题**：
   - 单文件 self-extract portable EXE 曾出现双击后无可见窗口的问题；同一构建下的 `win-unpacked/Media Photo Workbench.exe` 可正常启动。
@@ -84,7 +147,7 @@
   - NSIS 安装包仍需继续端到端补测。
   - ZIP 便携包仍需在更多真实 Windows 设备和真实活动素材下做压力测试。
 - **下一步计划**：
-  - 进入 v0.14.0-rc：真实活动压力测试、ZIP 便携包跨设备测试、防火墙 / 热点 / 校园网场景测试、NSIS 安装包补测和发布前修复。
+  - 进入 v0.14.0-rc：发布候选测试、NSIS 安装包补测、真实活动压力测试和发布前问题修复。
 
 ### v0.12.0-dev：窗口适配、真实压力测试与问题修复
 - **日期**：2026-05-15

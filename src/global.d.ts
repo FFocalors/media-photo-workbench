@@ -1,3 +1,5 @@
+/// <reference types="vite/client" />
+
 /**
  * 全局类型声明。
  * 为 Electron preload 暴露的 window.mediaPhotoWorkbench 提供类型。

@@ -1,5 +1,6 @@
-import { FolderOpen, HardDrive, Info, Keyboard, Network, RotateCcw, Save } from "lucide-react";
+import { FolderOpen, Info, Keyboard, Network, RotateCcw, Save } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { BrandLogo } from "../../components/common/BrandLogo";
 import { Notice, StatusPill } from "../../components/ui/States";
 import { cn } from "../../lib/cn";
 import { fetchSettings, updateRepositoryPath, checkRepository, type RepositoryCheckData } from "../../lib/api";
@@ -358,8 +359,8 @@ export function SettingsPage() {
 
           {activeTab === "about" && (
             <div className="space-y-5">
-              <InfoCard icon={<HardDrive size={18} />} title="Media Photo Workbench">
-                <p>融媒体图片工作台 · 后端第一阶段</p>
+              <InfoCard icon={<BrandLogo size="sm" />} title="融媒体图片工作台">
+                <p>Media Photo Workbench · v0.13.0-dev</p>
                 <p>桌面端：Electron + React + Vite + TypeScript + Tailwind</p>
                 <p>后端：Express + SQLite + better-sqlite3 + pino</p>
               </InfoCard>

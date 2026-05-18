@@ -1,7 +1,7 @@
 import { Archive, Clipboard, Database, FolderKanban, HardDrive, ImagePlus, LayoutGrid, Settings, UploadCloud, WifiOff } from "lucide-react";
-import { QRCodeSVG } from "qrcode.react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { QRCodeCard } from "../../components/common/QRCodeCard";
 import {
   checkRepository,
   EventData,
@@ -253,7 +253,7 @@ export function OverviewPage() {
             </div>
 
             <div className="col-span-2 rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
-              <div className="mb-4 flex items-start justify-between gap-5">
+              <div className="mb-4">
                 <div>
                   <h3 className="text-sm font-medium text-slate-500">局域网访问地址</h3>
                   <p className="mt-1 text-xs text-slate-400">
@@ -262,91 +262,90 @@ export function OverviewPage() {
                       : "生产模式：客户端浏览器直接访问后端端口，前端页面、API 和 Socket.IO 使用同一地址。"}
                   </p>
                 </div>
-                {qrCodeUrl ? (
-                  <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl bg-white p-1">
-                    <QRCodeSVG
-                      bgColor="#ffffff"
-                      fgColor="#1e293b"
-                      includeMargin={false}
-                      level="L"
-                      size={56}
-                      value={qrCodeUrl}
-                    />
-                  </div>
-                ) : (
-                  <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-slate-50 text-slate-400">
-                    <span className="text-[10px] text-slate-400">无可用地址</span>
-                  </div>
-                )}
               </div>
 
-              <div className="space-y-3">
-                <AddressRow
-                  copied={copied === "local"}
-                  label={isDevelopmentFrontend ? "本机 API" : "本机客户端访问"}
-                  onCopy={() => copyAddress(apiLocalAddress, "local")}
-                  value={apiLocalAddress}
-                />
-                {!isDevelopmentFrontend && (
+              <div className="grid gap-5 xl:grid-cols-[minmax(0,760px)_minmax(260px,1fr)] xl:items-start">
+                <div className="space-y-3">
+                  {qrCodeUrl && (
+                    <AddressRow
+                      copied={copied === "qr"}
+                      label={isDevelopmentFrontend ? "扫码访问 / 前端页面" : "扫码访问 / 客户端页面"}
+                      onCopy={() => copyAddress(qrCodeUrl, "qr")}
+                      value={qrCodeUrl}
+                    />
+                  )}
                   <AddressRow
-                    copied={copied === "local-health"}
-                    label="本机 API 健康检查"
-                    onCopy={() => copyAddress(`${apiLocalAddress}/api/health`, "local-health")}
-                    value={`${apiLocalAddress}/api/health`}
+                    copied={copied === "local"}
+                    label={isDevelopmentFrontend ? "本机 API" : "本机客户端访问"}
+                    onCopy={() => copyAddress(apiLocalAddress, "local")}
+                    value={apiLocalAddress}
                   />
-                )}
-                {qrCodeUrl && (
-                  <div className="flex items-center gap-2 rounded-xl bg-blue-50 px-3 py-2">
-                    <span className="text-xs font-medium text-blue-700">扫码访问</span>
-                    <code className="truncate text-xs text-blue-600" title={qrCodeUrl}>{qrCodeUrl}</code>
-                  </div>
-                )}
-                {lanAddresses.length > 0 ? (
-                  <>
-                    {isDevelopmentFrontend ? (
-                      <>
-                        <p className="text-[11px] font-medium text-slate-400">前端开发地址</p>
-                        {frontendLanAddresses.map((item, index) => (
-                          <AddressRow
-                            copied={copied === `frontend-${index}`}
-                            key={`frontend-${item.name}-${item.address}`}
-                            label={item.name}
-                            onCopy={() => copyAddress(item.url, `frontend-${index}`)}
-                            value={item.url}
-                          />
-                        ))}
-                        <p className="text-[11px] font-medium text-slate-400">后端 API 地址</p>
-                        {apiLanAddresses.map((item, index) => (
-                          <AddressRow
-                            copied={copied === `api-${index}`}
-                            key={`api-${item.name}-${item.address}`}
-                            label={item.name}
-                            onCopy={() => copyAddress(item.url, `api-${index}`)}
-                            value={item.url}
-                          />
-                        ))}
-                      </>
-                    ) : (
-                      <>
-                        <p className="text-[11px] font-medium text-slate-400">客户端访问地址</p>
-                        {clientLanAddresses.map((item, index) => (
-                          <AddressRow
-                            copied={copied === `client-${index}`}
-                            key={`client-${item.name}-${item.address}`}
-                            label={item.name}
-                            onCopy={() => copyAddress(item.url, `client-${index}`)}
-                            value={item.url}
-                          />
-                        ))}
-                      </>
-                    )}
-                  </>
-                ) : (
-                  <div className="flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-500">
-                    <WifiOff size={15} />
-                    暂未检测到可用局域网 IPv4 地址
-                  </div>
-                )}
+                  {!isDevelopmentFrontend && (
+                    <AddressRow
+                      copied={copied === "local-health"}
+                      label="本机 API 健康检查"
+                      onCopy={() => copyAddress(`${apiLocalAddress}/api/health`, "local-health")}
+                      value={`${apiLocalAddress}/api/health`}
+                    />
+                  )}
+                  {lanAddresses.length > 0 ? (
+                    <>
+                      {isDevelopmentFrontend ? (
+                        <>
+                          <p className="text-[11px] font-medium text-slate-400">前端开发地址</p>
+                          {frontendLanAddresses.map((item, index) => (
+                            <AddressRow
+                              copied={copied === `frontend-${index}`}
+                              key={`frontend-${item.name}-${item.address}`}
+                              label={item.name}
+                              onCopy={() => copyAddress(item.url, `frontend-${index}`)}
+                              value={item.url}
+                            />
+                          ))}
+                          <p className="text-[11px] font-medium text-slate-400">后端 API 地址</p>
+                          {apiLanAddresses.map((item, index) => (
+                            <AddressRow
+                              copied={copied === `api-${index}`}
+                              key={`api-${item.name}-${item.address}`}
+                              label={item.name}
+                              onCopy={() => copyAddress(item.url, `api-${index}`)}
+                              value={item.url}
+                            />
+                          ))}
+                        </>
+                      ) : (
+                        <>
+                          <p className="text-[11px] font-medium text-slate-400">客户端访问地址</p>
+                          {clientLanAddresses.map((item, index) => (
+                            <AddressRow
+                              copied={copied === `client-${index}`}
+                              key={`client-${item.name}-${item.address}`}
+                              label={item.name}
+                              onCopy={() => copyAddress(item.url, `client-${index}`)}
+                              value={item.url}
+                            />
+                          ))}
+                        </>
+                      )}
+                    </>
+                  ) : (
+                    <div className="flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                      <WifiOff size={15} />
+                      暂未检测到可用局域网 IPv4 地址
+                    </div>
+                  )}
+                </div>
+
+                <div className="xl:justify-self-center">
+                  <QRCodeCard
+                    copyable
+                    emptyText={serverReady ? "暂无可用局域网地址" : "请先启动主机服务"}
+                    label="扫码访问"
+                    showText={false}
+                    size={104}
+                    value={qrCodeUrl}
+                  />
+                </div>
               </div>
             </div>
           </div>

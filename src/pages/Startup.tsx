@@ -1,5 +1,6 @@
 import { ArrowRight, Clock, Monitor, Server, Settings } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { BrandLogo } from "../components/common/BrandLogo";
 
 export function Startup() {
   const navigate = useNavigate();
@@ -13,11 +14,9 @@ export function Startup() {
 
       <div className="z-10 flex flex-1 flex-col items-center justify-center px-6">
         <div className="mb-10 flex flex-col items-center">
-          <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-sm">
-            <span className="text-3xl font-bold italic">M</span>
-          </div>
-          <h1 className="mb-2 text-3xl font-bold tracking-tight text-slate-800">Media Photo Workbench</h1>
-          <p className="font-medium text-slate-500">融媒体图片工作台</p>
+          <BrandLogo className="mb-6" size="lg" />
+          <h1 className="mb-2 text-5xl font-bold tracking-tight text-slate-900">融媒体图片工作台</h1>
+          <p className="text-2xl font-medium text-slate-500">Media Photo Workbench</p>
         </div>
 
         <div className="flex w-full max-w-4xl justify-center gap-6">

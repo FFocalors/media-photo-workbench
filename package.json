@@ -32,6 +32,14 @@
     ],
     "extraResources": [
       {
+        "from": "build",
+        "to": "build",
+        "filter": [
+          "icon.png",
+          "icon.ico"
+        ]
+      },
+      {
         "from": "node_modules",
         "to": "node_modules",
         "filter": [
@@ -51,6 +59,7 @@
     "forceCodeSigning": false,
     "npmRebuild": true,
     "win": {
+      "icon": "build/icon.ico",
       "signAndEditExecutable": false,
       "target": [
         "zip",

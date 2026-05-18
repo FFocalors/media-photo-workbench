@@ -73,7 +73,8 @@ function createWindow(serverPort, logsDir) {
     minHeight: 760,
     show: false,
     backgroundColor: "#f6f8fb",
-    title: "Media Photo Workbench",
+    title: "融媒体图片工作台 · Media Photo Workbench",
+    icon: resolveWindowIcon(),
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -115,6 +116,21 @@ function createWindow(serverPort, logsDir) {
   return mainWindow;
 }
 
+function resolveWindowIcon() {
+  const candidates = [
+    path.resolve(__dirname, "..", "build", "icon.png"),
+    path.resolve(process.resourcesPath || "", "build", "icon.png")
+  ];
+
+  return candidates.find((candidate) => {
+    try {
+      return fs.existsSync(candidate);
+    } catch (_) {
+      return false;
+    }
+  });
+}
+
 /**
  * Render a simple error page when backend fails to start.
  */
@@ -134,7 +150,7 @@ function renderErrorPage() {
 <body>
   <div class="card">
     <h1>⚠ 本地服务启动失败</h1>
-    <p>Media Photo Workbench 后端服务未能成功启动。</p>
+    <p>融媒体图片工作台后端服务未能成功启动。</p>
     <p>请检查日志文件获取详细错误信息：</p>
     <p><code>${logsDir.replace(/\\/g, "\\\\")}\\\\startup.log</code></p>
     <p>常见原因：端口被占用、数据目录无写入权限、原生模块不兼容。</p>

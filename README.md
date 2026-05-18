@@ -17,9 +17,9 @@ Media Photo Workbench 是面向校园融媒体中心、新闻中心及影像部�
 
 ## 当前开发状态
 
-**当前版本：0.13.0-dev（Windows 打包发布阶段）**
+**当前版本：0.13.2-dev（Windows ZIP 便携包发布准备完成）**
 
-项目已打通从主机建活动、本地导入、真实图片墙、单图下载、Socket.IO 实时同步、客户端上传协作、待修包生成、已修图回传、正式发布导出 ZIP、活动归档，到活动/图片回收站恢复和安全永久删除的核心闭环。当前已接入统一任务中心、批量 ZIP 下载、归档活动只读打开、客户端修图任务页、自定义待修分包和桌面端非最大化窗口适配。v0.13.0-dev 已完成 Windows ZIP 便携包打包主链路验证。
+项目已打通从主机建活动、本地导入、真实图片墙、单图下载、Socket.IO 实时同步、客户端上传协作、待修包生成、已修图回传、正式发布导出 ZIP、活动归档，到活动/图片回收站恢复和安全永久删除的核心闭环。当前已接入统一任务中心、批量 ZIP 下载、归档活动只读打开、客户端修图任务页、自定义待修分包和桌面端非最大化窗口适配。v0.13.2-dev 已完成 Windows ZIP 便携包发布准备，本机测试、多设备测试和主机 Windows 热点连接测试均已通过。
 
 ### 当前已实现功能
 - Electron 桌面主进程与前端通信集成，实现原生弹窗（文件夹选择）与文件浏览器调用。
@@ -128,10 +128,10 @@ pnpm dist:portable
 pnpm dist:win
 ```
 
-打包产物输出到 `release-pack/`。`pnpm dist:portable` 当前使用 ZIP 便携包作为推荐交付物：解压 ZIP 后运行其中的 `Media Photo Workbench.exe`。当前已验证通过的交付物为：
+打包产物输出到 `release-pack/`。`pnpm dist:portable` 当前使用 ZIP 便携包作为推荐交付物：解压 ZIP 后运行其中的 `Media Photo Workbench.exe`。当前推荐交付物为：
 
 ```text
-release-pack-zip-test/MediaPhotoWorkbench-0.13.0-dev-x64.zip
+MediaPhotoWorkbench-0.13.0-dev-x64.zip
 ```
 
 使用方式：
@@ -140,7 +140,7 @@ release-pack-zip-test/MediaPhotoWorkbench-0.13.0-dev-x64.zip
 解压 ZIP → 双击 Media Photo Workbench.exe
 ```
 
-不要把单文件 self-extract portable EXE 作为当前主交付物；该形式在当前项目中出现过双击无可见窗口的问题，而 `win-unpacked` / ZIP 解压后的程序已验证可正常启动。NSIS 安装包安装 / 卸载流程保留到 v0.14.0-rc 补测。
+不要把单文件 self-extract portable EXE 作为当前主交付物；该形式在当前项目中出现过双击无可见窗口的问题，而 ZIP 解压后的程序已验证可正常启动。NSIS 安装包安装 / 卸载流程保留到 v0.14.0-rc 补测。
 
 重新打包前必须关闭旧的 `Media Photo Workbench.exe` 并删除旧 `release-pack/`，否则旧 `app.asar` 被占用时 electron-builder 无法写入新产物。`release/`、`release-pack/`、`release-win/`、`dist/`、`dist-server/`、`data/`、`logs/`、`config/config.json`、真实数据库、真实图片、`working/`、`archive/` 和各类 ZIP 产物均不得提交到 Git。
 
@@ -193,6 +193,6 @@ MediaPhotoWorkbench/
 详情请见 `CHANGELOG.md` 与 `AGENTS.md`。
 
 当前与后续重点：
-- v0.13.0-dev：Windows ZIP 便携包打包发布主链路已验证完成。
-- v0.14.0-rc：真实活动压力测试、ZIP 便携包跨设备测试、防火墙 / 热点 / 校园网场景测试、NSIS 安装包补测和发布前修复。
+- v0.13.2-dev：Windows ZIP 便携包发布准备完成，本机、多设备和主机热点测试通过。
+- v0.14.0-rc：发布候选测试、NSIS 安装包补测、真实活动压力测试和发布前问题修复。
 - v1.1.0 之后再探索远程传输预留 / 远程连接。

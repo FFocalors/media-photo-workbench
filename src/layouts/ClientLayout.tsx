@@ -1,6 +1,7 @@
 import { ArrowLeft, LayoutGrid, LinkIcon, PenTool, UploadCloud } from "lucide-react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { TaskCenter } from "../components/tasks/TaskCenter";
+import { BrandLogo } from "../components/common/BrandLogo";
 import { Notice } from "../components/ui/States";
 import { getClientApiBase } from "../lib/api";
 import { cn } from "../lib/cn";
@@ -38,9 +39,7 @@ export function ClientLayout() {
     <div className="flex h-screen overflow-hidden bg-[#F8F9FA] font-sans text-slate-800">
       <div className="z-10 flex w-56 flex-col border-r border-slate-100 bg-white shadow-[2px_0_8px_rgba(0,0,0,0.02)]">
         <button className="flex items-center gap-3 border-b border-slate-50 p-5 text-left" onClick={() => navigate("/client")} type="button">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-white">
-            <span className="text-sm font-bold italic">M</span>
-          </div>
+          <BrandLogo size="sm" />
           <span className="truncate text-sm font-semibold">客户端协作</span>
         </button>
 

@@ -20,6 +20,7 @@
 - **0.11.5**：修图协作与导航流程优化
 - **0.12.0**：窗口适配、真实压力测试与问题修复
 - **0.13.0**：Windows 打包发布
+- **0.13.2**：Windows ZIP 便携包发布准备与多设备测试
 - **0.14.0-rc**：真实活动压力测试与发布前问题修复
 - **1.0.0**：第一个可用于实际活动的稳定版本
 - **1.1.0 之后**：远程传输预留 / 远程连接探索
@@ -28,13 +29,19 @@
 
 ## [未发布] (Unreleased)
 
-- v0.13.0-dev Windows ZIP 便携包打包发布主链路已验证完成。
+- v0.13.2-dev Windows ZIP 便携包发布准备完成，本机测试、多设备测试和主机 Windows 热点连接测试均已通过。
+- 当前推荐交付物为 `MediaPhotoWorkbench-0.13.0-dev-x64.zip`，使用方式为解压 ZIP 后双击 `Media Photo Workbench.exe`。
+- 客户端可通过主机首页复制局域网访问地址，或扫描主机首页二维码访问主机页面；校园网可能存在设备隔离，同 Wi-Fi 无法互访时推荐使用主机 Windows 热点。
+- 当前第一版仅支持 JPG/JPEG，RAW / HEIC / 视频仍不在当前发布范围内。
+- v0.13.0-dev 发布前轻量 UI 优化：主机首页和客户端连接页二维码改为连接式圆滑二维码，不再只是外层卡片圆角，也不再是分离点阵；客户端连接页根据输入的主机地址生成真实二维码。
+- 启动页标题调整为中文优先、英文弱化显示；Electron 窗口标题和页面标题同步为“融媒体图片工作台 · Media Photo Workbench”。
+- 新增品牌 Logo 组件和资源路径：前端 Logo 使用 `src/assets/brand/app-icon.png`，Electron 窗口图标优先读取 `build/icon.png`；`electron-builder` 已配置 `build/icon.ico` 作为 Windows 图标，并将 `build/icon.png` / `build/icon.ico` 作为额外资源候选。
 - 生产模式下 Express 托管前端 `dist/`，非 `/api`、非 `/socket.io` 的 GET/HEAD 请求回退到 `index.html`，保证 React Router 页面刷新不 404。
 - 打包后前端页面、后端 API 和 Socket.IO 复用同一后端端口；局域网客户端访问 `http://主机IP:{serverPort}`，不再依赖 Vite `5173`。
 - Electron 生产模式改为加载 `http://127.0.0.1:{serverPort}`，开发模式继续加载 Vite `http://127.0.0.1:5173`。
 - 前端 API 基址支持生产同源访问；浏览器打开后端托管页面时默认使用当前 origin 访问 `/api`，避免局域网客户端错误请求自己的 `localhost:3030`。
 - 新增 `dist:portable` 和 `dist:win` 脚本，并配置 electron-builder 生成 Windows 便携 ZIP 包和 NSIS 安装包到 `release-pack/`；单文件 self-extract portable EXE 暂不作为当前主交付物。
-- 推荐交付物为 `release-pack-zip-test/MediaPhotoWorkbench-0.13.0-dev-x64.zip`，使用方式为解压 ZIP 后双击 `Media Photo Workbench.exe`。
+- ZIP 便携包作为当前主交付形式；单文件 self-extract portable EXE 暂不作为当前主交付物。
 - NSIS 安装包安装 / 卸载流程保留到 v0.14.0-rc 补测。
 - electron-builder 配置加入 `asarUnpack`，为 `better-sqlite3`、`sharp`、`@img`、`@emnapi` 等原生依赖预留打包运行支持。
 - 主机首页根据开发/生产访问模式区分地址展示：开发模式显示前端 `5173` 候选和后端 API 地址；生产模式显示客户端访问地址和 API 健康检查地址。
@@ -190,7 +197,7 @@
 - 将图片导入升级为任务队列和进度轮询。
 - 将待修包生成、大批量已修图回传、归档清理和永久删除继续接入任务系统。
 - 增加任务持久化、真正取消和重试能力。
-- v0.14.0-rc：真实活动压力测试、ZIP 便携包跨设备测试、防火墙 / 热点 / 校园网场景测试、NSIS 安装包补测和发布前修复。
+- v0.14.0-rc：发布候选测试、NSIS 安装包补测、真实活动压力测试和发布前问题修复。
 - v1.1.0 之后再探索远程传输预留 / 远程连接。
 
 ---

@@ -1,7 +1,8 @@
-import { ArrowLeft, CheckCircle2, LinkIcon, PenTool, QrCode, Wifi } from "lucide-react";
+import { ArrowLeft, CheckCircle2, LinkIcon, PenTool, Wifi } from "lucide-react";
 import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { QRCodeCard } from "../../components/common/QRCodeCard";
 import { Notice } from "../../components/ui/States";
 import {
   fetchHealthFrom,
@@ -18,7 +19,7 @@ const roles = ["编辑", "修图", "访客"];
 export function ClientConnectPage() {
   const navigate = useNavigate();
   const recentHosts = useMemo(() => getRecentClientHosts(), []);
-  const [hostAddress, setHostAddress] = useState(getClientApiBase() || recentHosts[0] || "http://192.168.137.1:3030");
+  const [hostAddress, setHostAddress] = useState(recentHosts[0] || getClientApiBase() || "http://127.0.0.1:3030");
   const [userName, setUserName] = useState(localStorage.getItem("mediaPhotoWorkbench.clientUserName") || "外拍同学");
   const [role, setRole] = useState(localStorage.getItem("mediaPhotoWorkbench.clientRole") || "编辑");
   const [deviceName, setDeviceName] = useState(localStorage.getItem("mediaPhotoWorkbench.clientDevice") || "Client-A");
@@ -28,6 +29,13 @@ export function ClientConnectPage() {
 
   const connected = Boolean(health);
   const canConnect = hostAddress.trim().startsWith("http") && userName.trim().length > 0 && deviceName.trim().length > 0;
+  const qrAddress = useMemo(() => {
+    try {
+      return normalizeApiBaseUrl(hostAddress);
+    } catch {
+      return "";
+    }
+  }, [hostAddress]);
 
   const handleConnect = async () => {
     if (!canConnect) return;
@@ -168,12 +176,13 @@ export function ClientConnectPage() {
           </section>
 
           <aside className="space-y-6">
-            <div className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
-              <h2 className="mb-4 font-semibold text-slate-900">扫码连接占位</h2>
-              <div className="flex aspect-square items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50 text-slate-400">
-                <QrCode size={128} strokeWidth={1.4} />
-              </div>
-            </div>
+            <QRCodeCard
+              description="同一局域网可扫码访问；校园网不可用时建议使用 Windows 热点。"
+              emptyText="请输入完整主机地址"
+              label={connected ? "当前已连接地址" : "扫码连接地址"}
+              size={128}
+              value={qrAddress}
+            />
 
             <div className="rounded-2xl border border-amber-100 bg-amber-50 p-5">
               <h2 className="mb-2 flex items-center gap-2 font-semibold text-amber-900">

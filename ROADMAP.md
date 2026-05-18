@@ -2,7 +2,7 @@
 
 ## 当前阶段状态
 
-项目已完成 v0.13.0-dev：Windows ZIP 便携包打包发布主链路验证。当前代码已经支持主机本地导入、真实图片墙、基础选片、单图下载、Socket.IO 实时同步、客户端上传协作、修图流转、发布导出、活动归档、活动/图片回收站恢复和安全永久删除、统一任务中心、批量 ZIP 下载、working 清理后的历史归档只读查看、客户端下载待修包和回传已修图，并支持单包、平均拆包和按人员分工自定义待修分包。v0.12 已完成桌面端非最大化窗口适配；v0.13 已完成生产模式前端托管、Electron Builder 配置、原生依赖处理、真实运行端口透传、主机首页剩余空间真实显示、二维码生成和 ZIP 便携包验证。推荐交付物为 `release-pack-zip-test/MediaPhotoWorkbench-0.13.0-dev-x64.zip`；单文件 self-extract portable EXE 不作为当前主交付物。
+项目已完成 v0.13.2-dev：Windows ZIP 便携包发布准备。当前代码已经支持主机本地导入、真实图片墙、基础选片、单图下载、Socket.IO 实时同步、客户端上传协作、修图流转、发布导出、活动归档、活动/图片回收站恢复和安全永久删除、统一任务中心、批量 ZIP 下载、working 清理后的历史归档只读查看、客户端下载待修包和回传已修图，并支持单包、平均拆包和按人员分工自定义待修分包。v0.12 已完成桌面端非最大化窗口适配；v0.13 已完成生产模式前端托管、Electron Builder 配置、原生依赖处理、真实运行端口透传、主机首页剩余空间真实显示、二维码生成、ZIP 便携包验证和多设备测试。推荐交付物为 `MediaPhotoWorkbench-0.13.0-dev-x64.zip`；单文件 self-extract portable EXE 不作为当前主交付物。
 
 ## 已完成
 
@@ -141,15 +141,17 @@
 
 ## 当前阶段
 
-### v0.13.0-dev：Windows 打包发布
+### v0.13.2-dev：Windows ZIP 便携包发布准备
 - 生产模式下 Express 托管前端 `dist/`，浏览器访问 `http://localhost:{serverPort}` 或 `http://主机局域网IP:{serverPort}` 即可打开前端页面。
 - API 继续统一使用 `/api` 前缀，Socket.IO 复用同一 HTTP server 端口。
 - 开发模式继续使用 Vite `0.0.0.0:5173`；生产模式不再提示客户端访问 5173。
 - Electron 生产模式使用可写的 `app.getPath("userData")` 保存 `data/app.db`、`config/config.json` 和 `logs/`，不写入只读安装目录。
 - 配置 electron-builder，目标为 Windows 便携 ZIP 包和 NSIS 安装包，输出到 `release-pack/`。
-- ZIP 便携包已验证可解压启动；推荐交付物为 `release-pack-zip-test/MediaPhotoWorkbench-0.13.0-dev-x64.zip`。
+- ZIP 便携包已验证可解压启动；推荐交付物为 `MediaPhotoWorkbench-0.13.0-dev-x64.zip`。
+- 本机测试、多设备测试和主机 Windows 热点连接测试已通过。
+- 客户端访问方式为在主机首页复制局域网访问地址，或扫描主机首页二维码打开客户端页面。
+- 校园网可能存在设备隔离；同 Wi-Fi 无法互访时，推荐使用主机 Windows 热点。
 - 单文件 self-extract portable EXE 暂不作为推荐交付物；NSIS 安装包安装 / 卸载流程放到 v0.14.0-rc 补测。
-- 校园网可能存在设备隔离；同 Wi-Fi 无法访问时，推荐使用主机 Windows 热点作为现场连接方案。
 - `better-sqlite3`、`sharp` 等原生依赖需要通过 Electron ABI 重建并在打包时 `asarUnpack`。
 - `release/`、`release-pack/`、`release-win/`、`dist/`、`dist-server/`、`data/`、`logs/`、`config/config.json`、真实仓库、`working/`、`archive/` 和 ZIP 产物不提交 Git。
 
@@ -197,8 +199,8 @@
 
 ## 后续路线
 
-- **v0.13.0-dev**：Windows ZIP 便携包打包发布主链路已验证完成。
-- **v0.14.0-rc**：真实活动压力测试、ZIP 便携包跨设备测试、防火墙 / 热点 / 校园网场景测试、NSIS 安装包补测和发布前修复。
+- **v0.13.2-dev**：Windows ZIP 便携包发布准备完成，本机、多设备和主机热点测试通过。
+- **v0.14.0-rc**：发布候选测试、NSIS 安装包补测、真实活动压力测试和发布前问题修复。
 - **v1.0.0**：第一个稳定可用版本。
 - **v1.1.0 之后**：远程传输预留 / 远程连接探索。
 
