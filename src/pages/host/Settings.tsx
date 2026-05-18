@@ -1,16 +1,29 @@
-import { FolderOpen, Info, Keyboard, Network, RotateCcw, Save } from "lucide-react";
+import { Bug, Clipboard, FolderOpen, Github, Info, Keyboard, Mail, Network, RotateCcw, Save } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { BrandLogo } from "../../components/common/BrandLogo";
 import { Notice, StatusPill } from "../../components/ui/States";
 import { cn } from "../../lib/cn";
-import { fetchSettings, updateRepositoryPath, checkRepository, type RepositoryCheckData } from "../../lib/api";
+import {
+  checkRepository,
+  eventStatusLabels,
+  fetchEvents,
+  fetchHealth,
+  fetchSettings,
+  getApiBase,
+  type EventData,
+  type HealthData,
+  type RepositoryCheckData,
+  type SettingsData
+} from "../../lib/api";
+import { updateRepositoryPath } from "../../lib/api";
 
-type SettingsTab = "general" | "repository" | "network" | "import" | "export" | "shortcuts" | "about";
+type SettingsTab = "general" | "repository" | "network" | "diagnostics" | "import" | "export" | "shortcuts" | "about";
 
 const tabs: Array<{ id: SettingsTab; label: string }> = [
   { id: "general", label: "常规设置" },
   { id: "repository", label: "仓库设置" },
   { id: "network", label: "局域网设置" },
+  { id: "diagnostics", label: "故障排查" },
   { id: "import", label: "导入设置" },
   { id: "export", label: "导出设置" },
   { id: "shortcuts", label: "快捷键" },
@@ -30,10 +43,14 @@ export function SettingsPage() {
   const [apiAvailable, setApiAvailable] = useState<boolean | null>(null);
   const [saving, setSaving] = useState(false);
   const [repositoryMessage, setRepositoryMessage] = useState<{ tone: "success" | "warning" | "danger"; title: string; body: string } | null>(null);
+  const [diagnosticMessage, setDiagnosticMessage] = useState<{ tone: "success" | "warning" | "danger"; title: string; body: string } | null>(null);
+  const [diagnosticPreview, setDiagnosticPreview] = useState<string>("");
+  const [copyingDiagnostics, setCopyingDiagnostics] = useState(false);
 
   const title = useMemo(() => tabs.find((tab) => tab.id === activeTab)?.label ?? "系统设置", [activeTab]);
   const trimmedRepositoryPath = repositoryPath.trim();
   const hasUnsavedRepositoryPath = trimmedRepositoryPath !== savedRepositoryPath.trim();
+  const runtimeInfo = window.mediaPhotoWorkbench?.getRuntimeInfo?.();
 
   // 页面加载时从后端获取真实配置；失败时明确显示错误，不伪装成 mock 成功。
   useEffect(() => {
@@ -152,6 +169,64 @@ export function SettingsPage() {
     }
   };
 
+  const handleOpenLogsDir = async () => {
+    const logsDir = window.mediaPhotoWorkbench?.getRuntimeInfo?.().logsDir;
+    if (!logsDir) {
+      setDiagnosticMessage({ tone: "warning", title: "无法打开日志目录", body: "当前运行环境没有提供日志目录路径。请在 Electron 桌面端中使用此功能。" });
+      return;
+    }
+
+    const result = await window.mediaPhotoWorkbench?.openPath(logsDir);
+    if (result) {
+      setDiagnosticMessage({ tone: "danger", title: "无法打开日志目录", body: result });
+      return;
+    }
+
+    setDiagnosticMessage({ tone: "success", title: "日志目录已打开", body: logsDir });
+  };
+
+  const handleCopyDiagnostics = async () => {
+    setCopyingDiagnostics(true);
+    setDiagnosticMessage(null);
+
+    try {
+      const [healthRes, settingsRes, repositoryRes, activeEventsRes, reviewingEventsRes] = await Promise.all([
+        fetchHealth(),
+        fetchSettings(),
+        checkRepository(),
+        fetchEvents("active"),
+        fetchEvents("reviewing")
+      ]);
+
+      if (!healthRes.ok || !healthRes.data) {
+        throw new Error(healthRes.error?.message || "无法读取 /api/health。");
+      }
+      if (!settingsRes.ok || !settingsRes.data) {
+        throw new Error(settingsRes.error?.message || "无法读取 /api/settings。");
+      }
+      if (!repositoryRes.ok || !repositoryRes.data) {
+        throw new Error(repositoryRes.error?.message || "无法读取 /api/repository/check。");
+      }
+
+      const currentEvent = activeEventsRes.data?.[0] ?? reviewingEventsRes.data?.[0] ?? null;
+      const text = buildDiagnosticsText({
+        health: healthRes.data,
+        repository: repositoryRes.data,
+        settings: settingsRes.data,
+        currentEvent,
+        runtimeInfo: window.mediaPhotoWorkbench?.getRuntimeInfo?.()
+      });
+
+      await navigator.clipboard.writeText(text);
+      setDiagnosticPreview(text);
+      setDiagnosticMessage({ tone: "success", title: "诊断信息已复制", body: "可以直接粘贴给开发者排查局域网、仓库、数据库或启动问题。" });
+    } catch (err: any) {
+      setDiagnosticMessage({ tone: "danger", title: "复制诊断信息失败", body: err?.message || "无法收集诊断信息。" });
+    } finally {
+      setCopyingDiagnostics(false);
+    }
+  };
+
   return (
     <div className="flex flex-1 gap-8 overflow-y-auto bg-[#F8F9FA] p-8">
       <aside className="w-48 shrink-0">
@@ -188,7 +263,7 @@ export function SettingsPage() {
                 {saving ? "保存中..." : "保存"}
               </button>
             )}
-            {activeTab !== "about" && activeTab !== "repository" && (
+            {activeTab !== "about" && activeTab !== "repository" && activeTab !== "diagnostics" && (
               <button className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700" type="button">
                 <Save size={16} />
                 保存 mock
@@ -304,6 +379,71 @@ export function SettingsPage() {
             </div>
           )}
 
+          {activeTab === "diagnostics" && (
+            <div className="space-y-6">
+              {diagnosticMessage && (
+                <Notice tone={diagnosticMessage.tone} title={diagnosticMessage.title}>
+                  {diagnosticMessage.body}
+                </Notice>
+              )}
+
+              <InfoCard icon={<Bug size={18} />} title="诊断信息">
+                <p>用于现场排查后端端口、仓库路径、局域网地址、剩余空间和当前活动状态。</p>
+                <p>复制内容不包含图片文件，也不会修改数据库或仓库。</p>
+              </InfoCard>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <button
+                  className="flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                  onClick={handleOpenLogsDir}
+                  type="button"
+                >
+                  <FolderOpen size={16} />
+                  打开日志目录
+                </button>
+                <button
+                  className="flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
+                  disabled={copyingDiagnostics}
+                  onClick={handleCopyDiagnostics}
+                  type="button"
+                >
+                  <Clipboard size={16} />
+                  {copyingDiagnostics ? "正在复制..." : "复制诊断信息"}
+                </button>
+              </div>
+
+              <div className="rounded-xl border border-slate-100 bg-slate-50 p-4">
+                <h4 className="mb-3 text-sm font-medium text-slate-900">当前运行信息</h4>
+                <div className="grid gap-3 text-sm text-slate-600 sm:grid-cols-2">
+                  <DiagnosticLine label="应用版本" value={runtimeInfo?.appVersion || "未知"} />
+                  <DiagnosticLine label="运行模式" value={runtimeInfo?.isPackaged ? "打包" : "开发"} />
+                  <DiagnosticLine label="后端端口" value={runtimeInfo?.serverPort ? String(runtimeInfo.serverPort) : port} />
+                  <DiagnosticLine label="API 地址" value={runtimeInfo?.apiBaseUrl || getApiBase()} />
+                  <DiagnosticLine label="日志目录" value={runtimeInfo?.logsDir || "当前环境不可用"} wide />
+                  <DiagnosticLine label="仓库路径" value={savedRepositoryPath || "未配置"} wide />
+                </div>
+              </div>
+
+              <Notice tone="warning" title="连接排查提示">
+                <ul className="list-disc space-y-1 pl-4">
+                  <li>校园网可能存在设备隔离，同一 Wi-Fi 下客户端也可能无法访问主机。</li>
+                  <li>同一 Wi-Fi 无法连接时，建议使用主机 Windows 热点，常见主机地址为 192.168.137.1。</li>
+                  <li>检查 Windows 防火墙是否允许应用访问专用网络。</li>
+                  <li>客户端应访问主机首页显示的真实地址和端口，不要填写客户端自己的 localhost。</li>
+                </ul>
+              </Notice>
+
+              {diagnosticPreview && (
+                <div>
+                  <h4 className="mb-2 text-sm font-medium text-slate-900">最近复制内容预览</h4>
+                  <pre className="max-h-72 overflow-auto rounded-xl border border-slate-100 bg-slate-950 p-4 text-xs leading-6 text-slate-100">
+                    {diagnosticPreview}
+                  </pre>
+                </div>
+              )}
+            </div>
+          )}
+
           {activeTab === "import" && (
             <div className="space-y-6">
               <SettingSwitch checked label="导入时生成缩略图" note="thumb 长边 400px，WebP。" />
@@ -367,6 +507,24 @@ export function SettingsPage() {
               <InfoCard icon={<FolderOpen size={18} />} title="当前约束">
                 <p>第一版仅支持 JPG/JPEG；后端主机服务默认端口为 3030。</p>
               </InfoCard>
+              <InfoCard icon={<Mail size={18} />} title="联系开发者">
+                <p>
+                  <a className="font-medium text-blue-600 hover:text-blue-700" href="mailto:zhy20041122@gmail.com">
+                    zhy20041122@Gmail.com
+                  </a>
+                </p>
+              </InfoCard>
+              <InfoCard icon={<Github size={18} />} title="开源仓库">
+                <p>
+                  <a className="font-medium text-blue-600 hover:text-blue-700" href="https://github.com/FFocalors/media-photo-workbench" rel="noreferrer" target="_blank">
+                    github.com/FFocalors/media-photo-workbench
+                  </a>
+                </p>
+              </InfoCard>
+              <InfoCard icon={<Info size={18} />} title="免责声明">
+                <p>本软件用于校园融媒体活动图片的本地与局域网协作管理，不提供云端备份或外部存储服务。</p>
+                <p>请在导入、清理、归档和永久删除前自行确认重要图片已有可靠备份；因误操作、设备故障、网络环境或第三方系统限制导致的数据损失，需由使用方自行承担。</p>
+              </InfoCard>
               <div className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
                 <span className="text-sm font-medium text-slate-700">后端 API</span>
                 <StatusPill tone={apiAvailable ? "success" : "warning"}>{apiAvailable ? "已连接" : "未连接"}</StatusPill>
@@ -426,6 +584,15 @@ function InfoCard({ icon, title, children }: { icon: React.ReactNode; title: str
   );
 }
 
+function DiagnosticLine({ label, value, wide = false }: { label: string; value: string; wide?: boolean }) {
+  return (
+    <div className={cn("min-w-0 rounded-lg bg-white px-3 py-2", wide && "sm:col-span-2")}>
+      <p className="text-[11px] font-medium text-slate-400">{label}</p>
+      <p className="mt-1 break-words text-sm font-medium text-slate-700">{value || "未提供"}</p>
+    </div>
+  );
+}
+
 function SpecCard({ label, active = false }: { label: string; active?: boolean }) {
   return (
     <div className={cn("rounded-xl border px-4 py-3 text-sm font-medium", active ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-100 bg-slate-50 text-slate-600")}>
@@ -440,4 +607,77 @@ function buildRepositoryCheckMessage(result: RepositoryCheckData): string {
   if (!result.readable) return `路径不可读：${result.path}`;
   if (!result.writable) return `路径不可写：${result.path}`;
   return `仓库路径可读写：${result.path}`;
+}
+
+function formatBytes(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value) || value < 0) return "暂不可用";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let size = value;
+  let index = 0;
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024;
+    index += 1;
+  }
+  return `${size.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+}
+
+function buildDiagnosticsText(input: {
+  health: HealthData;
+  repository: RepositoryCheckData;
+  settings: SettingsData;
+  currentEvent: EventData | null;
+  runtimeInfo?: ReturnType<NonNullable<MediaPhotoWorkbenchBridge["getRuntimeInfo"]>>;
+}): string {
+  const runtime = input.runtimeInfo;
+  const serverPort = input.health.server.port || runtime?.serverPort || input.settings.server.port;
+  const apiBase = runtime?.apiBaseUrl || getApiBase();
+  const lanAddresses = input.health.network?.lanAddresses ?? [];
+  const currentEvent = input.currentEvent;
+  const eventStatus = currentEvent
+    ? eventStatusLabels[currentEvent.status as keyof typeof eventStatusLabels] || currentEvent.status
+    : "";
+
+  return [
+    "Media Photo Workbench / 融媒体图片工作台 诊断信息",
+    `生成时间：${new Date().toLocaleString()}`,
+    "",
+    "[应用]",
+    `应用版本：${runtime?.appVersion || "未知"}`,
+    `运行模式：${runtime?.isPackaged ? "打包" : "开发"}`,
+    `后端真实端口：${serverPort}`,
+    `API 地址：${apiBase}`,
+    `应用数据目录：${runtime?.appDataRoot || "当前环境不可用"}`,
+    `日志目录：${runtime?.logsDir || "当前环境不可用"}`,
+    "",
+    "[数据库]",
+    `数据库路径：${input.settings.database.path || "未知"}`,
+    `数据库状态：${input.health.database.status}`,
+    "",
+    "[仓库]",
+    `仓库路径：${input.settings.repository.path || input.repository.path || "未配置"}`,
+    `仓库已配置：${input.health.repository.configured ? "是" : "否"}`,
+    `仓库存在：${input.repository.exists ? "是" : "否"}`,
+    `仓库可读：${input.repository.readable ? "是" : "否"}`,
+    `仓库可写：${input.repository.writable ? "是" : "否"}`,
+    `剩余空间：${input.repository.freeSpaceText || formatBytes(input.repository.freeSpace)}`,
+    `总空间：${input.repository.totalSpaceText || formatBytes(input.repository.totalSpace)}`,
+    `容量读取错误：${input.repository.capacityError || "无"}`,
+    "",
+    "[网络]",
+    `本机 API：http://localhost:${serverPort}`,
+    `局域网地址列表：${lanAddresses.length > 0 ? "" : "未检测到可用 Wi-Fi / 以太网 IPv4 地址"}`,
+    ...lanAddresses.map((item) => `- ${item.name}: http://${item.address}:${serverPort}`),
+    `Windows 热点候选地址：http://${input.health.network?.hotspotAddress || "192.168.137.1"}:${serverPort}`,
+    "",
+    "[当前活动]",
+    currentEvent
+      ? `活动名称：${currentEvent.name}\n活动状态：${eventStatus}\n活动日期：${currentEvent.date || "未填写"}\n图片数量：${currentEvent.total_images}`
+      : "暂无 active / reviewing 活动",
+    "",
+    "[连接排查提示]",
+    "- 校园网可能存在设备隔离，同一 Wi-Fi 下客户端也可能无法访问主机。",
+    "- 同一 Wi-Fi 无法连接时，建议使用主机 Windows 热点。",
+    "- 检查 Windows 防火墙是否允许应用访问专用网络。",
+    "- 客户端应访问主机首页显示的真实地址和端口，不要填写客户端自己的 localhost。"
+  ].join("\n");
 }

@@ -28,17 +28,137 @@
 
 ## 开发记录
 
+### v0.14.0-rc：版本号同步
+- **日期**：2026-05-18
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - 将 `package.json` 项目版本号从 `0.13.0-dev` 同步为 `0.14.0-rc`。
+  - 同步 README、ROADMAP、API_SPEC 和 CHANGELOG 中的当前阶段表述。
+  - 历史 `v0.13.2-dev` GitHub Release 记录保持不变。
+- **修改文件**：
+  - `package.json`
+  - `README.md`
+  - `ROADMAP.md`
+  - `API_SPEC.md`
+  - `CHANGELOG.md`
+  - `DEVELOPMENT_LOG.md`
+
+### v0.14.0-rc：NSIS 安装包初步验证与交付策略调整
+- **日期**：2026-05-18
+- **开发者 / 工具**：Codex + 人工测试
+- **完成内容**：
+  - 对 NSIS 安装包交付形态进行了初步验证。
+  - 人工测试确认双击 NSIS 安装包后可进入安装界面，但安装进度会卡住。
+  - 取消按钮无法正常停止安装流程，需要通过任务管理器或 PowerShell 强制结束安装器进程。
+  - 当前无法确认安装版完整启动和业务烟测。
+  - 明确 v0.14.0-rc 阶段不继续大改 NSIS 安装器，不引入新的安装器框架，不重写打包系统。
+  - 交付策略调整为：Windows ZIP 便携包继续作为唯一推荐交付物，NSIS 安装包标记为“暂不推荐 / 后续再评估”。
+- **修改文件**：
+  - `README.md`
+  - `ROADMAP.md`
+  - `CHANGELOG.md`
+  - `DEVELOPMENT_LOG.md`
+- **验证方式**：
+  - 人工测试 NSIS 安装包，观察安装进度卡住、取消无响应和需要强制结束进程的问题。
+  - 确认 `.gitignore` 已覆盖 `release-pack/`、`release-*`、`dist/`、`dist-server/`、`*.zip`、`*.exe`、数据库、日志、真实仓库、`working/` 和 `archive/`。
+- **遇到的问题**：
+  - NSIS 安装包安装流程不稳定，当前表现为安装进度卡住且取消按钮无响应。
+- **解决方案**：
+  - 不在当前阶段继续投入修复 NSIS；将其移入后续待评估项，避免阻塞 v0.14.0-rc 发布候选测试。
+- **未完成事项**：
+  - NSIS 安装、卸载、升级覆盖和完整业务烟测后续重新评估。
+- **下一步计划**：
+  - 继续以 ZIP 便携包为主交付物推进 v0.14.0-rc 发布候选测试、真实活动压力复核和故障排查体验优化。
+
+### v0.14.0-rc：连接失败体验优化与网络排查引导
+- **日期**：2026-05-18
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - 客户端连接页连接测试失败时按错误类型展示更具体的排查提示。
+  - 地址格式错误时提示使用完整主机地址，例如 `http://192.168.137.1:3030`。
+  - 请求超时、`Failed to fetch`、`NetworkError` 等网络错误提示检查同一 Wi-Fi / 热点、校园网设备隔离、Windows 防火墙和主机首页真实地址。
+  - 快速失败的网络错误按“目标端口没有主机服务”提示，强调确认主机端已启动、使用真实端口并刷新主机首页重新复制地址。
+  - API 返回 `ok=false` 时显示后端错误并提示复制诊断信息排查。
+  - 主机首页局域网访问地址区域补充推荐连接顺序：WLAN / 以太网地址、Windows 热点、复制诊断信息。
+  - README 新增“客户端无法连接怎么办”章节。
+- **修改文件**：
+  - `src/lib/api.ts`
+  - `src/pages/client/ClientConnect.tsx`
+  - `src/pages/host/Overview.tsx`
+  - `README.md`
+  - `CHANGELOG.md`
+  - `ROADMAP.md`
+  - `DEVELOPMENT_LOG.md`
+- **验证方式**：
+  - 执行 `pnpm build`。
+- **遇到的问题**：
+  - 浏览器 `fetch` 对连接拒绝、超时和防火墙拦截通常只暴露为 `Failed to fetch`，无法像 Node 一样稳定拿到 `ECONNREFUSED`。
+- **解决方案**：
+  - 连接测试增加超时控制，并用失败耗时做轻量启发式分类；同时在提示中覆盖真实端口、旧地址、校园网隔离和防火墙排查路径。
+- **未完成事项**：
+  - 仍需真实校园网、防火墙拦截和多客户端现场环境复测提示准确性。
+- **下一步计划**：
+  - 继续 v0.14.0-rc 发布候选稳定性优化，推进错误日志导出包、真实活动压力复核和 ZIP 便携包交付体验完善；NSIS 安装包后续再评估。
+
+### v0.14.0-rc：故障排查与诊断信息入口
+- **日期**：2026-05-18
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - 系统设置页新增“故障排查”标签页。
+  - 新增“打开日志目录”按钮，复用现有 Electron `shell:open-path` 能力；开发模式打开项目 `logs/`，打包模式打开 Electron `userData/logs`。
+  - 新增“复制诊断信息”按钮，收集并复制应用版本、运行模式、后端真实端口、API 地址、数据库路径、仓库路径、仓库读写状态、剩余空间、局域网地址、Windows 热点候选地址和当前活动摘要。
+  - 诊断页补充校园网设备隔离、Windows 热点、防火墙和真实地址端口的连接排查提示。
+  - Electron 运行时信息补充 `appVersion`、`appDataRoot` 和 `logsDir`，供前端诊断入口使用。
+- **修改文件**：
+  - `electron/main.cjs`
+  - `electron/preload.cjs`
+  - `src/global.d.ts`
+  - `src/pages/host/Settings.tsx`
+  - `CHANGELOG.md`
+  - `ROADMAP.md`
+  - `DEVELOPMENT_LOG.md`
+- **验证方式**：
+  - 执行 `pnpm build`。
+- **未完成事项**：
+  - v0.14.0-rc 后续仍需补齐独立错误日志导出包、多客户端并发上传复测和真实活动压力复核；NSIS 安装包已移入后续待评估项。
+- **下一步计划**：
+  - 继续发布候选稳定性优化，优先完善 README 故障排查章节和客户端连接失败诊断提示。
+
+### v0.13.2-dev：GitHub Release 发布后收尾与 v0.14.0-rc 规划
+- **日期**：2026-05-18
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - 确认当前 Git tag 为 `v0.13.2-dev`，最近提交为 `d4d1d8e chore: finalize v0.13.2 release readiness`。
+  - 记录 v0.13.2-dev 已发布到 GitHub Release：`https://github.com/FFocalors/media-photo-workbench/releases/tag/v0.13.2-dev`。
+  - 统一文档中的推荐交付物名称为 `MediaPhotoWorkbench-v0.13.2-dev-x64.zip`。
+  - 新增发布后测试记录文档，记录 GitHub Release、ZIP 便携包、多设备测试、压力测试、Windows 热点测试和校园网设备隔离限制。
+  - 在路线图中补充 v0.14.0-rc：发布候选测试与稳定性优化。
+- **修改文件**：
+  - `README.md`
+  - `ROADMAP.md`
+  - `CHANGELOG.md`
+  - `DEVELOPMENT_LOG.md`
+  - `TESTING_NOTES.md`
+- **验证方式**：
+  - `git describe --tags --exact-match` 返回 `v0.13.2-dev`。
+  - `git log --oneline -1` 返回 `d4d1d8e chore: finalize v0.13.2 release readiness`。
+  - 本轮只做文档同步，不修改业务代码、数据库结构、导入、图片墙、修图、导出或归档主流程。
+- **未完成事项**：
+  - v0.14.0-rc 仍需复核更多真实活动压力场景和多客户端并发上传；NSIS 安装包已完成初步验证并标记为后续待评估。
+- **下一步计划**：
+  - 进入 v0.14.0-rc：发布候选测试、防火墙 / 热点 / 校园网连接诊断、错误日志导出、一键打开日志目录、启动速度优化和 README 故障排查完善；NSIS 安装包后续再评估。
+
 ### v0.13.2-dev：Windows ZIP 便携包发布收尾
 - **日期**：2026-05-18
 - **开发者 / 工具**：Codex
 - **完成内容**：
   - 同步记录 v0.13.2-dev 发布前结论：Windows ZIP 便携包已生成并可正常使用，ZIP 解压后 `Media Photo Workbench.exe` 可正常启动。
   - 记录本机测试、多设备测试和主机 Windows 热点连接测试均已通过。
-  - 明确当前推荐交付物为 `MediaPhotoWorkbench-0.13.0-dev-x64.zip`，使用方式为“解压 ZIP -> 双击 Media Photo Workbench.exe”。
+  - 明确当前推荐交付物为 `MediaPhotoWorkbench-v0.13.2-dev-x64.zip`，使用方式为“解压 ZIP -> 双击 Media Photo Workbench.exe”。
   - 记录客户端访问方式：主机首页复制局域网访问地址，或扫描主机首页二维码。
   - 记录校园网可能存在设备隔离；同 Wi-Fi 不可互访时推荐使用 Windows 热点。
   - 明确当前第一版仅支持 JPG/JPEG。
-  - 明确单文件 portable EXE 暂不作为推荐交付物，NSIS 安装包安装 / 卸载流程放到 v0.14.0-rc 补测。
+  - 明确单文件 portable EXE 暂不作为推荐交付物；NSIS 安装包后续经 v0.14.0-rc 初步验证发现安装器卡住，当前暂不推荐。
 - **修改文件**：
   - `README.md`
   - `ROADMAP.md`
@@ -48,9 +168,9 @@
   - 根据用户反馈，ZIP 便携包解压启动、本机测试、多设备测试和主机热点测试均已通过。
   - 检查 `.gitignore` 已覆盖 `release/`、`release-win/`、`release-pack/`、`dist/`、`dist-server/`、`data/`、`logs/`、`config/config.json`、数据库文件、`working/`、`archive/`、ZIP/EXE 和真实仓库产物。
 - **未完成事项**：
-  - NSIS 安装包仍未作为推荐交付物，需在 v0.14.0-rc 补测安装、卸载和升级流程。
+  - NSIS 安装包仍未作为推荐交付物，已移入后续待评估项。
 - **下一步计划**：
-  - 进入 v0.14.0-rc：发布候选测试、NSIS 安装包补测、真实活动压力测试和发布前问题修复。
+  - 进入 v0.14.0-rc：发布候选测试、真实活动压力测试和发布前问题修复；NSIS 安装包后续再评估。
 
 ### v0.13.0-dev：发布前轻量 UI 优化
 - **日期**：2026-05-17
@@ -144,10 +264,10 @@
   - 当前便携交付改为 ZIP 包：解压后运行 `Media Photo Workbench.exe`，不再把单文件 portable 自解压 EXE 作为主交付物。
   - 重新打包前必须关闭旧 exe 和相关 node/electron 进程，再删除旧 `release-pack/`；如果仍提示 `app.asar` 被占用，需要重启电脑后先删除 `release-pack/`，再运行打包命令。
 - **未完成事项**：
-  - NSIS 安装包仍需继续端到端补测。
+  - NSIS 安装包后续初步验证发现安装器卡住，当前暂不推荐，需后续重新评估。
   - ZIP 便携包仍需在更多真实 Windows 设备和真实活动素材下做压力测试。
 - **下一步计划**：
-  - 进入 v0.14.0-rc：发布候选测试、NSIS 安装包补测、真实活动压力测试和发布前问题修复。
+  - 进入 v0.14.0-rc：发布候选测试、真实活动压力测试和发布前问题修复；NSIS 安装包后续再评估。
 
 ### v0.12.0-dev：窗口适配、真实压力测试与问题修复
 - **日期**：2026-05-15

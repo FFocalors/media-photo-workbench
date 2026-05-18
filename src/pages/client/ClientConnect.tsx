@@ -15,6 +15,13 @@ import {
 import { cn } from "../../lib/cn";
 
 const roles = ["编辑", "修图", "访客"];
+const CONNECTION_TIMEOUT_MS = 6000;
+
+type ConnectionMessage = {
+  tone: "success" | "warning" | "danger";
+  title: string;
+  body: ReactNode;
+};
 
 export function ClientConnectPage() {
   const navigate = useNavigate();
@@ -25,10 +32,10 @@ export function ClientConnectPage() {
   const [deviceName, setDeviceName] = useState(localStorage.getItem("mediaPhotoWorkbench.clientDevice") || "Client-A");
   const [testing, setTesting] = useState(false);
   const [health, setHealth] = useState<HealthData | null>(null);
-  const [message, setMessage] = useState<{ tone: "success" | "warning" | "danger"; title: string; body: string } | null>(null);
+  const [message, setMessage] = useState<ConnectionMessage | null>(null);
 
   const connected = Boolean(health);
-  const canConnect = hostAddress.trim().startsWith("http") && userName.trim().length > 0 && deviceName.trim().length > 0;
+  const canConnect = hostAddress.trim().length > 0 && userName.trim().length > 0 && deviceName.trim().length > 0;
   const qrAddress = useMemo(() => {
     try {
       return normalizeApiBaseUrl(hostAddress);
@@ -41,12 +48,15 @@ export function ClientConnectPage() {
     if (!canConnect) return;
     setTesting(true);
     setHealth(null);
+    const startedAt = Date.now();
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), CONNECTION_TIMEOUT_MS);
 
     try {
       const normalized = normalizeApiBaseUrl(hostAddress);
-      const result = await fetchHealthFrom(normalized);
+      const result = await fetchHealthFrom(normalized, { signal: controller.signal });
       if (!result.ok || !result.data) {
-        setMessage({ tone: "danger", title: "连接失败", body: result.error?.message || "主机健康检查失败。" });
+        setMessage(buildConnectionFailureMessage("api", result.error?.message || "主机健康检查失败。"));
         return;
       }
 
@@ -57,8 +67,10 @@ export function ClientConnectPage() {
       setHealth(result.data);
       setMessage({ tone: "success", title: "连接测试通过", body: `已连接到 ${savedBase}。` });
     } catch (err: any) {
-      setMessage({ tone: "danger", title: "连接失败", body: err?.message || "无法访问主机，请检查地址、网络和防火墙。" });
+      const elapsedMs = Date.now() - startedAt;
+      setMessage(buildConnectionFailureMessage(classifyConnectionError(err, elapsedMs), err?.message));
     } finally {
+      window.clearTimeout(timeoutId);
       setTesting(false);
     }
   };
@@ -127,7 +139,7 @@ export function ClientConnectPage() {
 
               {!canConnect && (
                 <Notice className="mt-4" tone="warning" title="连接信息不完整">
-                  主机地址需要以 http 开头，并填写姓名和设备名后才能发起连接测试。
+                  请输入主机地址、姓名和设备名后再发起连接测试。主机地址需要使用完整格式，例如 http://192.168.137.1:3030。
                 </Notice>
               )}
               {message && (
@@ -208,6 +220,98 @@ export function ClientConnectPage() {
         </div>
       </div>
     </main>
+  );
+}
+
+function classifyConnectionError(error: any, elapsedMs: number): "invalid-url" | "network" | "refused" {
+  const message = String(error?.message || error || "");
+  if (/^主机地址必须以/i.test(message) || /Invalid URL/i.test(message)) {
+    return "invalid-url";
+  }
+  if (error?.name === "AbortError") {
+    return "network";
+  }
+  if (/ECONNREFUSED|ERR_CONNECTION_REFUSED|connection refused/i.test(message)) {
+    return "refused";
+  }
+  if (/Failed to fetch|NetworkError|Load failed|Network request failed/i.test(message)) {
+    return elapsedMs < 1500 ? "refused" : "network";
+  }
+  return "network";
+}
+
+function buildConnectionFailureMessage(kind: "invalid-url" | "network" | "refused" | "api", detail?: string): ConnectionMessage {
+  if (kind === "invalid-url") {
+    return {
+      tone: "danger",
+      title: "主机地址格式不正确",
+      body: "请输入完整地址，例如 http://192.168.137.1:3030。"
+    };
+  }
+
+  if (kind === "refused") {
+    return {
+      tone: "danger",
+      title: "目标端口没有主机服务",
+      body: (
+        <TroubleshootingList
+          intro="目标地址可能可达，但该端口没有响应主机 API。"
+          items={[
+            "确认主机端已经启动，并停留在主机模式。",
+            "确认使用的是主机首页显示的真实端口，不要使用旧二维码或旧地址。",
+            "刷新主机首页后重新复制地址，再回到客户端连接。",
+            "如果主机端口自动从 3030 跳到 3031-3040，请以主机首页显示为准。"
+          ]}
+        />
+      )
+    };
+  }
+
+  if (kind === "api") {
+    return {
+      tone: "danger",
+      title: "主机健康检查失败",
+      body: (
+        <TroubleshootingList
+          intro={detail || "后端返回了失败状态。"}
+          items={[
+            "请在主机端进入“系统设置 / 故障排查”，复制诊断信息发给维护人员。",
+            "确认数据库、仓库路径和后端服务状态均正常。",
+            "如果浏览器打开的是前端页面而不是 API，请重新复制主机首页显示的 API 地址。"
+          ]}
+        />
+      )
+    };
+  }
+
+  return {
+    tone: "danger",
+    title: "主机无响应",
+    body: (
+      <TroubleshootingList
+        intro={detail && !/Failed to fetch/i.test(detail) ? detail : "可能是网络不通、校园网设备隔离或 Windows 防火墙拦截。"}
+        items={[
+          "确认主机和客户端在同一 Wi-Fi 或同一个 Windows 热点下。",
+          "优先使用主机首页显示的局域网地址或二维码。",
+          "校园网无法连接时，建议开启主机 Windows 热点。",
+          "Windows 热点常见主机地址为 192.168.137.1。",
+          "检查 Windows 防火墙是否允许本应用访问专用网络。"
+        ]}
+      />
+    )
+  };
+}
+
+function TroubleshootingList({ intro, items }: { intro: string; items: string[] }) {
+  return (
+    <div>
+      <p>{intro}</p>
+      <ul className="mt-2 list-disc space-y-1 pl-4">
+        {items.map((item) => (
+          <li key={item}>{item}</li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

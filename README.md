@@ -17,9 +17,15 @@ Media Photo Workbench 是面向校园融媒体中心、新闻中心及影像部�
 
 ## 当前开发状态
 
-**当前版本：0.13.2-dev（Windows ZIP 便携包发布准备完成）**
+**当前版本：v0.14.0-rc（发布候选测试与稳定性优化）**
 
-项目已打通从主机建活动、本地导入、真实图片墙、单图下载、Socket.IO 实时同步、客户端上传协作、待修包生成、已修图回传、正式发布导出 ZIP、活动归档，到活动/图片回收站恢复和安全永久删除的核心闭环。当前已接入统一任务中心、批量 ZIP 下载、归档活动只读打开、客户端修图任务页、自定义待修分包和桌面端非最大化窗口适配。v0.13.2-dev 已完成 Windows ZIP 便携包发布准备，本机测试、多设备测试和主机 Windows 热点连接测试均已通过。
+项目已打通从主机建活动、本地导入、真实图片墙、单图下载、Socket.IO 实时同步、客户端上传协作、待修包生成、已修图回传、正式发布导出 ZIP、活动归档，到活动/图片回收站恢复和安全永久删除的核心闭环。当前已接入统一任务中心、批量 ZIP 下载、归档活动只读打开、客户端修图任务页、自定义待修分包和桌面端非最大化窗口适配。v0.13.2-dev 已发布到 GitHub Release，本机测试、多设备测试、压力测试和主机 Windows 热点连接测试均已通过；当前 v0.14.0-rc 重点进行连接诊断、日志排查、真实活动压力复核和发布前稳定性优化。
+
+GitHub Release：
+
+```text
+https://github.com/FFocalors/media-photo-workbench/releases/tag/v0.13.2-dev
+```
 
 ### 当前已实现功能
 - Electron 桌面主进程与前端通信集成，实现原生弹窗（文件夹选择）与文件浏览器调用。
@@ -89,7 +95,7 @@ pnpm dev
 - `pnpm build:server`：编译后端 `src-server/` 代码至 `dist-server/`。
 - `pnpm build`：编译后端并构建前端 `dist/`。
 - `pnpm dist:portable`：先执行 `pnpm build`，再生成 Windows 便携 ZIP 包到 `release-pack/`。
-- `pnpm dist:win`：先执行 `pnpm build`，再生成 Windows NSIS 安装包到 `release-pack/`。
+- `pnpm dist:win`：生成 Windows NSIS 安装包到 `release-pack/`，当前仅保留为后续评估入口；v0.14.0-rc 人工测试发现安装器卡住，暂不推荐作为交付物。
 - `pnpm rebuild:sqlite`：专门针对当前的 Electron 版本重编译 better-sqlite3 原生模块（如果出现 Node module version 报错时使用）。
 
 ## 局域网开发访问
@@ -131,7 +137,7 @@ pnpm dist:win
 打包产物输出到 `release-pack/`。`pnpm dist:portable` 当前使用 ZIP 便携包作为推荐交付物：解压 ZIP 后运行其中的 `Media Photo Workbench.exe`。当前推荐交付物为：
 
 ```text
-MediaPhotoWorkbench-0.13.0-dev-x64.zip
+MediaPhotoWorkbench-v0.13.2-dev-x64.zip
 ```
 
 使用方式：
@@ -140,13 +146,26 @@ MediaPhotoWorkbench-0.13.0-dev-x64.zip
 解压 ZIP → 双击 Media Photo Workbench.exe
 ```
 
-不要把单文件 self-extract portable EXE 作为当前主交付物；该形式在当前项目中出现过双击无可见窗口的问题，而 ZIP 解压后的程序已验证可正常启动。NSIS 安装包安装 / 卸载流程保留到 v0.14.0-rc 补测。
+不要把单文件 self-extract portable EXE 作为当前主交付物；该形式在当前项目中出现过双击无可见窗口的问题，而 ZIP 解压后的程序已验证可正常启动。
+
+NSIS 安装包在 v0.14.0-rc 人工验证中出现安装进度卡住、取消按钮无响应、需要强制结束安装器进程的问题，当前暂不提供或暂不推荐作为交付物。若未来重新提供安装包，会在 Release 和 README 中另行说明。
 
 重新打包前必须关闭旧的 `Media Photo Workbench.exe` 并删除旧 `release-pack/`，否则旧 `app.asar` 被占用时 electron-builder 无法写入新产物。`release/`、`release-pack/`、`release-win/`、`dist/`、`dist-server/`、`data/`、`logs/`、`config/config.json`、真实数据库、真实图片、`working/`、`archive/` 和各类 ZIP 产物均不得提交到 Git。
 
 第一版重点保证 Windows 桌面端不同窗口尺寸下可用。手机和平板浏览器只作为轻量访问入口，用于查看、预览和简单状态操作；不把批量上传、批量下载、导出、归档和永久删除作为移动端完整适配目标。
 
 校园网环境可能存在设备隔离，即使同一个 Wi-Fi 下也可能无法互访。如果客户端无法访问主机，优先确认 Windows 防火墙和主机首页显示的真实地址；同 Wi-Fi 仍不可用时，推荐使用主机 Windows 热点，其他设备连接该热点后访问主机。
+
+## 客户端无法连接怎么办
+
+1. 确认主机端软件已启动，并已选择“启动为主机”。
+2. 优先使用主机首页显示的真实地址和端口，不要使用旧二维码、旧截图或客户端本机的 `localhost`。
+3. 确认客户端和主机在同一 Wi-Fi、同一网线网络或同一个 Windows 热点下。
+4. 校园网可能存在设备隔离，即使同一 Wi-Fi 下也可能无法互访。
+5. 校园网不通时，建议让主机电脑开启 Windows 热点，其他设备连接该热点后再访问主机。
+6. Windows 热点常见主机地址为 `192.168.137.1`，具体端口仍以主机首页显示为准。
+7. 检查 Windows 防火墙是否允许本应用访问“专用网络”。
+8. 仍无法连接时，在主机端进入“系统设置 / 故障排查”，点击“复制诊断信息”，连同客户端连接页的错误提示一起发送给维护人员。
 
 ## 窗口适配与压力测试清单
 
@@ -185,6 +204,7 @@ MediaPhotoWorkbench/
 ├── DATABASE_SCHEMA.md  # 数据库结构与枚举值参考文档
 ├── DEVELOPMENT_LOG.md  # 开发阶段记录日志
 ├── ROADMAP.md          # 阶段路线图
+├── TESTING_NOTES.md    # 发布后测试记录与线下补测清单
 └── CHANGELOG.md        # 语义化版本变更日志
 ```
 
@@ -193,6 +213,6 @@ MediaPhotoWorkbench/
 详情请见 `CHANGELOG.md` 与 `AGENTS.md`。
 
 当前与后续重点：
-- v0.13.2-dev：Windows ZIP 便携包发布准备完成，本机、多设备和主机热点测试通过。
-- v0.14.0-rc：发布候选测试、NSIS 安装包补测、真实活动压力测试和发布前问题修复。
+- v0.13.2-dev：Windows ZIP 便携预发布版已发布到 GitHub Release，本机、多设备、压力测试和主机热点测试通过。
+- v0.14.0-rc：发布候选测试、真实活动压力测试、连接诊断和发布前稳定性优化；NSIS 安装包已移入后续待评估项，不作为当前发布候选阻塞项。
 - v1.1.0 之后再探索远程传输预留 / 远程连接。

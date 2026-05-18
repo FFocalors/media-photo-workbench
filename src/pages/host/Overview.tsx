@@ -261,6 +261,14 @@ export function OverviewPage() {
                       ? "开发模式：前端 Vite 5173，后端 API 独立端口；二维码指向前端地址，客户端浏览器需先打开前端页面。"
                       : "生产模式：客户端浏览器直接访问后端端口，前端页面、API 和 Socket.IO 使用同一地址。"}
                   </p>
+                  <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                    <span className="font-medium text-slate-600">推荐连接顺序：</span>
+                    <span className="rounded-full bg-slate-50 px-2.5 py-1">1. WLAN / 以太网地址</span>
+                    <span className="rounded-full bg-slate-50 px-2.5 py-1">2. 校园网不通时使用 Windows 热点</span>
+                    <Link className="rounded-full bg-blue-50 px-2.5 py-1 font-medium text-blue-600 hover:bg-blue-100" to="/host/settings">
+                      3. 复制诊断信息排查
+                    </Link>
+                  </div>
                 </div>
               </div>
 

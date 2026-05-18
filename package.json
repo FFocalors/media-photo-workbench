@@ -1,6 +1,6 @@
 {
   "name": "media-photo-workbench",
-  "version": "0.13.0-dev",
+  "version": "0.14.0-rc",
   "private": true,
   "description": "Windows desktop photo workflow workbench for campus media teams.",
   "main": "electron/main.cjs",
@@ -71,10 +71,14 @@
       "artifactName": "MediaPhotoWorkbench-${version}-setup-${arch}.${ext}",
       "oneClick": false,
       "perMachine": false,
+      "allowElevation": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "融媒体图片工作台"
+      "shortcutName": "融媒体图片工作台",
+      "uninstallDisplayName": "融媒体图片工作台",
+      "runAfterFinish": false,
+      "deleteAppDataOnUninstall": false
     }
   },
   "pnpm": {

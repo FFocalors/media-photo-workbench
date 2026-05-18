@@ -2,7 +2,13 @@
 
 ## 当前阶段状态
 
-项目已完成 v0.13.2-dev：Windows ZIP 便携包发布准备。当前代码已经支持主机本地导入、真实图片墙、基础选片、单图下载、Socket.IO 实时同步、客户端上传协作、修图流转、发布导出、活动归档、活动/图片回收站恢复和安全永久删除、统一任务中心、批量 ZIP 下载、working 清理后的历史归档只读查看、客户端下载待修包和回传已修图，并支持单包、平均拆包和按人员分工自定义待修分包。v0.12 已完成桌面端非最大化窗口适配；v0.13 已完成生产模式前端托管、Electron Builder 配置、原生依赖处理、真实运行端口透传、主机首页剩余空间真实显示、二维码生成、ZIP 便携包验证和多设备测试。推荐交付物为 `MediaPhotoWorkbench-0.13.0-dev-x64.zip`；单文件 self-extract portable EXE 不作为当前主交付物。
+当前进入 v0.14.0-rc：发布候选测试与稳定性优化。项目已完成 v0.13.2-dev Windows ZIP 便携预发布版，代码已经支持主机本地导入、真实图片墙、基础选片、单图下载、Socket.IO 实时同步、客户端上传协作、修图流转、发布导出、活动归档、活动/图片回收站恢复和安全永久删除、统一任务中心、批量 ZIP 下载、working 清理后的历史归档只读查看、客户端下载待修包和回传已修图，并支持单包、平均拆包和按人员分工自定义待修分包。v0.12 已完成桌面端非最大化窗口适配；v0.13 已完成生产模式前端托管、Electron Builder 配置、原生依赖处理、真实运行端口透传、主机首页剩余空间真实显示、二维码生成、ZIP 便携包验证、多设备测试和 GitHub Release 发布。推荐交付物为 `MediaPhotoWorkbench-v0.13.2-dev-x64.zip`；单文件 self-extract portable EXE 不作为当前主交付物。NSIS 安装包在 v0.14.0-rc 人工测试中出现安装器卡住，已移入后续待评估项，不作为当前发布候选阻塞项。
+
+当前 GitHub Release：
+
+```text
+https://github.com/FFocalors/media-photo-workbench/releases/tag/v0.13.2-dev
+```
 
 ## 已完成
 
@@ -141,17 +147,17 @@
 
 ## 当前阶段
 
-### v0.13.2-dev：Windows ZIP 便携包发布准备
+### v0.13.2-dev：Windows ZIP 便携预发布版
 - 生产模式下 Express 托管前端 `dist/`，浏览器访问 `http://localhost:{serverPort}` 或 `http://主机局域网IP:{serverPort}` 即可打开前端页面。
 - API 继续统一使用 `/api` 前缀，Socket.IO 复用同一 HTTP server 端口。
 - 开发模式继续使用 Vite `0.0.0.0:5173`；生产模式不再提示客户端访问 5173。
 - Electron 生产模式使用可写的 `app.getPath("userData")` 保存 `data/app.db`、`config/config.json` 和 `logs/`，不写入只读安装目录。
 - 配置 electron-builder，目标为 Windows 便携 ZIP 包和 NSIS 安装包，输出到 `release-pack/`。
-- ZIP 便携包已验证可解压启动；推荐交付物为 `MediaPhotoWorkbench-0.13.0-dev-x64.zip`。
-- 本机测试、多设备测试和主机 Windows 热点连接测试已通过。
+- ZIP 便携包已验证可解压启动，并已发布到 GitHub Release；推荐交付物为 `MediaPhotoWorkbench-v0.13.2-dev-x64.zip`。
+- 本机测试、多设备测试、压力测试和主机 Windows 热点连接测试已通过。
 - 客户端访问方式为在主机首页复制局域网访问地址，或扫描主机首页二维码打开客户端页面。
 - 校园网可能存在设备隔离；同 Wi-Fi 无法互访时，推荐使用主机 Windows 热点。
-- 单文件 self-extract portable EXE 暂不作为推荐交付物；NSIS 安装包安装 / 卸载流程放到 v0.14.0-rc 补测。
+- 单文件 self-extract portable EXE 暂不作为推荐交付物；NSIS 安装包经 v0.14.0-rc 初步验证发现安装进度卡住、取消按钮无响应，暂不推荐作为交付物。
 - `better-sqlite3`、`sharp` 等原生依赖需要通过 Electron ABI 重建并在打包时 `asarUnpack`。
 - `release/`、`release-pack/`、`release-win/`、`dist/`、`dist-server/`、`data/`、`logs/`、`config/config.json`、真实仓库、`working/`、`archive/` 和 ZIP 产物不提交 Git。
 
@@ -160,7 +166,7 @@
 - ZIP 便携包生成通过，解压后可启动 `Media Photo Workbench.exe`。
 - 生产托管下根路径和 React Router 子路径刷新不 404。
 - `/api/health`、缩略图、预览图、下载接口和 Socket.IO 不被前端静态回退拦截。
-- `pnpm dist:portable` 能生成便携 ZIP 包，解压后运行 `Media Photo Workbench.exe`；`pnpm dist:win` 保留 NSIS 安装包能力，安装 / 卸载流程进入 v0.14.0-rc 补测。
+- `pnpm dist:portable` 能生成便携 ZIP 包，解压后运行 `Media Photo Workbench.exe`；`pnpm dist:win` 仅保留为后续 NSIS 评估入口，当前交付不依赖 NSIS 安装包。
 - 打包后的 exe 能设置仓库、创建活动、导入 JPG、生成缩略图/预览图、图片墙显示缩略图。
 - 局域网客户端通过 `http://主机IP:{serverPort}` 访问前端，并可连接 API、上传 JPG、下载待修包、回传已修图、执行导出和归档。
 
@@ -197,10 +203,24 @@
 - 归档页支持二次确认后删除归档目录和 `archived_events` 摘要。
 - `ARCHIVE_PATH_NOT_FOUND` 和 `ARCHIVE_MANIFEST_NOT_FOUND` 会作为明确错误返回。
 
+### v0.14.0-rc：发布候选测试与稳定性优化
+
+- 已新增系统设置页“故障排查 / 诊断信息”入口，支持打开日志目录和复制现场诊断信息。
+- 已优化客户端连接失败提示，按地址格式错误、网络无响应 / 防火墙 / 校园网隔离、目标端口无服务和 API 健康检查失败分类展示排查建议。
+- 主机首页已补充推荐连接顺序：优先使用 WLAN / 以太网地址，校园网不通时使用 Windows 热点，仍无法连接时复制诊断信息排查。
+- 防火墙 / 热点 / 校园网连接排查提示：继续复测同 Wi-Fi 不可互访、Windows 防火墙拦截、误填 `localhost`、校园网设备隔离和热点 `192.168.137.1` 场景。
+- 错误日志导出入口：提供面向普通用户的日志导出方式，便于线下活动现场快速收集 `startup.log`、后端日志和关键错误信息。
+- 一键打开日志目录：在设置页或系统概览页补充安全入口，便于用户定位运行日志，不直接暴露或修改业务数据。
+- NSIS 安装包后续待评估：v0.14.0-rc 初步人工测试发现安装进度卡住、取消按钮无响应、需要强制结束进程；当前不作为发布候选阻塞项，ZIP 便携包仍是唯一推荐交付物。
+- 多客户端并发上传复测：重点验证多台笔记本同时上传 JPG/JPEG、去重范围、Socket.IO 同步和任务状态。
+- 真实活动压力测试复核：用真实活动素材复测 50 / 300 / 500 张图片导入、图片墙滚动、待修包、导出发布、批量 ZIP 和轻量归档。
+- 启动速度优化：记录冷启动耗时、后端启动耗时、数据库初始化耗时和首页首屏可用时间，优先优化明显阻塞点。
+- README 故障排查章节完善：补充局域网连接、热点、防火墙、端口、日志、仓库路径和打包版运行问题排查。
+
 ## 后续路线
 
-- **v0.13.2-dev**：Windows ZIP 便携包发布准备完成，本机、多设备和主机热点测试通过。
-- **v0.14.0-rc**：发布候选测试、NSIS 安装包补测、真实活动压力测试和发布前问题修复。
+- **v0.13.2-dev**：Windows ZIP 便携预发布版已发布到 GitHub Release，本机、多设备、压力测试和主机热点测试通过。
+- **v0.14.0-rc**：发布候选测试与稳定性优化，重点补齐连接诊断、日志导出和真实活动压力复核；NSIS 安装包移入后续待评估项。
 - **v1.0.0**：第一个稳定可用版本。
 - **v1.1.0 之后**：远程传输预留 / 远程连接探索。
 

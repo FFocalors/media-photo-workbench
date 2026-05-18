@@ -20,7 +20,7 @@
 - **0.11.5**：修图协作与导航流程优化
 - **0.12.0**：窗口适配、真实压力测试与问题修复
 - **0.13.0**：Windows 打包发布
-- **0.13.2**：Windows ZIP 便携包发布准备与多设备测试
+- **0.13.2**：Windows ZIP 便携预发布版与多设备测试
 - **0.14.0-rc**：真实活动压力测试与发布前问题修复
 - **1.0.0**：第一个可用于实际活动的稳定版本
 - **1.1.0 之后**：远程传输预留 / 远程连接探索
@@ -29,10 +29,21 @@
 
 ## [未发布] (Unreleased)
 
-- v0.13.2-dev Windows ZIP 便携包发布准备完成，本机测试、多设备测试和主机 Windows 热点连接测试均已通过。
-- 当前推荐交付物为 `MediaPhotoWorkbench-0.13.0-dev-x64.zip`，使用方式为解压 ZIP 后双击 `Media Photo Workbench.exe`。
+- 项目版本号同步为 `0.14.0-rc`，进入发布候选测试与稳定性优化阶段。
+- v0.14.0-rc 第三项完成 NSIS 安装包初步验证：生成安装包后人工测试发现安装进度卡住、取消按钮无响应，需要通过任务管理器或 PowerShell 强制结束安装器。
+- NSIS 安装包当前标记为“暂不推荐 / 后续再评估”，不作为 v0.14.0-rc 发布候选阻塞项，也不作为推荐交付物。
+- 当前交付策略保持 Windows ZIP 便携包优先，`MediaPhotoWorkbench-v0.13.2-dev-x64.zip` 仍是唯一推荐交付物。
+- v0.14.0-rc 第二项连接失败体验优化：客户端连接页按地址格式错误、网络无响应 / 防火墙 / 校园网隔离、目标端口无服务和 API `ok=false` 返回分类显示排查建议。
+- 主机首页局域网访问地址区域补充推荐连接顺序：优先使用 WLAN / 以太网地址，校园网不通时使用 Windows 热点，仍无法连接时复制诊断信息排查。
+- README 新增“客户端无法连接怎么办”章节，补充真实地址端口、同网段、校园网设备隔离、Windows 热点、防火墙和诊断信息收集说明。
+- v0.14.0-rc 发布候选阶段新增“故障排查 / 诊断信息”入口：系统设置页可打开日志目录，并复制包含版本、运行模式、真实端口、API、数据库、仓库、剩余空间、局域网地址、热点候选地址和当前活动摘要的诊断文本。
+- Electron preload 运行时信息补充 `appVersion`、`appDataRoot` 和 `logsDir`，前端复用现有 `shell:open-path` 能力打开日志目录。
+- v0.13.2-dev Windows ZIP 便携预发布版已发布到 GitHub Release：`https://github.com/FFocalors/media-photo-workbench/releases/tag/v0.13.2-dev`。
+- v0.13.2-dev 本机测试、多设备测试、压力测试和主机 Windows 热点连接测试均已通过。
+- 当前推荐交付物为 `MediaPhotoWorkbench-v0.13.2-dev-x64.zip`，使用方式为解压 ZIP 后双击 `Media Photo Workbench.exe`。
 - 客户端可通过主机首页复制局域网访问地址，或扫描主机首页二维码访问主机页面；校园网可能存在设备隔离，同 Wi-Fi 无法互访时推荐使用主机 Windows 热点。
 - 当前第一版仅支持 JPG/JPEG，RAW / HEIC / 视频仍不在当前发布范围内。
+- 新增 `TESTING_NOTES.md`，记录 v0.13.2-dev 发布后测试状态、已知限制和 v0.14.0-rc 线下补测清单。
 - v0.13.0-dev 发布前轻量 UI 优化：主机首页和客户端连接页二维码改为连接式圆滑二维码，不再只是外层卡片圆角，也不再是分离点阵；客户端连接页根据输入的主机地址生成真实二维码。
 - 启动页标题调整为中文优先、英文弱化显示；Electron 窗口标题和页面标题同步为“融媒体图片工作台 · Media Photo Workbench”。
 - 新增品牌 Logo 组件和资源路径：前端 Logo 使用 `src/assets/brand/app-icon.png`，Electron 窗口图标优先读取 `build/icon.png`；`electron-builder` 已配置 `build/icon.ico` 作为 Windows 图标，并将 `build/icon.png` / `build/icon.ico` 作为额外资源候选。
@@ -42,7 +53,7 @@
 - 前端 API 基址支持生产同源访问；浏览器打开后端托管页面时默认使用当前 origin 访问 `/api`，避免局域网客户端错误请求自己的 `localhost:3030`。
 - 新增 `dist:portable` 和 `dist:win` 脚本，并配置 electron-builder 生成 Windows 便携 ZIP 包和 NSIS 安装包到 `release-pack/`；单文件 self-extract portable EXE 暂不作为当前主交付物。
 - ZIP 便携包作为当前主交付形式；单文件 self-extract portable EXE 暂不作为当前主交付物。
-- NSIS 安装包安装 / 卸载流程保留到 v0.14.0-rc 补测。
+- NSIS 安装包后续进入 v0.14.0-rc 初步验证；当前验证结论为安装器卡住，暂不推荐作为交付物。
 - electron-builder 配置加入 `asarUnpack`，为 `better-sqlite3`、`sharp`、`@img`、`@emnapi` 等原生依赖预留打包运行支持。
 - 主机首页根据开发/生产访问模式区分地址展示：开发模式显示前端 `5173` 候选和后端 API 地址；生产模式显示客户端访问地址和 API 健康检查地址。
 - 主机首页 / 系统概览页新增真实磁盘剩余空间显示：`GET /api/repository/check` 和 `GET /api/health` 返回 `freeSpaceBytes`、`totalSpaceBytes`、`usedSpaceBytes` 及可读文本，前端展示容量比例环形图；仓库路径未配置、路径不存在或读取失败时显示明确状态，不影响 `/api/health` 整体可用。
@@ -197,7 +208,7 @@
 - 将图片导入升级为任务队列和进度轮询。
 - 将待修包生成、大批量已修图回传、归档清理和永久删除继续接入任务系统。
 - 增加任务持久化、真正取消和重试能力。
-- v0.14.0-rc：发布候选测试、NSIS 安装包补测、真实活动压力测试和发布前问题修复。
+- v0.14.0-rc：发布候选测试与稳定性优化，重点包括防火墙 / 热点 / 校园网连接排查提示、错误日志导出入口、一键打开日志目录、多客户端并发上传复测、真实活动压力测试复核、启动速度优化和 README 故障排查章节完善；NSIS 安装包移入后续待评估项。
 - v1.1.0 之后再探索远程传输预留 / 远程连接。
 
 ---

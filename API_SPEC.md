@@ -2,9 +2,9 @@
 
 ## 当前阶段说明
 
-当前开发阶段为 **v0.13.0-dev：Windows ZIP 便携包打包发布**。
+当前发布阶段为 **v0.14.0-rc：发布候选测试与稳定性优化**。
 
-本阶段不新增业务 API，但调整生产模式访问方式：打包后 Express 托管前端 `dist/`，前端页面、`/api` 接口和 Socket.IO 复用同一个后端端口。开发模式仍使用 Vite `5173` 访问前端、`3030-3040` 访问后端 API。当前推荐交付物为 ZIP 便携包，解压后运行 `Media Photo Workbench.exe`；单文件 self-extract portable EXE 暂不作为推荐交付物。
+本阶段不新增业务 API，但调整生产模式访问方式：打包后 Express 托管前端 `dist/`，前端页面、`/api` 接口和 Socket.IO 复用同一个后端端口。开发模式仍使用 Vite `5173` 访问前端、`3030-3040` 访问后端 API。当前推荐交付物为 ZIP 便携包 `MediaPhotoWorkbench-v0.13.2-dev-x64.zip`，解压后运行 `Media Photo Workbench.exe`；单文件 self-extract portable EXE 暂不作为推荐交付物。
 
 ## 统一规范
 

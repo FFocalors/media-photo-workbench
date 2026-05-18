@@ -15,7 +15,10 @@ let _runtimeInfo = {
   isDev: true,
   serverPort: 0,
   apiBaseUrl: "",
-  clientBaseUrl: ""
+  clientBaseUrl: "",
+  appVersion: "",
+  appDataRoot: "",
+  logsDir: ""
 };
 
 function normalizeRuntimeInfo(info) {
@@ -28,7 +31,10 @@ function normalizeRuntimeInfo(info) {
     isDev: Boolean(info.isDev),
     serverPort: Number(info.serverPort) || 0,
     apiBaseUrl: String(info.apiBaseUrl || ""),
-    clientBaseUrl: String(info.clientBaseUrl || "")
+    clientBaseUrl: String(info.clientBaseUrl || ""),
+    appVersion: String(info.appVersion || ""),
+    appDataRoot: String(info.appDataRoot || ""),
+    logsDir: String(info.logsDir || "")
   };
 }
 

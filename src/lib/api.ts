@@ -167,8 +167,8 @@ export async function fetchHealth(): Promise<ApiResponse<HealthData>> {
   return request<HealthData>("/api/health");
 }
 
-export async function fetchHealthFrom(baseUrl: string): Promise<ApiResponse<HealthData>> {
-  return requestFromBase<HealthData>(baseUrl, "/api/health");
+export async function fetchHealthFrom(baseUrl: string, options?: RequestInit): Promise<ApiResponse<HealthData>> {
+  return requestFromBase<HealthData>(baseUrl, "/api/health", options);
 }
 
 // ---------- Settings ----------

@@ -13,13 +13,42 @@ let runtimeInfo = {
   isDev,
   serverPort: 0,
   apiBaseUrl: "",
-  clientBaseUrl: ""
+  clientBaseUrl: "",
+  appVersion: app.getVersion(),
+  appDataRoot: "",
+  logsDir: ""
 };
 let startupLogsDir = null;
 
+function resolveEarlyLogsDir() {
+  const appData = process.env.APPDATA;
+  if (appData) {
+    return path.join(appData, "media-photo-workbench", "logs");
+  }
+  return path.resolve(process.cwd(), "logs");
+}
+
+function writeEarlyStartupLog(message) {
+  try {
+    const logsDir = resolveEarlyLogsDir();
+    fs.mkdirSync(logsDir, { recursive: true });
+    const logPath = path.join(logsDir, "startup.log");
+    const timestamp = new Date().toISOString();
+    fs.appendFileSync(logPath, `[${timestamp}] ${message}\n`);
+  } catch (_) {
+    // best effort before app.whenReady()
+  }
+}
+
+writeEarlyStartupLog("=== Electron main loaded ===");
+writeEarlyStartupLog(`argv: ${JSON.stringify(process.argv)}`);
+writeEarlyStartupLog(`execPath: ${process.execPath}`);
+
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
+writeEarlyStartupLog(`gotSingleInstanceLock: ${gotSingleInstanceLock}`);
 
 if (!gotSingleInstanceLock) {
+  writeEarlyStartupLog("单实例锁获取失败，应用退出");
   app.quit();
 } else {
   app.on("second-instance", () => {
@@ -318,7 +347,10 @@ app.whenReady().then(async () => {
       isDev,
       serverPort: serverHandle.port,
       apiBaseUrl: `http://localhost:${serverHandle.port}`,
-      clientBaseUrl: `http://localhost:${serverHandle.port}`
+      clientBaseUrl: `http://localhost:${serverHandle.port}`,
+      appVersion: app.getVersion(),
+      appDataRoot,
+      logsDir
     };
     writeStartupLog(logsDir, `startServer 成功，端口: ${serverHandle.port}`);
     writeStartupLog(logsDir, `runtimeInfo: ${JSON.stringify(runtimeInfo)}`);
