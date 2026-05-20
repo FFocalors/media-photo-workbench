@@ -1,6 +1,6 @@
 {
   "name": "media-photo-workbench",
-  "version": "0.14.0-rc",
+  "version": "0.15.0-rc.0",
   "private": true,
   "description": "Windows desktop photo workflow workbench for campus media teams.",
   "main": "electron/main.cjs",

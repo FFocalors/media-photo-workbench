@@ -2,9 +2,9 @@
 
 ## 当前阶段说明
 
-当前发布阶段为 **v0.14.0-rc：发布候选测试与稳定性优化**。
+当前发布阶段为 **v0.15.0-rc.0：发布候选版，导入性能与稳定性增强**。
 
-本阶段不新增业务 API，但调整生产模式访问方式：打包后 Express 托管前端 `dist/`，前端页面、`/api` 接口和 Socket.IO 复用同一个后端端口。开发模式仍使用 Vite `5173` 访问前端、`3030-3040` 访问后端 API。当前推荐交付物为 ZIP 便携包 `MediaPhotoWorkbench-v0.13.2-dev-x64.zip`，解压后运行 `Media Photo Workbench.exe`；单文件 self-extract portable EXE 暂不作为推荐交付物。
+本阶段延续生产模式访问方式：打包后 Express 托管前端 `dist/`，前端页面、`/api` 接口和 Socket.IO 复用同一个后端端口。开发模式仍使用 Vite `5173` 访问前端、`3030-3040` 访问后端 API。当前推荐交付物为 ZIP 便携包 `MediaPhotoWorkbench-v0.15.0-rc.0-x64.zip`，解压后运行 `Media Photo Workbench.exe`；单文件 self-extract portable EXE 暂不作为推荐交付物，NSIS 安装包暂不推荐。
 
 ## 统一规范
 
@@ -763,7 +763,7 @@ working/{event_slug}/清单
   - `REPOSITORY_NOT_READY`：仓库路径未配置、不存在、不可读或不可写。
   - `MISSING_IMAGE_PROCESSOR`：缺少 `sharp` 依赖。
 - **备注**：
-  - v0.14.0-rc 起该接口返回 `taskId`，导入处理在后台任务中执行，前端不再长时间等待整个批次完成。
+  - v0.15.0-rc.0 起该接口返回 `taskId`，导入处理在后台任务中执行，前端不再长时间等待整个批次完成。
   - 任务进度可通过 `GET /api/tasks/:taskId` 查询，也会通过 Socket.IO `task-updated` 推送到任务中心。
   - 传入 `folderPath` 时只扫描当前文件夹第一层；传入 `filePaths` 时只导入手动指定的文件，不扫描整个文件夹。
   - 不移动、不删除、不覆盖源文件。
