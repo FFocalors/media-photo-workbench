@@ -1,9 +1,10 @@
 import crypto from "crypto";
+import os from "os";
 import path from "path";
 import fs from "fs-extra";
 import { getConfig } from "../config/config";
 import { getDatabase } from "../db/database";
-import { getLogger } from "../utils/logger";
+import { safeLog } from "../utils/logger";
 import { getEventById } from "./events";
 import { ensureEventWorkingDirs, getEventWorkspacePaths } from "./eventWorkspace";
 
@@ -20,6 +21,7 @@ export interface ImportSourceFile {
   filename: string;
   path: string;
   size: number;
+  mimeType?: string;
 }
 
 export interface ImportScanResult {
@@ -60,13 +62,36 @@ export interface ImportStartResult {
   errors: ImportErrorItem[];
 }
 
+export interface ImportProgressSnapshot {
+  total: number;
+  processed: number;
+  success: number;
+  failed: number;
+  skipped: number;
+  errors: ImportErrorItem[];
+  currentFileName: string;
+  importedCount: number;
+  totalBytes: number;
+  processedBytes: number;
+}
+
+export interface ImportImageFilesOptions {
+  concurrency?: number;
+  maxErrors?: number;
+  isCancelled?: () => boolean;
+  onProgress?: (snapshot: ImportProgressSnapshot) => void;
+  onImageImported?: (image: ImportedImageSummary) => void | Promise<void>;
+}
+
 interface ExifInfo {
   shotAt: string;
   cameraModel: string;
   lensModel: string;
 }
 
-const SUPPORTED_EXTENSIONS = new Set([".jpg", ".jpeg"]);
+const SUPPORTED_EXTENSIONS = new Set([".jpg", ".jpeg", ".png"]);
+const SUPPORTED_MIME_TYPES = new Set(["image/jpeg", "image/png"]);
+const SUPPORTED_FORMAT_LABEL = "JPG/JPEG/PNG";
 
 function nowTimestamp(): string {
   return new Date().toISOString().replace("T", " ").replace(/\.\d+Z$/, "");
@@ -102,7 +127,7 @@ async function assertFolder(folderPath: string): Promise<void> {
   }
 }
 
-async function listJpegFiles(folderPath: string): Promise<ImportScanFile[]> {
+async function listSupportedImageFiles(folderPath: string): Promise<ImportScanFile[]> {
   await assertFolder(folderPath);
   const entries = await fs.readdir(folderPath, { withFileTypes: true });
   const files: ImportScanFile[] = [];
@@ -123,6 +148,26 @@ async function listJpegFiles(folderPath: string): Promise<ImportScanFile[]> {
   }
 
   return files.sort((a, b) => a.filename.localeCompare(b.filename, "zh-Hans-CN"));
+}
+
+function validateSupportedSourceFile(file: ImportSourceFile): string | null {
+  const extension = path.extname(file.filename).toLowerCase();
+  if (!SUPPORTED_EXTENSIONS.has(extension)) {
+    return `仅支持 ${SUPPORTED_FORMAT_LABEL} 文件`;
+  }
+
+  const mimeType = file.mimeType?.trim().toLowerCase();
+  if (mimeType && mimeType !== "application/octet-stream" && !SUPPORTED_MIME_TYPES.has(mimeType)) {
+    return `文件类型 ${mimeType} 不受支持，仅支持 ${SUPPORTED_FORMAT_LABEL}`;
+  }
+  if (mimeType && mimeType !== "application/octet-stream") {
+    const expectedMimeType = extension === ".png" ? "image/png" : "image/jpeg";
+    if (mimeType !== expectedMimeType) {
+      return `文件扩展名与类型不匹配：${extension} / ${mimeType}`;
+    }
+  }
+
+  return null;
 }
 
 async function hashFile(filePath: string): Promise<string> {
@@ -179,7 +224,7 @@ async function readExif(filePath: string): Promise<ExifInfo> {
       lensModel: typeof data.LensModel === "string" ? data.LensModel : typeof data.LensID === "string" ? data.LensID : ""
     };
   } catch (err) {
-    getLogger().warn({ err, filePath }, "EXIF 读取失败，继续导入");
+    safeLog("debug", { err, filePath }, "EXIF 读取失败，继续导入");
     return empty;
   }
 }
@@ -197,6 +242,35 @@ function ensureEventReady(eventId: string) {
 
 function getOriginalTargetDir(sourceType: ImportSourceType, workspace: ReturnType<typeof getEventWorkspacePaths>): string {
   return sourceType === "client_upload" ? workspace.clientUploadOriginalDir : workspace.hostImportOriginalDir;
+}
+
+function getDefaultImportConcurrency(): number {
+  const cpuCount = os.cpus().length || 2;
+  return Math.min(4, Math.max(2, cpuCount - 1));
+}
+
+function getProcessedCount(result: Pick<ImportStartResult, "success" | "failed" | "skipped">): number {
+  return result.success + result.failed + result.skipped;
+}
+
+function createProgressSnapshot(
+  result: ImportStartResult,
+  currentFileName = "",
+  totalBytes = 0,
+  processedBytes = 0
+): ImportProgressSnapshot {
+  return {
+    total: result.total,
+    processed: getProcessedCount(result),
+    success: result.success,
+    failed: result.failed,
+    skipped: result.skipped,
+    errors: result.errors,
+    currentFileName,
+    importedCount: result.imported.length,
+    totalBytes,
+    processedBytes
+  };
 }
 
 function writeImportLog(input: {
@@ -227,7 +301,7 @@ function writeImportLog(input: {
 
 export async function scanImportFolder(eventId: string, folderPath: string): Promise<ImportScanResult> {
   ensureEventReady(eventId);
-  const files = await listJpegFiles(folderPath);
+  const files = await listSupportedImageFiles(folderPath);
   return {
     eventId,
     folderPath,
@@ -241,6 +315,7 @@ export async function importImages(input: {
   eventId: string;
   folderPath: string;
   sourceType?: ImportSourceType;
+  options?: ImportImageFilesOptions;
 }): Promise<ImportStartResult> {
   const sourceType = input.sourceType ?? "host_import";
   if (sourceType !== "host_import") {
@@ -248,13 +323,85 @@ export async function importImages(input: {
   }
 
   ensureEventReady(input.eventId);
-  const files = await listJpegFiles(input.folderPath);
+  const files = await listSupportedImageFiles(input.folderPath);
   return importImageFiles({
     eventId: input.eventId,
     files,
     folderPath: input.folderPath,
-    sourceType
+    sourceType,
+    options: input.options
   });
+}
+
+export async function importSelectedImageFiles(input: {
+  eventId: string;
+  filePaths: unknown;
+  sourceType?: ImportSourceType;
+  options?: ImportImageFilesOptions;
+}): Promise<ImportStartResult> {
+  const sourceType = input.sourceType ?? "host_import";
+  if (sourceType !== "host_import") {
+    throw { code: "UNSUPPORTED_SOURCE_TYPE", message: "指定文件导入只支持 host_import" };
+  }
+  if (!Array.isArray(input.filePaths) || input.filePaths.length === 0) {
+    throw { code: "INVALID_FILE_PATHS", message: "filePaths 必须是非空数组" };
+  }
+
+  ensureEventReady(input.eventId);
+  const files: ImportSourceFile[] = [];
+  const preflightErrors: ImportErrorItem[] = [];
+
+  for (const value of input.filePaths) {
+    if (typeof value !== "string" || !value.trim()) {
+      preflightErrors.push({
+        filename: "",
+        path: String(value ?? ""),
+        reason: "文件路径必须是非空字符串"
+      });
+      continue;
+    }
+
+    const filePath = path.resolve(value);
+    const filename = path.basename(filePath);
+    try {
+      const stat = await fs.stat(filePath);
+      if (!stat.isFile()) {
+        preflightErrors.push({
+          filename,
+          path: filePath,
+          reason: "路径不是文件"
+        });
+        continue;
+      }
+
+      files.push({
+        filename,
+        path: filePath,
+        size: stat.size
+      });
+    } catch {
+      preflightErrors.push({
+        filename,
+        path: filePath,
+        reason: "文件不存在或不可读取"
+      });
+    }
+  }
+
+  const result = await importImageFiles({
+    eventId: input.eventId,
+    files,
+    folderPath: "",
+    sourceType,
+    options: input.options
+  });
+  result.total += preflightErrors.length;
+  result.failed += preflightErrors.length;
+  const maxErrors = input.options?.maxErrors ?? 100;
+  result.errors.unshift(...preflightErrors.slice(0, Math.max(0, maxErrors - result.errors.length)));
+  const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+  input.options?.onProgress?.(createProgressSnapshot(result, "", totalBytes, totalBytes));
+  return result;
 }
 
 export async function importImageFiles(input: {
@@ -265,6 +412,7 @@ export async function importImageFiles(input: {
   photographer?: string;
   device?: string;
   remark?: string;
+  options?: ImportImageFilesOptions;
 }): Promise<ImportStartResult> {
   const sourceType = input.sourceType;
   const event = ensureEventReady(input.eventId);
@@ -277,6 +425,13 @@ export async function importImageFiles(input: {
   const photographer = input.photographer?.trim() ?? "";
   const device = input.device?.trim() ?? "";
   const remark = input.remark?.trim() ?? "";
+  const maxErrors = input.options?.maxErrors ?? 100;
+  const concurrency = Math.min(
+    Math.max(1, input.options?.concurrency ?? getDefaultImportConcurrency()),
+    Math.max(1, input.files.length || 1)
+  );
+  const totalBytes = input.files.reduce((sum, file) => sum + file.size, 0);
+  let processedBytes = 0;
 
   const result: ImportStartResult = {
     eventId: input.eventId,
@@ -297,29 +452,74 @@ export async function importImageFiles(input: {
   fs.ensureDirSync(workspace.thumbsDir);
   fs.ensureDirSync(workspace.previewsDir);
 
-  for (const file of input.files) {
+  const duplicateStmt = db.prepare("SELECT id FROM images WHERE event_id = ? AND file_hash = ? LIMIT 1");
+  const insertImageStmt = db.prepare(`
+    INSERT INTO images (
+      id, event_id, original_filename, stored_filename, thumb_path, preview_path,
+      original_path, edited_path, photographer, camera_model, lens_model, shot_at,
+      rating, status, category, remark, source, file_size, file_hash, exif_shot_at,
+      width, height, created_at, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, 0, 'unselected', '', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const updateEventStmt = db.prepare(`
+    UPDATE events
+    SET total_images = (SELECT COUNT(*) FROM images WHERE event_id = ? AND is_deleted = 0), updated_at = ?
+    WHERE id = ?
+  `);
+  const seenHashes = new Set<string>();
+
+  const addError = (file: ImportSourceFile, reason: string) => {
+    result.failed += 1;
+    if (result.errors.length < maxErrors) {
+      result.errors.push({
+        filename: file.filename,
+        path: file.path,
+        reason
+      });
+    }
+  };
+
+  const markProcessed = (file: ImportSourceFile) => {
+    processedBytes += file.size;
+  };
+
+  const reportProgress = (currentFileName = "") => {
+    input.options?.onProgress?.(createProgressSnapshot(result, currentFileName, totalBytes, processedBytes));
+  };
+
+  const processFile = async (file: ImportSourceFile) => {
     let originalTarget = "";
     let thumbPath = "";
     let previewPath = "";
 
     try {
-      const extension = path.extname(file.filename).toLowerCase();
-      if (!SUPPORTED_EXTENSIONS.has(extension)) {
-        result.failed += 1;
-        result.errors.push({
-          filename: file.filename,
-          path: file.path,
-          reason: "仅支持 JPG/JPEG 文件"
-        });
-        continue;
+      if (input.options?.isCancelled?.()) {
+        return;
+      }
+
+      const unsupportedReason = validateSupportedSourceFile(file);
+      if (unsupportedReason) {
+        addError(file, unsupportedReason);
+        markProcessed(file);
+        reportProgress(file.filename);
+        return;
       }
 
       const fileHash = await hashFile(file.path);
-      const duplicate = db.prepare("SELECT id FROM images WHERE event_id = ? AND file_hash = ? LIMIT 1").get(event.id, fileHash);
-      if (duplicate) {
-        result.skipped += 1;
-        continue;
+      if (input.options?.isCancelled?.()) {
+        return;
       }
+
+      const duplicate = duplicateStmt.get(event.id, fileHash);
+      if (duplicate || seenHashes.has(fileHash)) {
+        result.skipped += 1;
+        seenHashes.add(fileHash);
+        markProcessed(file);
+        reportProgress(file.filename);
+        return;
+      }
+      seenHashes.add(fileHash);
 
       const imageId = generateImageId();
       const safeOriginalName = sanitizeFilename(file.filename);
@@ -345,15 +545,7 @@ export async function importImageFiles(input: {
       const exif = await readExif(originalTarget);
       const now = nowTimestamp();
 
-      db.prepare(`
-        INSERT INTO images (
-          id, event_id, original_filename, stored_filename, thumb_path, preview_path,
-          original_path, edited_path, photographer, camera_model, lens_model, shot_at,
-          rating, status, category, remark, source, file_size, file_hash, exif_shot_at,
-          width, height, created_at, updated_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, 0, 'unselected', '', ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
+      insertImageStmt.run(
         imageId,
         event.id,
         file.filename,
@@ -385,33 +577,58 @@ export async function importImageFiles(input: {
         storedFilename
       });
 
-      result.success += 1;
-      result.imported.push({
+      const imported: ImportedImageSummary = {
         id: imageId,
         originalFilename: file.filename,
         storedFilename,
         originalPath: originalTarget,
         thumbPath,
         previewPath
-      });
+      };
+      result.success += 1;
+      result.imported.push(imported);
+      try {
+        await input.options?.onImageImported?.(imported);
+      } catch {
+        // Realtime broadcast failure should not fail the import.
+      }
+      markProcessed(file);
+      reportProgress(file.filename);
     } catch (err: any) {
-      result.failed += 1;
-      result.errors.push({
-        filename: file.filename,
-        path: file.path,
-        reason: err?.message || "导入失败"
-      });
-      getLogger().error({ err, file, originalTarget, thumbPath, previewPath }, "图片导入失败");
+      addError(file, err?.message || "导入失败");
+      markProcessed(file);
+      reportProgress(file.filename);
     }
-  }
+  };
+
+  let nextIndex = 0;
+  const workers = Array.from({ length: concurrency }, async () => {
+    while (nextIndex < input.files.length) {
+      if (input.options?.isCancelled?.()) break;
+      const index = nextIndex;
+      nextIndex += 1;
+      const file = input.files[index];
+      await processFile(file);
+    }
+  });
+
+  await Promise.all(workers);
 
   const now = nowTimestamp();
-  db.prepare(`
-    UPDATE events
-    SET total_images = (SELECT COUNT(*) FROM images WHERE event_id = ? AND is_deleted = 0), updated_at = ?
-    WHERE id = ?
-  `).run(event.id, now, event.id);
+  try {
+    updateEventStmt.run(event.id, now, event.id);
+  } catch (err) {
+    safeLog("warn", { err, eventId: event.id }, "导入完成后更新活动统计失败");
+  }
 
-  getLogger().info({ eventId: event.id, workingDir, result }, "图片导入完成");
+  safeLog("info", {
+    eventId: event.id,
+    workingDir,
+    total: result.total,
+    success: result.success,
+    failed: result.failed,
+    skipped: result.skipped,
+    concurrency
+  }, "图片导入完成");
   return result;
 }

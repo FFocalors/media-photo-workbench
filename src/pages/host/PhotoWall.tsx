@@ -31,6 +31,8 @@ import {
 } from "../../lib/socket";
 import type { RealtimeConnectionState, RealtimeImagePayload } from "../../lib/socket";
 
+const GALLERY_PAGE_SIZE = 200;
+
 export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
   const [events, setEvents] = useState<EventData[]>([]);
   const [selectedEventId, setSelectedEventId] = useState("");
@@ -46,28 +48,25 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
   const [trashMode, setTrashMode] = useState(false);
   const [filterPanelOpen, setFilterPanelOpen] = useState(false);
   const [metadataPanelOpen, setMetadataPanelOpen] = useState(false);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [realtimeStatus, setRealtimeStatus] = useState<RealtimeConnectionState>("disconnected");
+  const [statusCounts, setStatusCounts] = useState<Record<ImageStatus, number>>({
+    unselected: 0,
+    rejected: 0,
+    archive: 0,
+    edit: 0,
+    edited: 0,
+    publish: 0,
+    published: 0
+  });
   const [confirmAction, setConfirmAction] = useState<"delete" | "restore" | "purge" | null>(null);
   const [message, setMessage] = useState<{ tone: "success" | "warning" | "danger" | "info"; title: string; body: string } | null>(null);
 
   const activePhoto = photos.find((photo) => photo.id === activePhotoId) ?? null;
   const previewPhoto = photos.find((photo) => photo.id === previewPhotoId) ?? null;
-
-  const statusCounts = useMemo(() => {
-    return photos.reduce<Record<ImageStatus, number>>((acc, photo) => {
-      acc[photo.status] = (acc[photo.status] ?? 0) + 1;
-      return acc;
-    }, {
-      unselected: 0,
-      rejected: 0,
-      archive: 0,
-      edit: 0,
-      edited: 0,
-      publish: 0,
-      published: 0
-    });
-  }, [photos]);
+  const hasMorePhotos = photos.length < total;
 
   const matchesCurrentFilters = useCallback((photo: EventImageData) => {
     if (minRating > 0 && photo.rating < minRating) return false;
@@ -108,30 +107,38 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
     }
   }, [mode]);
 
+  const buildImageQueryParams = useCallback((targetPage: number, status?: ImageStatus | "all", pageSize = GALLERY_PAGE_SIZE) => ({
+    page: targetPage,
+    pageSize,
+    rating: minRating > 0 ? minRating : undefined,
+    status: status ?? statusFilter,
+    source_type: sourceType,
+    keyword: search.trim() || undefined
+  }), [minRating, search, sourceType, statusFilter]);
+
+  const fetchImagesForPage = useCallback((targetPage: number, status?: ImageStatus | "all", pageSize?: number) => {
+    const params = buildImageQueryParams(targetPage, status, pageSize);
+    return trashMode
+      ? fetchEventTrashedImages(selectedEventId, params)
+      : fetchEventImages(selectedEventId, params);
+  }, [buildImageQueryParams, selectedEventId, trashMode]);
+
   const loadImages = useCallback(async () => {
     if (!selectedEventId) {
       setPhotos([]);
       setTotal(0);
+      setPage(1);
       setLoading(false);
       return;
     }
 
     setLoading(true);
     try {
-      const params = {
-        page: 1,
-        pageSize: 200,
-        rating: minRating > 0 ? minRating : undefined,
-        status: statusFilter,
-        source_type: sourceType,
-        keyword: search.trim() || undefined
-      };
-      const res = trashMode
-        ? await fetchEventTrashedImages(selectedEventId, params)
-        : await fetchEventImages(selectedEventId, params);
+      const res = await fetchImagesForPage(1);
       if (res.ok && res.data) {
         setPhotos(res.data.items);
         setTotal(res.data.total);
+        setPage(1);
         setSelectedIds((current) => current.filter((id) => res.data.items.some((photo) => photo.id === id)));
         setActivePhotoId((current) => current && res.data.items.some((photo) => photo.id === current) ? current : null);
         setMessage(null);
@@ -143,7 +150,56 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
     } finally {
       setLoading(false);
     }
-  }, [minRating, search, selectedEventId, sourceType, statusFilter, trashMode]);
+  }, [fetchImagesForPage, selectedEventId]);
+
+  const loadStatusCounts = useCallback(async () => {
+    if (!selectedEventId) {
+      setStatusCounts({
+        unselected: 0,
+        rejected: 0,
+        archive: 0,
+        edit: 0,
+        edited: 0,
+        publish: 0,
+        published: 0
+      });
+      return;
+    }
+
+    try {
+      const entries = await Promise.all(imageStatusOptions.map(async (status) => {
+        const res = await fetchImagesForPage(1, status, 1);
+        return [status, res.ok && res.data ? res.data.total : 0] as const;
+      }));
+      setStatusCounts(Object.fromEntries(entries) as Record<ImageStatus, number>);
+    } catch {
+      // The gallery list itself owns the visible error state; counts can fail independently.
+    }
+  }, [fetchImagesForPage, selectedEventId]);
+
+  const loadMoreImages = useCallback(async () => {
+    if (!selectedEventId || loading || loadingMore || !hasMorePhotos) return;
+    const nextPage = page + 1;
+    setLoadingMore(true);
+    try {
+      const res = await fetchImagesForPage(nextPage);
+      if (res.ok && res.data) {
+        setPhotos((current) => {
+          const existingIds = new Set(current.map((photo) => photo.id));
+          const nextItems = res.data.items.filter((photo) => !existingIds.has(photo.id));
+          return [...current, ...nextItems];
+        });
+        setTotal(res.data.total);
+        setPage(nextPage);
+      } else {
+        setMessage({ tone: "danger", title: "加载更多失败", body: res.error?.message || "无法读取下一页图片。" });
+      }
+    } catch {
+      setMessage({ tone: "danger", title: "加载更多失败", body: "请求失败，请确认后端服务已启动。" });
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [fetchImagesForPage, hasMorePhotos, loading, loadingMore, page, selectedEventId]);
 
   useEffect(() => {
     loadEvents();
@@ -152,6 +208,10 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
   useEffect(() => {
     loadImages();
   }, [loadImages]);
+
+  useEffect(() => {
+    loadStatusCounts();
+  }, [loadStatusCounts]);
 
   useEffect(() => {
     if (!activePhotoId) {
@@ -188,7 +248,7 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
         return current.map((photo) => photo.id === image.id ? image : photo);
       }
       setTotal((value) => value + 1);
-      return [image, ...current].slice(0, 200);
+      return [image, ...current];
     });
     setMessage({ tone: "info", title: "收到新图片", body: "实时同步已将新图片加入当前图片墙。" });
   }, [matchesCurrentFilters, selectedEventId]);
@@ -615,14 +675,38 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
               onToggleSelected={toggleSelected}
             />
           )}
+          {!loading && hasMorePhotos && (
+            <div className="flex justify-center py-5">
+              <button
+                className="rounded-xl border border-slate-200 bg-white px-5 py-2 text-sm font-medium text-slate-600 shadow-sm hover:border-blue-200 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={loadingMore}
+                onClick={loadMoreImages}
+                type="button"
+              >
+                {loadingMore ? "正在加载..." : `加载更多（已加载 ${photos.length.toLocaleString()} / ${total.toLocaleString()} 张）`}
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="flex h-10 shrink-0 items-center justify-between border-t border-slate-100 bg-white px-4 text-xs text-slate-500">
           <div className="flex items-center gap-4">
             <span>已选择 {selectedIds.length} 张</span>
-            <span>本页 {photos.length.toLocaleString()} 张</span>
+            <span>已加载 {photos.length.toLocaleString()} 张</span>
           </div>
-          <span>共 {total.toLocaleString()} 张</span>
+          <div className="flex items-center gap-3">
+            {hasMorePhotos && (
+              <button
+                className="font-medium text-blue-600 hover:text-blue-700 disabled:text-slate-300"
+                disabled={loadingMore}
+                onClick={loadMoreImages}
+                type="button"
+              >
+                {loadingMore ? "加载中..." : "加载更多"}
+              </button>
+            )}
+            <span>共 {total.toLocaleString()} 张</span>
+          </div>
         </div>
       </div>
 

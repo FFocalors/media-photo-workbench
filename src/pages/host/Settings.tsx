@@ -505,7 +505,7 @@ export function SettingsPage() {
                 <p>后端：Express + SQLite + better-sqlite3 + pino</p>
               </InfoCard>
               <InfoCard icon={<FolderOpen size={18} />} title="当前约束">
-                <p>第一版仅支持 JPG/JPEG；后端主机服务默认端口为 3030。</p>
+                <p>当前导入与客户端上传支持 JPG/JPEG/PNG；后端主机服务默认端口为 3030。</p>
               </InfoCard>
               <InfoCard icon={<Mail size={18} />} title="联系开发者">
                 <p>

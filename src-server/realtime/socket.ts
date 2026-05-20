@@ -25,6 +25,10 @@ export interface RealtimeTaskPayload {
   skippedCount: number;
   errors: unknown[];
   result: unknown;
+  startedAt?: string;
+  elapsedMs?: number;
+  estimatedRemainingMs?: number | null;
+  currentFileName?: string;
   updatedAt: string;
 }
 

@@ -19,6 +19,7 @@ interface MediaPhotoWorkbenchBridge {
     logsDir: string;
   };
   selectDirectory: () => Promise<string | null>;
+  selectImageFiles: () => Promise<string[]>;
   openPath: (path: string) => Promise<string>;
 }
 

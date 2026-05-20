@@ -12,7 +12,13 @@ import {
   restoreEvent,
   CreateEventInput
 } from "../services/events";
-import { importImageFiles, importImages, scanImportFolder } from "../services/imageImport";
+import {
+  ImportImageFilesOptions,
+  ImportProgressSnapshot,
+  importImageFiles,
+  importSelectedImageFiles,
+  scanImportFolder
+} from "../services/imageImport";
 import { getImageDtoById, listEventImages, listEventTrashedImages } from "../services/images";
 import { getLogger } from "../utils/logger";
 import { emitImageCreated } from "../realtime/socket";
@@ -21,7 +27,7 @@ import { createEditPackage, listEditPackages, uploadEditedImages } from "../serv
 import { createPublishExport } from "../services/publishExport";
 import { cleanupEventArchive, prepareEventArchive, verifyEventArchive } from "../services/archive";
 import { createDownloadZipTask } from "../services/downloadPackages";
-import { createTask, failTask, finishTask, updateTask } from "../services/tasks";
+import { createTask, failTask, finishTask, isTaskCancellationRequested, updateTask } from "../services/tasks";
 
 const router = Router();
 
@@ -44,6 +50,173 @@ function emitCreatedImages(importedIds: string[], baseUrl: string): void {
       updatedAt: nowIso()
     });
   }
+}
+
+type ImportProgressSample = {
+  at: number;
+  processed: number;
+  processedBytes: number;
+};
+
+function estimateRemainingMs(input: {
+  startedAtMs: number;
+  now: number;
+  snapshot: ImportProgressSnapshot;
+  samples: ImportProgressSample[];
+}): number | null {
+  const { startedAtMs, now, snapshot, samples } = input;
+  if (snapshot.processed <= 0 || snapshot.total <= snapshot.processed) return null;
+
+  const elapsedMs = now - startedAtMs;
+  const minElapsedMs = 5000;
+  const minProcessed = Math.min(8, Math.max(2, Math.ceil(snapshot.total * 0.01)));
+  if (elapsedMs < minElapsedMs || snapshot.processed < minProcessed || samples.length === 0) {
+    return null;
+  }
+
+  const windowMs = 30000;
+  const minWindowMs = 3000;
+  const baseline =
+    samples.find((sample) => now - sample.at >= minWindowMs && now - sample.at <= windowMs) ??
+    samples.find((sample) => now - sample.at >= minWindowMs);
+
+  if (!baseline) return null;
+
+  const durationMs = now - baseline.at;
+  if (durationMs < minWindowMs) return null;
+
+  const remainingBytes = snapshot.totalBytes - snapshot.processedBytes;
+  const processedBytesDelta = snapshot.processedBytes - baseline.processedBytes;
+  if (snapshot.totalBytes > 0 && remainingBytes > 0 && processedBytesDelta > 0) {
+    return Math.max(0, Math.round((remainingBytes / processedBytesDelta) * durationMs));
+  }
+
+  const remainingItems = snapshot.total - snapshot.processed;
+  const processedDelta = snapshot.processed - baseline.processed;
+  if (remainingItems > 0 && processedDelta > 0) {
+    return Math.max(0, Math.round((remainingItems / processedDelta) * durationMs));
+  }
+
+  return null;
+}
+
+function startImportBackgroundTask(input: {
+  taskId: string;
+  baseUrl: string;
+  total: number;
+  run: (options: ImportImageFilesOptions) => Promise<{
+    total: number;
+    success: number;
+    failed: number;
+    skipped: number;
+    errors: Array<{ filename: string; path: string; reason: string }>;
+    imported: Array<{ id: string }>;
+  }>;
+  cleanup?: () => Promise<void>;
+}): void {
+  const startedAtMs = Date.now();
+  const startedAt = new Date(startedAtMs).toISOString();
+  let lastProgressAt = 0;
+  const progressSamples: ImportProgressSample[] = [];
+
+  const applyProgress = (snapshot: ImportProgressSnapshot) => {
+    if (isTaskCancellationRequested(input.taskId)) return;
+    const now = Date.now();
+    if (now - lastProgressAt < 500 && snapshot.processed < snapshot.total) return;
+    lastProgressAt = now;
+    const estimatedRemainingMs = estimateRemainingMs({
+      startedAtMs,
+      now,
+      snapshot,
+      samples: progressSamples
+    });
+    progressSamples.push({
+      at: now,
+      processed: snapshot.processed,
+      processedBytes: snapshot.processedBytes
+    });
+    while (progressSamples.length > 0 && now - progressSamples[0].at > 60000) {
+      progressSamples.shift();
+    }
+    updateTask(input.taskId, {
+      status: "running",
+      startedAt,
+      total: snapshot.total,
+      finished: snapshot.processed,
+      successCount: snapshot.success,
+      failedCount: snapshot.failed,
+      skippedCount: snapshot.skipped,
+      errors: snapshot.errors,
+      elapsedMs: now - startedAtMs,
+      estimatedRemainingMs,
+      currentFileName: snapshot.currentFileName
+    });
+  };
+
+  void (async () => {
+    try {
+      updateTask(input.taskId, {
+        status: "running",
+        startedAt,
+        total: input.total,
+        elapsedMs: 0,
+        estimatedRemainingMs: null
+      });
+
+      const result = await input.run({
+        maxErrors: 100,
+        isCancelled: () => isTaskCancellationRequested(input.taskId),
+        onProgress: applyProgress,
+        onImageImported: (image) => emitCreatedImages([image.id], input.baseUrl)
+      });
+
+      const finished = result.success + result.failed + result.skipped;
+      const elapsedMs = Date.now() - startedAtMs;
+      const resultPayload = {
+        total: result.total,
+        success: result.success,
+        failed: result.failed,
+        skipped: result.skipped,
+        importedCount: result.imported.length,
+        errors: result.errors
+      };
+
+      if (isTaskCancellationRequested(input.taskId)) {
+        updateTask(input.taskId, {
+          status: "cancelled",
+          total: result.total,
+          finished,
+          successCount: result.success,
+          failedCount: result.failed,
+          skippedCount: result.skipped,
+          errors: result.errors,
+          result: resultPayload,
+          elapsedMs,
+          estimatedRemainingMs: null,
+          currentFileName: "",
+          finishedAt: nowIso()
+        });
+        return;
+      }
+
+      updateTask(input.taskId, {
+        total: result.total,
+        finished,
+        successCount: result.success,
+        failedCount: result.failed,
+        skippedCount: result.skipped,
+        errors: result.errors,
+        elapsedMs,
+        estimatedRemainingMs: null,
+        currentFileName: ""
+      });
+      finishTask(input.taskId, resultPayload);
+    } catch (err: any) {
+      failTask(input.taskId, [{ reason: err?.message || "导入任务失败" }]);
+    } finally {
+      await input.cleanup?.();
+    }
+  })();
 }
 
 /**
@@ -161,7 +334,7 @@ router.get("/:id/images", (req, res) => {
 
 /**
  * POST /api/events/:id/import/scan
- * 扫描本地文件夹中的 JPG/JPEG 文件。
+ * 扫描本地文件夹中的 JPG/JPEG/PNG 文件。
  */
 router.post("/:id/import/scan", async (req, res) => {
   const { folderPath } = req.body;
@@ -186,24 +359,68 @@ router.post("/:id/import/scan", async (req, res) => {
 
 /**
  * POST /api/events/:id/import/start
- * 同步导入本地文件夹中的 JPG/JPEG 文件。
+ * 创建本地文件夹或指定路径 JPG/JPEG/PNG 导入任务。
  */
 router.post("/:id/import/start", async (req, res) => {
-  const { folderPath } = req.body;
+  const { folderPath, filePaths } = req.body ?? {};
 
-  if (!folderPath || typeof folderPath !== "string") {
-    sendError(res, "INVALID_FOLDER_PATH", "folderPath 字段必须是非空字符串");
+  if (filePaths !== undefined && !Array.isArray(filePaths)) {
+    sendError(res, "INVALID_FILE_PATHS", "filePaths 必须是数组");
+    return;
+  }
+  if (filePaths === undefined && (!folderPath || typeof folderPath !== "string")) {
+    sendError(res, "INVALID_IMPORT_SOURCE", "folderPath 或 filePaths 至少提供一个");
     return;
   }
 
   try {
-    const result = await importImages({
+    const baseUrl = getBaseUrl(req);
+    if (Array.isArray(filePaths)) {
+      const task = createTask({
+        type: "host_import",
+        eventId: req.params.id,
+        title: `导入 ${filePaths.length} 张图片`,
+        total: filePaths.length
+      });
+
+      startImportBackgroundTask({
+        taskId: task.id,
+        baseUrl,
+        total: filePaths.length,
+        run: (options) => importSelectedImageFiles({
+          eventId: req.params.id,
+          filePaths,
+          sourceType: "host_import",
+          options
+        })
+      });
+
+      sendSuccess(res, { taskId: task.id, total: filePaths.length, mode: "files" }, 202);
+      return;
+    }
+
+    const scan = await scanImportFolder(req.params.id, folderPath);
+    const task = createTask({
+      type: "host_import",
       eventId: req.params.id,
-      folderPath,
-      sourceType: "host_import"
+      title: `导入 ${scan.count} 张图片`,
+      total: scan.count
     });
-    emitCreatedImages(result.imported.map((image) => image.id), getBaseUrl(req));
-    sendSuccess(res, result);
+
+    startImportBackgroundTask({
+      taskId: task.id,
+      baseUrl,
+      total: scan.count,
+      run: (options) => importImageFiles({
+        eventId: req.params.id,
+        files: scan.files,
+        folderPath,
+        sourceType: "host_import",
+        options
+      })
+    });
+
+    sendSuccess(res, { taskId: task.id, total: scan.count, mode: "folder" }, 202);
   } catch (err: any) {
     if (err?.code) {
       sendError(res, err.code, err.message, err.code === "EVENT_NOT_FOUND" ? 404 : 400);
@@ -216,7 +433,7 @@ router.post("/:id/import/start", async (req, res) => {
 
 /**
  * POST /api/events/:id/upload
- * 客户端通过 multipart/form-data 上传 JPG/JPEG 文件。
+ * 客户端通过 multipart/form-data 上传 JPG/JPEG/PNG 文件。
  */
 router.post("/:id/upload", async (req, res) => {
   let form: Awaited<ReturnType<typeof parseMultipartForm>> | null = null;
@@ -229,30 +446,52 @@ router.post("/:id/upload", async (req, res) => {
 
     const uploadFiles = form.files.filter((file) => file.fieldName === "files");
     if (uploadFiles.length === 0) {
-      sendError(res, "NO_UPLOAD_FILES", "请至少选择一个 JPG/JPEG 文件");
+      sendError(res, "NO_UPLOAD_FILES", "请至少选择一个 JPG/JPEG/PNG 文件");
       return;
     }
 
-    const result = await importImageFiles({
+    const files = uploadFiles.map((file) => ({
+      filename: file.originalFilename,
+      path: file.path,
+      size: file.size,
+      mimeType: file.mimeType
+    }));
+    const photographer = form.fields.photographer ?? "";
+    const device = form.fields.device ?? "";
+    const remark = form.fields.remark ?? "";
+    const formForTask = form;
+    form = null;
+
+    const task = createTask({
+      type: "client_upload_import",
       eventId: req.params.id,
-      files: uploadFiles.map((file) => ({
-        filename: file.originalFilename,
-        path: file.path,
-        size: file.size
-      })),
-      sourceType: "client_upload",
-      photographer: form.fields.photographer ?? "",
-      device: form.fields.device ?? "",
-      remark: form.fields.remark ?? ""
+      title: `客户端上传处理 ${files.length} 张图片`,
+      total: files.length
     });
 
-    emitCreatedImages(result.imported.map((image) => image.id), getBaseUrl(req));
-    sendSuccess(res, {
-      ...result,
-      photographer: form.fields.photographer ?? "",
-      device: form.fields.device ?? "",
-      remark: form.fields.remark ?? ""
+    startImportBackgroundTask({
+      taskId: task.id,
+      baseUrl: getBaseUrl(req),
+      total: files.length,
+      run: (options) => importImageFiles({
+        eventId: req.params.id,
+        files,
+        sourceType: "client_upload",
+        photographer,
+        device,
+        remark,
+        options
+      }),
+      cleanup: () => formForTask.cleanup()
     });
+
+    sendSuccess(res, {
+      taskId: task.id,
+      total: files.length,
+      photographer,
+      device,
+      remark
+    }, 202);
   } catch (err: any) {
     if (err?.code) {
       sendError(res, err.code, err.message, err.code === "EVENT_NOT_FOUND" ? 404 : 400);
@@ -481,15 +720,74 @@ router.post("/:id/archive/verify", async (req, res) => {
 
 /**
  * POST /api/events/:id/archive/cleanup
- * 归档验证通过后清理 working 工作区。
+ * 创建归档 working 工作区清理任务。
  */
 router.post("/:id/archive/cleanup", async (req, res) => {
   try {
-    const result = await cleanupEventArchive(req.params.id, {
-      confirm: req.body?.confirm === true,
-      archivePath: typeof req.body?.archivePath === "string" ? req.body.archivePath : undefined
+    if (req.body?.confirm !== true) {
+      sendError(res, "ARCHIVE_CLEANUP_NOT_CONFIRMED", "清理工作区需要二次确认", 400);
+      return;
+    }
+
+    const archivePath = typeof req.body?.archivePath === "string" ? req.body.archivePath : undefined;
+    const task = createTask({
+      type: "archive_cleanup",
+      eventId: req.params.id,
+      title: "清理归档工作区",
+      total: 0
     });
-    sendSuccess(res, result);
+
+    const startedAtMs = Date.now();
+    const startedAt = new Date(startedAtMs).toISOString();
+    let lastProgressAt = 0;
+
+    updateTask(task.id, {
+      status: "running",
+      startedAt,
+      elapsedMs: 0,
+      estimatedRemainingMs: null
+    });
+
+    void (async () => {
+      try {
+        const result = await cleanupEventArchive(req.params.id, {
+          confirm: true,
+          archivePath,
+          onProgress: (progress) => {
+            const now = Date.now();
+            if (now - lastProgressAt < 500 && progress.finished < progress.total) return;
+            lastProgressAt = now;
+            const elapsedMs = now - startedAtMs;
+            const estimatedRemainingMs = progress.finished > 0 && progress.total > progress.finished
+              ? Math.max(0, Math.round((elapsedMs / progress.finished) * (progress.total - progress.finished)))
+              : null;
+            updateTask(task.id, {
+              status: "running",
+              startedAt,
+              total: progress.total,
+              finished: progress.finished,
+              elapsedMs,
+              estimatedRemainingMs,
+              currentFileName: progress.currentPath
+            });
+          }
+        });
+
+        const elapsedMs = Date.now() - startedAtMs;
+        updateTask(task.id, {
+          successCount: 1,
+          elapsedMs,
+          estimatedRemainingMs: null,
+          currentFileName: "",
+          result: result as unknown as Record<string, unknown>
+        });
+        finishTask(task.id, result as unknown as Record<string, unknown>);
+      } catch (err: any) {
+        failTask(task.id, [{ reason: err?.message || "清理工作区失败" }]);
+      }
+    })();
+
+    sendSuccess(res, { taskId: task.id, total: 0, mode: "archive_cleanup" }, 202);
   } catch (err: any) {
     if (err?.code) {
       const status = err.code === "EVENT_NOT_FOUND" || err.code === "ARCHIVE_NOT_FOUND" ? 404 : 400;

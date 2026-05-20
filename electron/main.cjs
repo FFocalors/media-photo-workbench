@@ -44,6 +44,20 @@ writeEarlyStartupLog("=== Electron main loaded ===");
 writeEarlyStartupLog(`argv: ${JSON.stringify(process.argv)}`);
 writeEarlyStartupLog(`execPath: ${process.execPath}`);
 
+process.on("uncaughtException", (err) => {
+  const message = err && err.stack ? err.stack : String(err);
+  writeEarlyStartupLog(`uncaughtException: ${message}`);
+  if (String(err?.message || err).includes("the worker has exited")) {
+    return;
+  }
+  console.error(err);
+});
+
+process.on("unhandledRejection", (reason) => {
+  const message = reason && reason.stack ? reason.stack : String(reason);
+  writeEarlyStartupLog(`unhandledRejection: ${message}`);
+});
+
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 writeEarlyStartupLog(`gotSingleInstanceLock: ${gotSingleInstanceLock}`);
 
@@ -308,6 +322,16 @@ app.whenReady().then(async () => {
     } else {
       return filePaths[0];
     }
+  });
+
+  ipcMain.handle("dialog:select-image-files", async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog({
+      properties: ["openFile", "multiSelections"],
+      filters: [
+        { name: "Images", extensions: ["jpg", "jpeg", "png"] }
+      ]
+    });
+    return canceled ? [] : filePaths;
   });
 
   ipcMain.handle("shell:open-path", async (_event, fullPath) => {

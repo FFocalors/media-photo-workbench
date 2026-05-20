@@ -382,6 +382,17 @@ export interface ImportStartData {
   errors: ImportErrorItem[];
 }
 
+export interface ImportTaskStartData {
+  taskId: string;
+  total: number;
+  mode: "folder" | "files";
+}
+
+export type ImportStartInput = string | {
+  folderPath?: string;
+  filePaths?: string[];
+};
+
 export async function scanImportFolder(eventId: string, folderPath: string): Promise<ApiResponse<ImportScanData>> {
   return request<ImportScanData>(`/api/events/${eventId}/import/scan`, {
     method: "POST",
@@ -390,15 +401,24 @@ export async function scanImportFolder(eventId: string, folderPath: string): Pro
   });
 }
 
-export async function startImport(eventId: string, folderPath: string): Promise<ApiResponse<ImportStartData>> {
-  return request<ImportStartData>(`/api/events/${eventId}/import/start`, {
+export async function startImport(eventId: string, input: ImportStartInput): Promise<ApiResponse<ImportStartData | ImportTaskStartData>> {
+  const body = typeof input === "string" ? { folderPath: input } : input;
+  return request<ImportStartData | ImportTaskStartData>(`/api/events/${eventId}/import/start`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ folderPath })
+    body: JSON.stringify(body)
   });
 }
 
 export interface ClientUploadData extends ImportStartData {
+  photographer: string;
+  device: string;
+  remark: string;
+}
+
+export interface ClientUploadTaskData {
+  taskId: string;
+  total: number;
   photographer: string;
   device: string;
   remark: string;
@@ -412,7 +432,7 @@ export async function uploadClientImages(
     device?: string;
     remark?: string;
   }
-): Promise<ApiResponse<ClientUploadData>> {
+): Promise<ApiResponse<ClientUploadData | ClientUploadTaskData>> {
   const formData = new FormData();
   for (const file of input.files) {
     formData.append("files", file);
@@ -421,7 +441,7 @@ export async function uploadClientImages(
   formData.append("device", input.device ?? "");
   formData.append("remark", input.remark ?? "");
 
-  return request<ClientUploadData>(`/api/events/${eventId}/upload`, {
+  return request<ClientUploadData | ClientUploadTaskData>(`/api/events/${eventId}/upload`, {
     method: "POST",
     body: formData
   });
@@ -704,8 +724,12 @@ export interface TaskData {
   errors: TaskErrorItem[];
   result: Record<string, any> | null;
   createdAt: string;
+  startedAt: string;
   updatedAt: string;
   finishedAt: string;
+  elapsedMs: number;
+  estimatedRemainingMs: number | null;
+  currentFileName: string;
 }
 
 export async function fetchTasks(): Promise<ApiResponse<TaskData[]>> {
@@ -716,8 +740,8 @@ export async function fetchTask(taskId: string): Promise<ApiResponse<TaskData>> 
   return request<TaskData>(`/api/tasks/${encodeURIComponent(taskId)}`);
 }
 
-export async function cancelTask(taskId: string): Promise<ApiResponse<never>> {
-  return request<never>(`/api/tasks/${encodeURIComponent(taskId)}/cancel`, {
+export async function cancelTask(taskId: string): Promise<ApiResponse<TaskData>> {
+  return request<TaskData>(`/api/tasks/${encodeURIComponent(taskId)}/cancel`, {
     method: "POST"
   });
 }
@@ -1111,6 +1135,12 @@ export interface ArchiveCleanupData {
   archivedEvent: ArchivedEventData;
 }
 
+export interface ArchiveCleanupTaskData {
+  taskId: string;
+  total: number;
+  mode: "archive_cleanup";
+}
+
 export async function prepareEventArchive(eventId: string): Promise<ApiResponse<ArchivePrepareData>> {
   return request<ArchivePrepareData>(`/api/events/${eventId}/archive/prepare`, {
     method: "POST"
@@ -1125,8 +1155,8 @@ export async function verifyEventArchive(eventId: string, archivePath?: string):
   });
 }
 
-export async function cleanupEventArchive(eventId: string, archivePath: string): Promise<ApiResponse<ArchiveCleanupData>> {
-  return request<ArchiveCleanupData>(`/api/events/${eventId}/archive/cleanup`, {
+export async function cleanupEventArchive(eventId: string, archivePath: string): Promise<ApiResponse<ArchiveCleanupData | ArchiveCleanupTaskData>> {
+  return request<ArchiveCleanupData | ArchiveCleanupTaskData>(`/api/events/${eventId}/archive/cleanup`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ confirm: true, archivePath })

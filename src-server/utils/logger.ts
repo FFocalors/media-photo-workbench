@@ -3,6 +3,9 @@ import path from "path";
 import fs from "fs-extra";
 
 let _logger: pino.Logger | null = null;
+let shuttingDown = false;
+
+export type SafeLogLevel = "debug" | "info" | "warn" | "error";
 
 /**
  * 初始化全局 logger。
@@ -10,6 +13,7 @@ let _logger: pino.Logger | null = null;
  */
 export function initLogger(logsDir: string): pino.Logger {
   fs.ensureDirSync(logsDir);
+  shuttingDown = false;
 
   const logFilePath = path.join(logsDir, "server.log");
 
@@ -43,4 +47,27 @@ export function getLogger(): pino.Logger {
     _logger = pino({ level: "debug" });
   }
   return _logger;
+}
+
+export function setLoggerShuttingDown(value = true): void {
+  shuttingDown = value;
+}
+
+export function isLoggerShuttingDown(): boolean {
+  return shuttingDown;
+}
+
+export function safeLog(level: SafeLogLevel, objOrMessage?: unknown, message?: string): void {
+  if (shuttingDown) return;
+  try {
+    const logger = getLogger();
+    const log = logger[level].bind(logger);
+    if (message !== undefined) {
+      log(objOrMessage, message);
+    } else {
+      log(objOrMessage as any);
+    }
+  } catch {
+    // Logging must never crash long-running work, especially while Electron is closing.
+  }
 }

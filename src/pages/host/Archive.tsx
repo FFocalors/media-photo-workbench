@@ -5,6 +5,7 @@ import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { Notice } from "../../components/ui/States";
 import {
   ArchiveCleanupData,
+  ArchiveCleanupTaskData,
   ArchivedEventData,
   ArchivedEventDetailData,
   ArchivePrepareData,
@@ -16,14 +17,20 @@ import {
   fetchArchivedEvents,
   fetchEventImages,
   fetchEvents,
+  fetchTask,
   getApiBase,
   imageStatusLabels,
   prepareEventArchive,
   verifyEventArchive
 } from "../../lib/api";
 import { cn } from "../../lib/cn";
+import { subscribeRealtimeTaskEvent } from "../../lib/socket";
 
 const visibleStatuses = new Set(["active", "reviewing", "draft", "archived"]);
+
+function isArchiveCleanupTaskData(data: ArchiveCleanupData | ArchiveCleanupTaskData): data is ArchiveCleanupTaskData {
+  return "taskId" in data && data.mode === "archive_cleanup";
+}
 
 export function ArchivePage() {
   const [activeMode, setActiveMode] = useState<"workflow" | "readonly">("workflow");
@@ -44,6 +51,7 @@ export function ArchivePage() {
   const [prepareResult, setPrepareResult] = useState<ArchivePrepareData | null>(null);
   const [verifyResult, setVerifyResult] = useState<ArchiveVerifyData | null>(null);
   const [cleanupResult, setCleanupResult] = useState<ArchiveCleanupData | null>(null);
+  const [cleanupTaskId, setCleanupTaskId] = useState("");
   const [summary, setSummary] = useState({
     total: 0,
     edited: 0,
@@ -55,7 +63,7 @@ export function ArchivePage() {
     [events, selectedEventId]
   );
 
-  const step = cleanupResult ? 4 : verifyResult?.verified ? 3 : prepareResult ? 2 : 1;
+  const step = cleanupResult ? 4 : cleanupTaskId ? 3 : verifyResult?.verified ? 3 : prepareResult ? 2 : 1;
 
   const loadArchivedEvents = useCallback(async () => {
     setLoadingArchivedEvents(true);
@@ -165,9 +173,63 @@ export function ArchivePage() {
     setPrepareResult(null);
     setVerifyResult(null);
     setCleanupResult(null);
+    setCleanupTaskId("");
     setMessage(null);
     void loadSummary();
   }, [loadSummary]);
+
+  useEffect(() => {
+    if (!cleanupTaskId) return;
+
+    let cancelled = false;
+    const applyTaskUpdate = (task: { id?: string; taskId?: string; status: string; result: Record<string, any> | null; errors: Array<{ reason: string }> }) => {
+      if (cancelled) return;
+      const taskId = task.id || task.taskId || "";
+      if (taskId !== cleanupTaskId) return;
+
+      if (task.status === "success" && task.result) {
+        const result = task.result as unknown as ArchiveCleanupData;
+        setCleanupResult(result);
+        setCleanupTaskId("");
+        setCleanupConfirmOpen(false);
+        setMessage({ tone: "success", title: "工作区已清理", body: "活动状态已更新为已归档，归档目录已保留。" });
+        void loadEvents();
+        return;
+      }
+
+      if (task.status === "failed") {
+        setCleanupTaskId("");
+        setMessage({
+          tone: "danger",
+          title: "清理工作区失败",
+          body: task.errors?.[0]?.reason || "清理任务失败。请确认没有资源管理器、图片查看器或 OneDrive 正在占用该活动目录。"
+        });
+        return;
+      }
+
+      if (task.status === "cancelled") {
+        setCleanupTaskId("");
+        setMessage({ tone: "warning", title: "清理任务已取消", body: "工作区清理未完成。" });
+      }
+    };
+
+    void fetchTask(cleanupTaskId)
+      .then((res) => {
+        if (res.ok && res.data) applyTaskUpdate(res.data);
+      })
+      .catch(() => {
+        // Realtime subscription below remains the primary update channel.
+      });
+
+    const unsubscribe = subscribeRealtimeTaskEvent((task) => {
+      applyTaskUpdate(task);
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [cleanupTaskId, loadEvents]);
 
   const handlePrepare = async () => {
     if (!selectedEventId) return;
@@ -176,6 +238,7 @@ export function ArchivePage() {
     setPrepareResult(null);
     setVerifyResult(null);
     setCleanupResult(null);
+    setCleanupTaskId("");
     try {
       const res = await prepareEventArchive(selectedEventId);
       if (res.ok && res.data) {
@@ -226,6 +289,17 @@ export function ArchivePage() {
     try {
       const res = await cleanupEventArchive(selectedEventId, prepareResult.archivePath);
       if (res.ok && res.data) {
+        if (isArchiveCleanupTaskData(res.data)) {
+          setCleanupTaskId(res.data.taskId);
+          setCleanupConfirmOpen(false);
+          setMessage({
+            tone: "info",
+            title: "清理任务已开始",
+            body: "正在后台清理工作区，可在任务中心查看进度。清理完成后页面会自动更新。"
+          });
+          return;
+        }
+
         setCleanupResult(res.data);
         setCleanupConfirmOpen(false);
         setMessage({ tone: "success", title: "工作区已清理", body: "活动状态已更新为已归档，归档目录已保留。" });
@@ -395,14 +469,14 @@ export function ArchivePage() {
       {cleanupConfirmOpen && selectedEvent && prepareResult && (
         <ConfirmDialog
           confirmLabel="清理工作区"
-          confirming={running === "cleanup"}
+          confirming={running === "cleanup" || Boolean(cleanupTaskId)}
           description="只有归档验证通过后才能清理。清理会删除 working 下该活动文件夹，归档目录会保留。"
           details={[
             { label: "活动名称", value: selectedEvent.name },
             { label: "工作区", value: `working\\${selectedEvent.slug}` },
             { label: "归档目录", value: prepareResult.archivePath }
           ]}
-          onCancel={() => running !== "cleanup" && setCleanupConfirmOpen(false)}
+          onCancel={() => running !== "cleanup" && !cleanupTaskId && setCleanupConfirmOpen(false)}
           onConfirm={handleCleanup}
           title="清理工作区"
           tone="danger"
@@ -529,14 +603,22 @@ export function ArchivePage() {
               </div>
               <button
                 className="flex shrink-0 items-center gap-2 rounded-lg bg-red-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-                disabled={!verifyResult?.verified || running !== null || Boolean(cleanupResult)}
+                disabled={!verifyResult?.verified || running !== null || Boolean(cleanupResult) || Boolean(cleanupTaskId)}
                 onClick={() => setCleanupConfirmOpen(true)}
                 type="button"
               >
                 <Trash2 size={16} />
-                {running === "cleanup" ? "清理中..." : "清理工作区"}
+                {cleanupTaskId ? "清理任务运行中" : running === "cleanup" ? "提交中..." : "清理工作区"}
               </button>
             </div>
+
+            {cleanupTaskId && (
+              <div className="mt-5">
+                <Notice tone="info" title="工作区清理中">
+                  后台清理任务已创建，可在左侧任务中心查看删除进度。任务完成后此页面会自动更新。
+                </Notice>
+              </div>
+            )}
 
             {cleanupResult && (
               <div className="mt-5">

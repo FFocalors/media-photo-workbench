@@ -315,7 +315,12 @@ async function renderJpeg(input: {
   if (input.maxSide) {
     pipeline = pipeline.resize({ width: input.maxSide, height: input.maxSide, fit: "inside", withoutEnlargement: true });
   }
-  await pipeline.jpeg({ quality: input.quality }).toFile(input.outputPath);
+  await pipeline.flatten({ background: "#ffffff" }).jpeg({ quality: input.quality }).toFile(input.outputPath);
+}
+
+function isJpegSource(sourcePath: string): boolean {
+  const extension = path.extname(sourcePath).toLowerCase();
+  return extension === ".jpg" || extension === ".jpeg";
 }
 
 async function writeExportImage(input: {
@@ -330,7 +335,7 @@ async function writeExportImage(input: {
   const fileSizeLimitApplied = input.limitFileSize10Mb;
   const configuredMaxSide = getConfiguredMaxSide(input.size);
 
-  if (input.size === "original") {
+  if (input.size === "original" && isJpegSource(input.sourcePath)) {
     const sourceFileSize = await getFileSize(input.sourcePath);
     if (!fileSizeLimitApplied || sourceFileSize <= EXPORT_MAX_FILE_SIZE_BYTES) {
       await fs.copy(input.sourcePath, input.outputPath, { overwrite: false, errorOnExist: true });

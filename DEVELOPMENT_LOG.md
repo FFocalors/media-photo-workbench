@@ -28,6 +28,121 @@
 
 ## 开发记录
 
+### v0.14.0-rc：多图归档清理工作区卡住修复
+- **日期**：2026-05-19
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - `POST /api/events/:eventId/archive/cleanup` 改为创建后台 `archive_cleanup` 任务，接口快速返回 `taskId`，不再让归档页等待整个 `working` 目录删除完成。
+  - 归档清理任务通过 Socket.IO `task-updated` 推送进度，任务中心显示总数、已删除数量、已用时间、预计剩余时间和当前路径。
+  - 归档页在提交清理后显示“后台清理中”，监听任务完成后自动显示完成状态并刷新活动列表。
+  - 工作区删除从一次性递归删除改为逐文件 / 逐目录删除并带重试，遇到资源管理器、图片查看器或 OneDrive 占用时返回明确错误。
+  - 归档清理任务不在任务中心提供取消按钮，避免清理到一半造成半删除状态。
+- **修改文件**：
+  - `src-server/routes/events.ts`
+  - `src-server/services/archive.ts`
+  - `src/components/tasks/TaskCenter.tsx`
+  - `src/pages/host/Archive.tsx`
+  - `src/lib/api.ts`
+  - `API_SPEC.md`
+  - `CHANGELOG.md`
+  - `DEVELOPMENT_LOG.md`
+- **验证方式**：
+  - 执行 `pnpm build` 通过。
+- **遇到的问题**：
+  - 多图活动归档后清理 `working/{event_slug}` 时，原实现会在 HTTP 请求中同步等待目录删除完成，文件量大或被 OneDrive / 资源管理器占用时前端看起来直接卡住。
+- **解决方案**：
+  - 将清理过程任务化，并把长目录删除拆成可上报进度的文件级操作；前端通过任务事件更新最终状态。
+- **未完成事项**：
+  - 大规模目录删除仍受 Windows 文件占用和 OneDrive 同步影响；如果失败，需要用户关闭占用程序后重试。
+
+### v0.14.0-rc：大批量导入性能优化、任务化进度与关闭安全修复
+- **日期**：2026-05-19
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - 主机导入 `POST /api/events/:eventId/import/start` 改为创建后台导入任务，接口快速返回 `taskId`，不再让前端长时间等待整个批次完成。
+  - 客户端多文件上传在文件接收后创建后台处理任务，图片入库、缩略图和预览图生成继续复用统一导入管线。
+  - 导入任务接入现有任务中心和 Socket.IO `task-updated`，显示总数、已处理、成功、跳过、失败、已用时间、预计剩余时间和当前处理文件名。
+  - 任务中心新增运行中任务取消按钮；导入任务收到取消后停止处理新图片，已成功导入图片保留，不做回滚。
+  - 图片导入管线改为有限并发队列，默认根据 CPU 控制在 2-4 个并发，避免完全串行或一次性 `Promise.all` 大批量图片。
+  - 导入前提前按同一活动内 `file_hash` 去重，重复图片跳过后不再生成缩略图和预览图。
+  - 预编译常用 SQLite 语句，目标目录只在批次开始阶段准备，减少每张图片的重复开销。
+  - EXIF 读取失败降级处理，不再为 PNG 无 EXIF 或普通元数据失败大量写 error 日志。
+  - 任务错误列表限制保留前 100 条，避免异常批次把内存和日志撑大。
+  - 后端关闭流程会请求取消运行中任务，并将日志系统切换为关闭状态；导入循环内日志改用 `safeLog`，避免 `pino` / `thread-stream` worker 已退出后继续写入导致主进程 JavaScript 错误。
+  - Electron 主进程补充 `uncaughtException` / `unhandledRejection` fallback 记录，关闭阶段的 `the worker has exited` 不再弹出错误窗口。
+- **修改文件**：
+  - `src-server/services/imageImport.ts`
+  - `src-server/routes/events.ts`
+  - `src-server/services/tasks.ts`
+  - `src-server/realtime/socket.ts`
+  - `src-server/utils/logger.ts`
+  - `src-server/index.ts`
+  - `electron/main.cjs`
+  - `src/components/tasks/TaskCenter.tsx`
+  - `src/lib/api.ts`
+  - `src/pages/host/Import.tsx`
+  - `src/pages/client/ClientUpload.tsx`
+  - `API_SPEC.md`
+  - `CHANGELOG.md`
+  - `DEVELOPMENT_LOG.md`
+  - `README.md`
+  - `ROADMAP.md`
+  - `TESTING_NOTES.md`
+- **验证方式**：
+  - 执行 `pnpm build`。
+- **遇到的问题**：
+  - 原导入流程在 API 请求内等待全部文件处理完成，4000 张级别导入时请求时间过长，且关闭应用时仍可能有导入循环继续写日志。
+  - `pino` 的 `thread-stream` worker 在应用关闭后退出，导入任务后续日志写入会触发 `Error: the worker has exited`。
+- **解决方案**：
+  - 将导入和上传后的图片处理纳入现有任务系统，后台执行并通过 `task-updated` 推送进度。
+  - 使用有限并发、同批次去重、预编译数据库语句和错误列表上限降低大批量导入压力。
+  - 后端关闭时请求取消任务，并用 `safeLog` 包装导入任务中的日志写入。
+- **未完成事项**：
+  - 4000 张真实素材的大批量性能数据需在用户本机继续人工验证。
+  - 任务记录仍为内存态，应用重启后不会保留历史任务。
+- **下一步计划**：
+  - 使用 4000 张 JPG/JPEG/PNG 混合素材验证导入速度、取消、重复导入 skipped、关闭应用安全性和任务中心 ETA 显示。
+
+### v0.14.0-rc：PNG 图片导入与上传支持
+- **日期**：2026-05-19
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - 主机本地导入扫描与导入管线新增 `.png` / `.PNG` 支持，仍保持第一层非递归扫描。
+  - 主机导入页新增“选择图片文件”模式，支持通过 Electron 文件选择器从本地文件夹中多选 JPG/JPEG/PNG，只导入选中的图片。
+  - `POST /api/events/:eventId/import/start` 新增 `filePaths` 请求体，和原有 `folderPath` 文件夹导入并存。
+  - Electron preload 新增安全的 `selectImageFiles()` 能力，只暴露多选图片文件路径，不暴露任意文件写入能力。
+  - 客户端上传新增 PNG 支持，前端 `accept` 和后端扩展名 / MIME 校验同步允许 `image/png`。
+  - PNG 原图仍按原格式复制到活动 `原图` 目录，不强制改成 JPG；缩略图和预览图继续统一由 `sharp` 生成 WebP。
+  - PNG 没有 EXIF 或 EXIF 读取失败时不阻断导入，宽高仍通过 `sharp.metadata()` 读取。
+  - 同一活动内继续按 `file_hash` 去重，不恢复为全库去重。
+  - 发布导出保持 JPG 发布图策略：PNG 原图在发布导出时由 `sharp` 转为 JPEG，透明 PNG 使用白底合成；原图下载、批量原图 ZIP 和待修包仍保留 PNG 原文件。
+  - 用户可见导入 / 上传文案更新为 JPG/JPEG/PNG；已修图回传仍限定 JPG/JPEG 成片。
+- **修改文件**：
+  - `src-server/services/imageImport.ts`
+  - `src-server/routes/events.ts`
+  - `src-server/services/publishExport.ts`
+  - `src/pages/host/Import.tsx`
+  - `src/pages/client/ClientUpload.tsx`
+  - `src/pages/client/ClientConnect.tsx`
+  - `src/pages/host/Settings.tsx`
+  - `electron/main.cjs`
+  - `electron/preload.cjs`
+  - `src/global.d.ts`
+  - `src/lib/api.ts`
+  - `README.md`
+  - `ROADMAP.md`
+  - `API_SPEC.md`
+  - `CHANGELOG.md`
+  - `DEVELOPMENT_LOG.md`
+  - `TESTING_NOTES.md`
+- **验证方式**：
+  - 执行 `pnpm build`。
+- **未完成事项**：
+  - RAW / HEIC / TIFF / GIF / WebP 原图 / 视频仍不支持。
+  - 已修图回传暂不扩展 PNG，仍建议上传 JPG/JPEG 成片。
+- **下一步计划**：
+  - 按测试清单人工验证 PNG 主机导入、客户端上传、图片墙展示、原图下载、批量 ZIP 和发布导出。
+
 ### v0.14.0-rc：版本号同步
 - **日期**：2026-05-18
 - **开发者 / 工具**：Codex
@@ -157,7 +272,7 @@
   - 明确当前推荐交付物为 `MediaPhotoWorkbench-v0.13.2-dev-x64.zip`，使用方式为“解压 ZIP -> 双击 Media Photo Workbench.exe”。
   - 记录客户端访问方式：主机首页复制局域网访问地址，或扫描主机首页二维码。
   - 记录校园网可能存在设备隔离；同 Wi-Fi 不可互访时推荐使用 Windows 热点。
-  - 明确当前第一版仅支持 JPG/JPEG。
+  - 明确 v0.13.2-dev 发布时仅支持 JPG/JPEG；v0.14.0-rc 已在后续新增 PNG 导入与上传支持。
   - 明确单文件 portable EXE 暂不作为推荐交付物；NSIS 安装包后续经 v0.14.0-rc 初步验证发现安装器卡住，当前暂不推荐。
 - **修改文件**：
   - `README.md`
@@ -725,7 +840,7 @@
   - 新增客户端工作区布局，提供“图片墙”和“上传图片”入口；未连接主机时阻止进入客户端功能页。
   - 客户端图片墙复用现有真实图片墙能力，支持查看缩略图/预览图、打星、改状态、分类、备注、单图下载和实时同步。
   - 主机图片墙保留图片逻辑删除能力，客户端图片墙隐藏“删除所选”等主机专属操作。
-  - 新增 `POST /api/events/:eventId/upload`，支持客户端以 `multipart/form-data` 上传一个或多个 JPG/JPEG 文件。
+  - 新增 `POST /api/events/:eventId/upload`，支持客户端以 `multipart/form-data` 上传一个或多个图片文件；当前已扩展为 JPG/JPEG/PNG。
   - 新增轻量 multipart 解析工具，将上传文件暂存到系统临时目录，导入完成后自动清理。
   - 客户端上传复用现有图片处理管线：复制到 `原图/客户端上传`，生成 400px WebP 缩略图和 1600px WebP 预览图，读取 EXIF，写入 `images` 表。
   - 客户端上传写入 `source = client_upload`，支持摄影师、设备名和备注字段，使用 `event_id + file_hash` 在同一活动内去重，重复计入 `skipped`。
@@ -979,7 +1094,7 @@
 - **验证方式**：
   - `pnpm build` 通过。
   - 使用 Electron Node 运行时启动后端，创建临时仓库和活动。
-  - 调用 `POST /api/events/:eventId/import/scan`，确认只统计当前文件夹第一层的 JPG/JPEG，并忽略 PNG。
+  - 调用 `POST /api/events/:eventId/import/scan`，确认当时只统计当前文件夹第一层的 JPG/JPEG；v0.14.0-rc 后续扩展为 JPG/JPEG/PNG。
   - 安装 `sharp` / `exifr` 后，使用真实 JPG/JPEG 完整验证原图复制、WebP 缩略图/预览图生成、`images` 表写入和重复导入跳过。
 - **遇到的问题**：
   - 当前环境网络权限限制一度导致 `pnpm add sharp exifr` 未能完成，权限审批两次超时。

@@ -1,6 +1,6 @@
 import { AlertCircle, CheckCircle2, ChevronDown, Clock3, Download, Loader2, XCircle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { fetchTasks, getApiBase, type TaskData } from "../../lib/api";
+import { cancelTask, fetchTasks, getApiBase, type TaskData } from "../../lib/api";
 import { subscribeRealtimeTaskEvent } from "../../lib/socket";
 
 function taskStatusLabel(status: TaskData["status"]): string {
@@ -29,11 +29,28 @@ function taskDownloadHref(task: TaskData): string {
   return /^https?:\/\//i.test(downloadUrl) ? downloadUrl : `${getApiBase()}${downloadUrl}`;
 }
 
+function canCancelTask(task: TaskData): boolean {
+  return task.type === "host_import" || task.type === "client_upload_import";
+}
+
+function formatDuration(ms?: number | null): string {
+  if (!ms || ms < 0) return "估算中";
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes <= 0) return `${seconds} 秒`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  if (hours <= 0) return `${minutes} 分 ${seconds} 秒`;
+  return `${hours} 小时 ${remainingMinutes} 分`;
+}
+
 export function TaskCenter({ placement = "sidebar" }: { placement?: "sidebar" | "floating" }) {
   const [tasks, setTasks] = useState<TaskData[]>([]);
   const [open, setOpen] = useState(false);
   const [renderPanel, setRenderPanel] = useState(false);
   const [panelEntered, setPanelEntered] = useState(false);
+  const [cancellingTaskId, setCancellingTaskId] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -95,6 +112,18 @@ export function TaskCenter({ placement = "sidebar" }: { placement?: "sidebar" | 
   const visibleTasks = useMemo(() => tasks.slice(0, 8), [tasks]);
   const isSidebar = placement === "sidebar";
 
+  const handleCancelTask = async (taskId: string) => {
+    setCancellingTaskId(taskId);
+    try {
+      const res = await cancelTask(taskId);
+      if (res.ok) {
+        setTasks((current) => current.map((task) => task.id === taskId ? { ...task, status: "cancelled" } : task));
+      }
+    } finally {
+      setCancellingTaskId("");
+    }
+  };
+
   return (
     <div className={isSidebar ? "relative" : "absolute right-5 top-4 z-40"}>
       <button
@@ -132,6 +161,8 @@ export function TaskCenter({ placement = "sidebar" }: { placement?: "sidebar" | 
               <div className="space-y-2">
                 {visibleTasks.map((task) => {
                   const href = taskDownloadHref(task);
+                  const canCancel = canCancelTask(task);
+                  const isActive = task.status === "running" || task.status === "pending";
                   return (
                     <div className="rounded-xl border border-slate-100 bg-slate-50 p-3" key={task.id}>
                       <div className="flex items-start justify-between gap-3">
@@ -143,16 +174,34 @@ export function TaskCenter({ placement = "sidebar" }: { placement?: "sidebar" | 
                           <div className="mt-1 text-xs text-slate-500">
                             {taskStatusLabel(task.status)} · {task.finished}/{task.total || 0} · 成功 {task.successCount} · 失败 {task.failedCount} · 跳过 {task.skippedCount}
                           </div>
+                          {isActive && (
+                            <div className="mt-1 text-xs text-slate-400">
+                              已用 {formatDuration(task.elapsedMs)} · 剩余 {formatDuration(task.estimatedRemainingMs)}
+                              {task.currentFileName ? ` · ${task.currentFileName}` : ""}
+                            </div>
+                          )}
                         </div>
-                        {href && task.status === "success" && (
-                          <a
-                            className="flex shrink-0 items-center gap-1 rounded-lg bg-blue-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
-                            href={href}
-                          >
-                            <Download size={13} />
-                            下载
-                          </a>
-                        )}
+                        <div className="flex shrink-0 items-center gap-2">
+                          {canCancel && isActive && (
+                            <button
+                              className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:border-red-200 hover:text-red-600 disabled:opacity-50"
+                              disabled={cancellingTaskId === task.id}
+                              onClick={() => handleCancelTask(task.id)}
+                              type="button"
+                            >
+                              {cancellingTaskId === task.id ? "取消中" : "取消"}
+                            </button>
+                          )}
+                          {href && task.status === "success" && (
+                            <a
+                              className="flex items-center gap-1 rounded-lg bg-blue-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
+                              href={href}
+                            >
+                              <Download size={13} />
+                              下载
+                            </a>
+                          )}
+                        </div>
                       </div>
 
                       <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white">

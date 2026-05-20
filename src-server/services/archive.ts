@@ -113,6 +113,12 @@ export interface ArchiveCleanupResult {
   archivedEvent: ArchivedEventRow;
 }
 
+export interface ArchiveCleanupProgress {
+  total: number;
+  finished: number;
+  currentPath: string;
+}
+
 export interface ArchivedEventRow {
   id: string;
   event_id: string;
@@ -696,32 +702,93 @@ async function makeWritableRecursive(targetPath: string): Promise<void> {
   }
 }
 
-async function removeWorkspaceDirectory(eventDir: string): Promise<void> {
-  if (!(await fs.pathExists(eventDir))) return;
+async function chmodWritable(targetPath: string): Promise<void> {
+  try {
+    const stat = await fs.lstat(targetPath);
+    await fs.chmod(targetPath, stat.isDirectory() ? 0o777 : 0o666);
+  } catch {
+    // Best effort only; deletion retry will surface the final error.
+  }
+}
 
-  const removeOnce = async (maxRetries: number, retryDelay: number) => {
-    await makeWritableRecursive(eventDir);
-    await nativeFs.rm(eventDir, {
-      recursive: true,
-      force: true,
-      maxRetries,
-      retryDelay
-    });
+async function collectDirectoryEntries(rootDir: string): Promise<{ files: string[]; dirs: string[] }> {
+  const files: string[] = [];
+  const dirs: string[] = [rootDir];
+
+  const walk = async (dir: string) => {
+    let entries: fs.Dirent[];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      const entryPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        dirs.push(entryPath);
+        await walk(entryPath);
+      } else {
+        files.push(entryPath);
+      }
+    }
   };
 
+  await walk(rootDir);
+  return { files, dirs };
+}
+
+async function removePathWithRetry(targetPath: string, recursive = false): Promise<void> {
+  await chmodWritable(targetPath);
   try {
-    await removeOnce(8, 300);
-  } catch (firstErr) {
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    try {
-      await removeOnce(20, 500);
-    } catch (secondErr: any) {
-      const message = secondErr?.message || (firstErr instanceof Error ? firstErr.message : String(secondErr || firstErr));
-      throw {
-        code: "WORKSPACE_CLEANUP_FAILED",
-        message: `工作区目录删除失败：${eventDir}。请关闭正在访问该活动目录的资源管理器、图片查看器或 OneDrive 同步后重试。原始错误：${message}`
-      };
+    await nativeFs.rm(targetPath, {
+      recursive,
+      force: true,
+      maxRetries: 8,
+      retryDelay: 150
+    });
+  } catch {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await chmodWritable(targetPath);
+    await nativeFs.rm(targetPath, {
+      recursive,
+      force: true,
+      maxRetries: 16,
+      retryDelay: 250
+    });
+  }
+}
+
+async function removeWorkspaceDirectory(
+  eventDir: string,
+  onProgress?: (progress: ArchiveCleanupProgress) => void
+): Promise<void> {
+  if (!(await fs.pathExists(eventDir))) return;
+
+  try {
+    const entries = await collectDirectoryEntries(eventDir);
+    const dirs = [...entries.dirs].sort((a, b) => b.length - a.length);
+    const total = entries.files.length + dirs.length;
+    let finished = 0;
+
+    onProgress?.({ total, finished, currentPath: eventDir });
+
+    for (const filePath of entries.files) {
+      await removePathWithRetry(filePath);
+      finished += 1;
+      onProgress?.({ total, finished, currentPath: filePath });
     }
+
+    for (const dirPath of dirs) {
+      await removePathWithRetry(dirPath, true);
+      finished += 1;
+      onProgress?.({ total, finished, currentPath: dirPath });
+    }
+  } catch (err: any) {
+    throw {
+      code: "WORKSPACE_CLEANUP_FAILED",
+      message: `工作区目录删除失败：${eventDir}。请关闭正在访问该活动目录的资源管理器、图片查看器或 OneDrive 同步后重试。原始错误：${err?.message || String(err)}`
+    };
   }
 }
 
@@ -961,7 +1028,11 @@ export async function verifyEventArchive(eventId: string, archivePath?: string):
   return result;
 }
 
-export async function cleanupEventArchive(eventId: string, input: { confirm?: boolean; archivePath?: string }): Promise<ArchiveCleanupResult> {
+export async function cleanupEventArchive(eventId: string, input: {
+  confirm?: boolean;
+  archivePath?: string;
+  onProgress?: (progress: ArchiveCleanupProgress) => void;
+}): Promise<ArchiveCleanupResult> {
   if (input.confirm !== true) {
     throw { code: "ARCHIVE_CLEANUP_NOT_CONFIRMED", message: "清理工作区需要二次确认" };
   }
@@ -982,7 +1053,7 @@ export async function cleanupEventArchive(eventId: string, input: { confirm?: bo
   const manifest = await readManifest(resolvedArchivePath);
   const workspace = getEventWorkspacePaths(repositoryPath, event.slug);
   const now = nowTimestamp();
-  await removeWorkspaceDirectory(workspace.eventDir);
+  await removeWorkspaceDirectory(workspace.eventDir, input.onProgress);
 
   const db = getDatabase();
   db.prepare("UPDATE events SET status = 'archived', updated_at = ? WHERE id = ?").run(now, event.id);

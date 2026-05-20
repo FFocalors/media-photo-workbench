@@ -687,7 +687,7 @@ working/{event_slug}/清单
 ## 五、Import 图片导入
 
 ### [已实现] 扫描待导入目录
-- **用途**：扫描主机本地目录，返回可导入的 JPG/JPEG 文件数量、总大小和文件列表摘要。
+- **用途**：扫描主机本地目录，返回可导入的 JPG/JPEG/PNG 文件数量、总大小和文件列表摘要。
 - **请求方法**：`POST`
 - **路径**：`/api/events/:eventId/import/scan`
 - **请求参数示例**：
@@ -721,39 +721,33 @@ working/{event_slug}/清单
   - `INVALID_FOLDER_PATH`：`folderPath` 为空或不是字符串。
   - `FOLDER_NOT_FOUND`：源文件夹不存在。
   - `NOT_A_DIRECTORY`：路径不是文件夹。
-- **备注**：第一版只扫描当前文件夹第一层，不递归子目录。只识别 `.jpg` / `.jpeg`。
+- **备注**：第一版只扫描当前文件夹第一层，不递归子目录。只识别 `.jpg` / `.jpeg` / `.png`。
 
 ### [已实现] 开始导入任务
-- **用途**：同步导入主机本地 JPG/JPEG 文件，复制原图、生成缩略图和预览图、读取 EXIF、写入数据库。
+- **用途**：创建主机本地 JPG/JPEG/PNG 后台导入任务，支持文件夹导入或指定图片文件导入。任务异步复制原图、生成缩略图和预览图、读取可用 EXIF/元数据、写入数据库，并通过任务中心实时展示进度。
 - **请求方法**：`POST`
 - **路径**：`/api/events/:eventId/import/start`
-- **请求参数示例**：
+- **请求参数示例（文件夹导入）**：
   ```json
   { "folderPath": "E:\\SD_Card\\DCIM" }
+  ```
+- **请求参数示例（指定文件导入）**：
+  ```json
+  {
+    "filePaths": [
+      "E:\\SD_Card\\DCIM\\IMG_0001.JPG",
+      "E:\\SD_Card\\DCIM\\poster.png"
+    ]
+  }
   ```
 - **响应示例**：
   ```json
   {
     "ok": true,
     "data": {
-      "eventId": "evt_xxx",
-      "folderPath": "E:\\SD_Card\\DCIM",
-      "sourceType": "host_import",
-      "total": 2,
-      "success": 1,
-      "failed": 0,
-      "skipped": 1,
-      "imported": [
-        {
-          "id": "img_xxx",
-          "originalFilename": "IMG_0001.JPG",
-          "storedFilename": "event_20260513_190000_img_xxx_IMG_0001.JPG",
-          "originalPath": "E:\\MediaPhotoWorkspace\\working\\event\\原图\\主机导入\\...",
-          "thumbPath": "E:\\MediaPhotoWorkspace\\working\\event\\缩略图\\img_xxx.webp",
-          "previewPath": "E:\\MediaPhotoWorkspace\\working\\event\\预览图\\img_xxx.webp"
-        }
-      ],
-      "errors": []
+      "taskId": "task_xxx",
+      "total": 4000,
+      "mode": "folder"
     },
     "error": null
   }
@@ -761,19 +755,25 @@ working/{event_slug}/清单
 - **错误码**：
   - `EVENT_NOT_FOUND`：活动不存在。
   - `EVENT_NOT_IMPORTABLE`：活动已归档或删除，不能导入。
+  - `INVALID_IMPORT_SOURCE`：未提供 `folderPath` 或 `filePaths`。
   - `INVALID_FOLDER_PATH`：`folderPath` 为空或不是字符串。
+  - `INVALID_FILE_PATHS`：`filePaths` 不是非空数组。
   - `FOLDER_NOT_FOUND`：源文件夹不存在。
   - `NOT_A_DIRECTORY`：路径不是文件夹。
   - `REPOSITORY_NOT_READY`：仓库路径未配置、不存在、不可读或不可写。
   - `MISSING_IMAGE_PROCESSOR`：缺少 `sharp` 依赖。
 - **备注**：
-  - 第一版同步执行，不返回 `taskId`。
+  - v0.14.0-rc 起该接口返回 `taskId`，导入处理在后台任务中执行，前端不再长时间等待整个批次完成。
+  - 任务进度可通过 `GET /api/tasks/:taskId` 查询，也会通过 Socket.IO `task-updated` 推送到任务中心。
+  - 传入 `folderPath` 时只扫描当前文件夹第一层；传入 `filePaths` 时只导入手动指定的文件，不扫描整个文件夹。
   - 不移动、不删除、不覆盖源文件。
   - 原图复制到 `working/{event_slug}/原图/主机导入`。
   - 缩略图写入 `working/{event_slug}/缩略图/{imageId}.webp`，长边 400px。
   - 预览图写入 `working/{event_slug}/预览图/{imageId}.webp`，长边 1600px。
   - 通过 sha256 `file_hash` 在同一活动内去重，当前活动已有相同图片时计入 `skipped`。
   - EXIF 读取失败不会导致导入失败。
+  - 指定文件导入中，不存在、非文件或非 JPG/JPEG/PNG 的路径会进入 `errors`，不会中断整个批次。
+  - 导入任务支持有限并发处理、进度统计、预计剩余时间和取消；取消后已成功导入的图片保留，未处理图片停止导入。
 
 ### [已实现] 获取任务列表
 - **用途**：获取当前运行期内的任务列表。
@@ -805,6 +805,10 @@ working/{event_slug}/清单
       "skippedCount": 0,
       "errors": [],
       "result": null,
+      "startedAt": "2026-05-15T10:00:00.000Z",
+      "elapsedMs": 1000,
+      "estimatedRemainingMs": 1500,
+      "currentFileName": "DSC_0001.JPG",
       "createdAt": "2026-05-15T10:00:00.000Z",
       "updatedAt": "2026-05-15T10:00:01.000Z",
       "finishedAt": ""
@@ -813,26 +817,38 @@ working/{event_slug}/清单
   }
   ```
 
-### [已实现] 取消任务占位
-- **用途**：取消任务。
+### [已实现] 取消任务
+- **用途**：请求取消任务。当前主要用于正在运行的导入类任务；任务收到取消请求后停止处理新图片，正在处理的单张图片允许完成，已导入图片不回滚。
 - **请求方法**：`POST`
 - **路径**：`/api/tasks/:taskId/cancel`
 - **请求参数示例**：无
+- **响应示例**：
+  ```json
+  {
+    "ok": true,
+    "data": {
+      "id": "task_xxx",
+      "status": "cancelled",
+      "finishedAt": "2026-05-19T10:10:00.000Z"
+    },
+    "error": null
+  }
+  ```
 - **错误码**：
-  - `TASK_CANCEL_NOT_SUPPORTED`：当前版本暂不支持真正取消。
-- **备注**：第一版先显式返回错误，避免静默假取消。
+  - `TASK_NOT_FOUND`：任务不存在。
+- **备注**：不是所有历史任务都能中途停止；导入任务会在批次循环中检查取消状态。
 
 ---
 
 ## 六、Upload 客户端上传
 
-### [已实现] 客户端上传 JPG/JPEG
-- **用途**：客户端通过局域网上传一个或多个 JPG/JPEG 文件到主机当前活动。
+### [已实现] 客户端上传 JPG/JPEG/PNG
+- **用途**：客户端通过局域网上传一个或多个 JPG/JPEG/PNG 文件到主机当前活动，并创建后台处理任务生成缩略图、预览图和数据库记录。
 - **请求方法**：`POST`
 - **路径**：`/api/events/:eventId/upload`
 - **请求类型**：`multipart/form-data`
 - **字段**：
-  - `files`：一个或多个 JPG/JPEG 文件。
+  - `files`：一个或多个 JPG/JPEG/PNG 文件。
   - `photographer`：摄影师，可选。
   - `device`：设备名，可选。
   - `remark`：备注，可选。
@@ -841,27 +857,11 @@ working/{event_slug}/清单
   {
     "ok": true,
     "data": {
-      "eventId": "evt_xxx",
-      "folderPath": "",
-      "sourceType": "client_upload",
+      "taskId": "task_xxx",
+      "total": 3,
       "photographer": "张三",
       "device": "Client-A",
-      "remark": "外拍上传",
-      "total": 3,
-      "success": 2,
-      "failed": 0,
-      "skipped": 1,
-      "imported": [
-        {
-          "id": "img_xxx",
-          "originalFilename": "DSC_0001.JPG",
-          "storedFilename": "event_20260514_120000_img_xxx_DSC_0001.JPG",
-          "originalPath": "E:\\MediaPhotoWorkspace\\working\\event\\原图\\客户端上传\\...",
-          "thumbPath": "E:\\MediaPhotoWorkspace\\working\\event\\缩略图\\img_xxx.webp",
-          "previewPath": "E:\\MediaPhotoWorkspace\\working\\event\\预览图\\img_xxx.webp"
-        }
-      ],
-      "errors": []
+      "remark": "外拍上传"
     },
     "error": null
   }
@@ -875,20 +875,12 @@ working/{event_slug}/清单
   - `EVENT_NOT_IMPORTABLE`：活动已归档或删除，不能上传。
   - `MISSING_IMAGE_PROCESSOR`：缺少 `sharp` 依赖。
 - **备注**：
-  - 第一版只接受 `.jpg` / `.jpeg`，不接受 RAW、HEIC、PNG 或视频。
-  - 后端会先将上传文件写入系统临时目录，导入完成后清理临时文件。
+  - 当前接受 `.jpg` / `.jpeg` / `.png`，并校验 `image/jpeg` / `image/png` MIME；不接受 RAW、HEIC、TIFF、GIF、WebP 原图或视频。
+  - 后端会先将上传文件写入系统临时目录，创建后台任务后处理图片；任务结束后清理临时文件。
   - 原图复制到 `working/{event_slug}/原图/客户端上传`，不移动、不删除客户端源文件。
   - 缩略图和预览图仍写入活动的 `缩略图`、`预览图` 目录。
   - 使用 sha256 `file_hash` 在同一活动内去重，当前活动已有相同图片时计入 `skipped`。
-  - 上传成功后广播 `image-created`。
-
-### [计划中] 获取上传任务状态
-- **用途**：获取批量上传的整体统计。
-- **请求方法**：`GET`
-- **路径**：`/api/uploads/:taskId/status`
-- **请求参数示例**：无
-- **响应示例**：略
-- **备注**：无
+  - 每张图片成功入库后广播 `image-created`；整体进度通过 `GET /api/tasks/:taskId` 和 `task-updated` 查看。
 
 ---
 
@@ -1058,7 +1050,7 @@ working/{event_slug}/清单
   ```text
   edit_manifest.json
   待修原图/IMG_0001.JPG
-  待修原图/IMG_0002.JPG
+  待修原图/IMG_0002.PNG
   已修图回传/edit_manifest.json
   已修图回传/请把修好的JPG放在这里.txt
   ```
@@ -1096,6 +1088,7 @@ working/{event_slug}/清单
   - 原图缺失的图片会跳过并写入 `errors`。
   - 待修包保存到 `working/{event_slug}/导出/压缩包`。
   - 待修包 ZIP 文件名使用中文前缀 `待修包_...zip`；自定义包会把安全化后的包名写入 ZIP 文件名。
+  - 待修包会保留原图扩展名；如果待修原图是 PNG，ZIP 内也会放入 PNG 原图。
   - ZIP 内预置 `已修图回传` 文件夹，文件夹内包含一份同内容的 `edit_manifest.json`，修图人员可把修好的 JPG/JPEG 放入该目录后直接拖入整个文件夹回传。
   - ZIP 不额外生成逐图标记文件；图片对应关系以 `edit_manifest.json` 为准，缺失 manifest 时只做文件名兜底。
   - 当前同步生成 ZIP，后续大批量活动应改为任务队列。
@@ -1168,7 +1161,7 @@ working/{event_slug}/清单
 - **备注**：删除成功写入 `operation_logs.type = edit_package_deleted`。客户端页面不提供删除入口。
 
 ### [已实现] 批量回传已修图
-- **用途**：修片师将修好的 JPG 连同 manifest 一起上传。
+- **用途**：修片师将修好的 JPG/JPEG 成片连同 manifest 一起上传。
 - **请求方法**：`POST`
 - **路径**：`/api/events/:eventId/edited/upload`
 - **请求类型**：`multipart/form-data`
@@ -1214,6 +1207,7 @@ working/{event_slug}/清单
   - `NO_EDITED_FILES`：没有收到 JPG/JPEG 已修图文件。
   - `INVALID_EDIT_MANIFEST`：`edit_manifest.json` 解析失败。
 - **备注**：
+  - 当前已修图回传仍只支持 JPG/JPEG；即使待修原图为 PNG，也请回传 JPG/JPEG 成片。
   - 前端回传页支持拖拽 `已修图回传` 文件夹，并会递归读取其中的 JPG/JPEG 和 `edit_manifest.json`；API 本身仍使用 `multipart/form-data`。
   - 已修图保存到 `working/{event_slug}/已修图`，不覆盖原图。
   - 同一张图片重复回传时，会删除该图片旧的已修图文件并保存最新版本，避免 `已修图` 目录产生重复副本。
@@ -1255,7 +1249,7 @@ working/{event_slug}/清单
   - `size`：`original | 3000px | 1920px`。
   - `quality`：JPEG 质量，1-100，默认建议 90。
   - `filenameMode`：`sequence | original | event_original`。
-  - `limitFileSize10Mb`：可选布尔值，默认 `false`。开启后，单张导出 JPG 必须小于等于 10MB；未超过 10MB 的原尺寸源文件会直接复制，不再重压缩。
+  - `limitFileSize10Mb`：可选布尔值，默认 `false`。开启后，单张导出 JPG 必须小于等于 10MB；未超过 10MB 的原尺寸 JPEG 源文件会直接复制，不再重压缩。
 - **响应示例**：
   ```json
   {
@@ -1293,9 +1287,10 @@ working/{event_slug}/清单
   - 没有已修图时导出 `original_path`。
   - `edited_path` 和 `original_path` 都不存在时跳过并写入 `errors`。
   - `original` 规格不缩放；`3000px` 和 `1920px` 使用 `sharp` 转为 JPEG。
+  - 发布导出统一生成 JPG 发布图；PNG 原图不会被改写，原图下载、批量原图 ZIP 和待修包仍保留 PNG 原文件，发布导出时由 `sharp` 转为 JPEG；透明 PNG 会以白色背景合成。
   - JPEG 质量只控制编码质量，不再和 10MB 限制强关联。
   - 当 `limitFileSize10Mb = true` 且导出文件超过 10MB 时，系统会自动继续降低 JPEG 质量；如果仍超过 10MB，会进一步缩小长边，直到满足 10MB 限制。
-  - 10MB 限制是独立上限保护，不是强制压缩；原尺寸导出时源文件已小于等于 10MB 会保持原文件画质。
+  - 10MB 限制是独立上限保护，不是强制压缩；原尺寸导出时 JPEG 源文件已小于等于 10MB 会保持原文件画质。
   - 每次导出生成独立目录 `working/{event_slug}/导出/发布图/{timestamp}`。
   - ZIP 保存到 `working/{event_slug}/导出/压缩包`。
   - 导出成功写入 `export_jobs.type = publish`。
@@ -1357,10 +1352,25 @@ working/{event_slug}/清单
 - **路径**：`/api/events/:eventId/archive/cleanup`
 - **请求参数示例**：
   ```json
-  { "confirm": true }
+  {
+    "confirm": true,
+    "archivePath": "E:\\MediaPhotoWorkspace\\archive\\event_slug"
+  }
   ```
-- **响应示例**：返回清理后的 `workingPath`、活动状态和归档摘要。
-- **备注**：只有归档验证通过后才能清理。第一版保留主库图片详细记录，活动状态改为 `archived`，并写入 `archived_events` 摘要。
+- **响应示例**：
+  ```json
+  {
+    "ok": true,
+    "data": {
+      "taskId": "task_xxx",
+      "total": 0,
+      "mode": "archive_cleanup"
+    },
+    "error": null
+  }
+  ```
+- **任务结果**：清理完成后通过 `task-updated` 推送最终结果，`result` 中包含 `eventId`、`workingDir`、`archivePath`、`cleaned` 和 `archivedEvent`。
+- **备注**：只有归档验证通过后才能清理。清理工作区会创建后台任务，任务中心显示删除进度、已用时间和预计剩余时间，避免多图活动删除 `working` 目录时前端请求长时间卡住。第一版保留主库图片详细记录，活动状态改为 `archived`，并写入 `archived_events` 摘要。
 
 ### [已实现] 读取历史归档数据
 - **用途**：打开只读的历史归档页面。
@@ -1398,7 +1408,7 @@ working/{event_slug}/清单
 - `image-created`：主机本地导入或客户端上传成功后广播。
 - `image-updated`：图片星级、状态、分类或备注更新后广播。
 - `image-deleted-logical`：图片逻辑删除后广播。
-- `task-updated`：任务状态变化后广播，当前已接入批量 ZIP 下载、发布导出和活动归档 prepare。
+- `task-updated`：任务状态变化后广播，当前已接入主机导入、客户端上传处理、批量 ZIP 下载、发布导出和活动归档 prepare。
 - `export-created`：发布导出完成后广播，当前前端暂未消费该事件。
 
 图片事件 payload 示例：
@@ -1420,6 +1430,29 @@ working/{event_slug}/清单
     "category": "",
     "remark": ""
   }
+}
+```
+
+任务事件 payload 示例：
+
+```json
+{
+  "taskId": "task_xxx",
+  "type": "host_import",
+  "eventId": "evt_xxx",
+  "status": "running",
+  "total": 4000,
+  "finished": 1200,
+  "successCount": 1180,
+  "failedCount": 5,
+  "skippedCount": 15,
+  "errors": [],
+  "result": null,
+  "startedAt": "2026-05-19T10:00:00.000Z",
+  "elapsedMs": 180000,
+  "estimatedRemainingMs": 420000,
+  "currentFileName": "DSC_1200.JPG",
+  "updatedAt": "2026-05-19T10:03:00.000Z"
 }
 ```
 

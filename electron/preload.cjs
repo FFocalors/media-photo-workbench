@@ -77,5 +77,6 @@ contextBridge.exposeInMainWorld("mediaPhotoWorkbench", {
   },
 
   selectDirectory: () => ipcRenderer.invoke("dialog:select-directory"),
+  selectImageFiles: () => ipcRenderer.invoke("dialog:select-image-files"),
   openPath: (path) => ipcRenderer.invoke("shell:open-path", path)
 });

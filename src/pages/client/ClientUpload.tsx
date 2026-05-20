@@ -2,7 +2,7 @@ import { ImagePlus, UploadCloud } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Notice } from "../../components/ui/States";
-import { ClientUploadData, EventData, fetchEvents, getClientApiBase, uploadClientImages } from "../../lib/api";
+import { ClientUploadData, ClientUploadTaskData, EventData, fetchEvents, getClientApiBase, uploadClientImages } from "../../lib/api";
 import { cn } from "../../lib/cn";
 
 const visibleStatuses = new Set(["active", "reviewing", "draft"]);
@@ -18,6 +18,7 @@ export function ClientUploadPage() {
   const [loadingEvents, setLoadingEvents] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [result, setResult] = useState<ClientUploadData | null>(null);
+  const [startedTask, setStartedTask] = useState<ClientUploadTaskData | null>(null);
   const [message, setMessage] = useState<{ tone: "success" | "warning" | "danger" | "info"; title: string; body: string } | null>(null);
 
   const hostAddress = getClientApiBase();
@@ -52,6 +53,7 @@ export function ClientUploadPage() {
     if (!selectedEventId || files.length === 0) return;
     setUploading(true);
     setResult(null);
+    setStartedTask(null);
     setMessage(null);
 
     try {
@@ -62,8 +64,13 @@ export function ClientUploadPage() {
         remark
       });
       if (res.ok && res.data) {
-        setResult(res.data);
-        setMessage({ tone: "success", title: "上传完成", body: `成功 ${res.data.success} 张，跳过 ${res.data.skipped} 张，失败 ${res.data.failed} 张。` });
+        if (isClientUploadTaskData(res.data)) {
+          setStartedTask(res.data);
+          setMessage({ tone: "success", title: "上传任务已创建", body: `已上传 ${res.data.total} 个文件，主机正在生成缩略图和预览图，可在任务中心查看进度。` });
+        } else {
+          setResult(res.data);
+          setMessage({ tone: "success", title: "上传完成", body: `成功 ${res.data.success} 张，跳过 ${res.data.skipped} 张，失败 ${res.data.failed} 张。` });
+        }
       } else {
         setMessage({ tone: "danger", title: "上传失败", body: res.error?.message || "主机拒绝了本次上传。" });
       }
@@ -120,15 +127,15 @@ export function ClientUploadPage() {
 
             <div className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
               <div className="mb-5 flex items-center justify-between">
-                <h2 className="font-semibold text-slate-900">选择 JPG/JPEG 文件</h2>
+                <h2 className="font-semibold text-slate-900">选择 JPG/JPEG/PNG 文件</h2>
                 <span className="text-xs text-slate-400">{files.length} 个文件 / {formatBytes(totalSize)}</span>
               </div>
               <label className="flex min-h-56 cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center hover:border-blue-200 hover:bg-blue-50/30">
                 <ImagePlus className="mb-4 text-slate-400" size={34} />
-                <span className="text-sm font-medium text-slate-800">选择本机 JPG/JPEG 图片</span>
+                <span className="text-sm font-medium text-slate-800">选择本机 JPG/JPEG/PNG 图片</span>
                 <span className="mt-2 text-xs text-slate-400">支持多选，主机端会复制入库并生成缩略图和预览图</span>
                 <input
-                  accept=".jpg,.jpeg,image/jpeg"
+                  accept="image/jpeg,image/png,.jpg,.jpeg,.png"
                   className="hidden"
                   multiple
                   onChange={(event) => setFiles(Array.from(event.target.files ?? []))}
@@ -168,6 +175,11 @@ export function ClientUploadPage() {
                   <ResultLine label="成功" value={result.success} />
                   <ResultLine label="跳过" value={result.skipped} />
                   <ResultLine label="失败" value={result.failed} />
+                </div>
+              ) : startedTask ? (
+                <div className="space-y-3 text-sm">
+                  <ResultLine label="已提交" value={startedTask.total} />
+                  <p className="rounded-lg bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-700">任务 {startedTask.taskId} 正在后台处理，请在任务中心查看进度。</p>
                 </div>
               ) : (
                 <p className="text-sm leading-6 text-slate-400">等待上传结果。</p>
@@ -214,6 +226,10 @@ function ResultLine({ label, value }: { label: string; value: number }) {
       <span className="font-semibold text-slate-900">{value.toLocaleString()}</span>
     </div>
   );
+}
+
+function isClientUploadTaskData(data: ClientUploadData | ClientUploadTaskData): data is ClientUploadTaskData {
+  return typeof (data as ClientUploadTaskData).taskId === "string";
 }
 
 function formatBytes(bytes: number): string {

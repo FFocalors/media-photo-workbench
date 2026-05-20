@@ -4,9 +4,11 @@ import { loadConfig } from "./config/config";
 import { initDatabase, closeDatabase } from "./db/database";
 import { initRealtime, getRealtime } from "./realtime/socket";
 import { initLogger, getLogger } from "./utils/logger";
+import { safeLog, setLoggerShuttingDown } from "./utils/logger";
 import { ensureDataDirs, getDatabasePath, getConfigDir, getLogsDir } from "./utils/paths";
 import { setAppDataRoot } from "./routes/settings";
 import { setRuntimeServerPort } from "./runtime";
+import { cancelRunningTasks } from "./services/tasks";
 
 export interface ServerHandle {
   port: number;
@@ -113,10 +115,24 @@ export async function startServer(
   return {
     port: actualPort,
     close: () => {
-      logger.info("正在关闭后端服务...");
-      closeDatabase();
-      getRealtime()?.close();
-      server.close();
+      safeLog("info", "正在关闭后端服务...");
+      cancelRunningTasks("server_closing");
+      setLoggerShuttingDown(true);
+      try {
+        getRealtime()?.close();
+      } catch {
+        // ignore shutdown errors
+      }
+      try {
+        closeDatabase();
+      } catch {
+        // ignore shutdown errors
+      }
+      try {
+        server.close();
+      } catch {
+        // ignore shutdown errors
+      }
     }
   };
 }

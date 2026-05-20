@@ -24,8 +24,12 @@ export interface TaskRecord {
   errors: TaskErrorItem[];
   result: Record<string, unknown> | null;
   createdAt: string;
+  startedAt: string;
   updatedAt: string;
   finishedAt: string;
+  elapsedMs: number;
+  estimatedRemainingMs: number | null;
+  currentFileName: string;
 }
 
 export interface CreateTaskInput {
@@ -45,9 +49,14 @@ export interface UpdateTaskInput {
   errors?: TaskErrorItem[];
   result?: Record<string, unknown> | null;
   finishedAt?: string;
+  startedAt?: string;
+  elapsedMs?: number;
+  estimatedRemainingMs?: number | null;
+  currentFileName?: string;
 }
 
 const tasks = new Map<string, TaskRecord>();
+const cancellationRequested = new Set<string>();
 const MAX_TASKS = 100;
 
 function nowIso(): string {
@@ -100,8 +109,12 @@ export function createTask(input: CreateTaskInput): TaskRecord {
     errors: [],
     result: null,
     createdAt: now,
+    startedAt: "",
     updatedAt: now,
-    finishedAt: ""
+    finishedAt: "",
+    elapsedMs: 0,
+    estimatedRemainingMs: null,
+    currentFileName: ""
   };
   tasks.set(task.id, task);
   trimTasks();
@@ -132,6 +145,7 @@ export function finishTask(taskId: string, result: Record<string, unknown> | nul
   if (!existing) {
     throw { code: "TASK_NOT_FOUND", message: "任务不存在" };
   }
+  cancellationRequested.delete(taskId);
   return updateTask(taskId, {
     status: "success",
     finished: existing.total,
@@ -145,6 +159,7 @@ export function failTask(taskId: string, errors: TaskErrorItem[] = [], result: R
   if (!existing) {
     throw { code: "TASK_NOT_FOUND", message: "任务不存在" };
   }
+  cancellationRequested.delete(taskId);
   return updateTask(taskId, {
     status: "failed",
     finishedAt: nowIso(),
@@ -168,6 +183,47 @@ export function listTasks(): TaskRecord[] {
     .map(cloneTask);
 }
 
-export function cancelTask(_taskId: string): never {
-  throw { code: "TASK_CANCEL_NOT_SUPPORTED", message: "当前版本暂不支持取消正在执行的任务" };
+export function isTaskCancellationRequested(taskId: string): boolean {
+  const task = tasks.get(taskId);
+  return cancellationRequested.has(taskId) || task?.status === "cancelled";
+}
+
+export function cancelTask(taskId: string): TaskRecord {
+  const existing = tasks.get(taskId);
+  if (!existing) {
+    throw { code: "TASK_NOT_FOUND", message: "任务不存在" };
+  }
+
+  if (existing.status === "success" || existing.status === "failed" || existing.status === "cancelled") {
+    return cloneTask(existing);
+  }
+
+  cancellationRequested.add(taskId);
+  return updateTask(taskId, {
+    status: "cancelled",
+    result: {
+      ...(existing.result ?? {}),
+      cancelRequested: true
+    },
+    finishedAt: nowIso()
+  });
+}
+
+export function cancelRunningTasks(reason = "server_shutting_down"): TaskRecord[] {
+  const cancelled: TaskRecord[] = [];
+  for (const task of tasks.values()) {
+    if (task.status === "pending" || task.status === "running") {
+      cancellationRequested.add(task.id);
+      cancelled.push(updateTask(task.id, {
+        status: "cancelled",
+        result: {
+          ...(task.result ?? {}),
+          cancelRequested: true,
+          reason
+        },
+        finishedAt: nowIso()
+      }));
+    }
+  }
+  return cancelled;
 }

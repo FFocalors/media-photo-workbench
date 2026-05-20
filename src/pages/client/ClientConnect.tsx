@@ -178,7 +178,7 @@ export function ClientConnectPage() {
                   title="修图任务"
                 />
                 <ClientActionCard
-                  body="选择 JPG/JPEG 文件上传到当前活动，由主机生成缩略图并实时广播。"
+                  body="选择 JPG/JPEG/PNG 文件上传到当前活动，由主机生成缩略图并实时广播。"
                   icon={<Wifi size={24} />}
                   onClick={() => navigate("/client/upload")}
                   title="上传图片"
