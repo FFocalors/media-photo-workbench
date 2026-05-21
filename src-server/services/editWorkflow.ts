@@ -135,6 +135,21 @@ export interface EditedUploadSourceFile {
   mimeType?: string;
 }
 
+export interface EditedUploadProgressSnapshot {
+  total: number;
+  processed: number;
+  matched: number;
+  unmatched: number;
+  errors: EditedUploadError[];
+  currentFileName: string;
+}
+
+export interface EditedUploadOptions {
+  maxErrors?: number;
+  isCancelled?: () => boolean;
+  onProgress?: (snapshot: EditedUploadProgressSnapshot) => void;
+}
+
 interface ExportJobRow {
   id: string;
   event_id: string;
@@ -849,6 +864,7 @@ export async function uploadEditedImages(input: {
   files: EditedUploadSourceFile[];
   manifestFile?: EditedUploadSourceFile;
   baseUrl: string;
+  options?: EditedUploadOptions;
 }): Promise<EditedUploadResult> {
   const event = ensureEventReady(input.eventId);
   ensureEventWorkingDirs(event.slug);
@@ -868,12 +884,43 @@ export async function uploadEditedImages(input: {
     items: [],
     images: []
   };
+  const maxErrors = input.options?.maxErrors ?? 100;
+  let processed = 0;
+  let currentFileName = "";
+
+  const pushError = (error: EditedUploadError) => {
+    if (result.errors.length < maxErrors) {
+      result.errors.push(error);
+    }
+  };
+
+  const emitProgress = () => {
+    input.options?.onProgress?.({
+      total: result.total,
+      processed,
+      matched: result.matched,
+      unmatched: result.unmatched,
+      errors: result.errors,
+      currentFileName
+    });
+  };
+
+  emitProgress();
 
   for (const file of input.files) {
+    if (input.options?.isCancelled?.()) {
+      currentFileName = "";
+      emitProgress();
+      break;
+    }
+
+    currentFileName = file.originalFilename;
     const extension = path.extname(file.originalFilename).toLowerCase();
     if (!SUPPORTED_IMAGE_EXTENSIONS.has(extension)) {
       result.unmatched += 1;
-      result.errors.push({ filename: file.originalFilename, reason: "仅支持 JPG/JPEG 已修图" });
+      processed += 1;
+      pushError({ filename: file.originalFilename, reason: "仅支持 JPG/JPEG 已修图" });
+      emitProgress();
       continue;
     }
 
@@ -886,7 +933,9 @@ export async function uploadEditedImages(input: {
 
     if (!image || !matchedBy) {
       result.unmatched += 1;
-      result.errors.push({ filename: file.originalFilename, reason: "未能匹配到原图" });
+      processed += 1;
+      pushError({ filename: file.originalFilename, reason: "未能匹配到原图" });
+      emitProgress();
       continue;
     }
 
@@ -926,6 +975,7 @@ export async function uploadEditedImages(input: {
 
       const dto = getImageDtoById(image.id, input.baseUrl);
       result.matched += 1;
+      processed += 1;
       result.items.push({
         imageId: image.id,
         originalFilename: image.original_filename,
@@ -943,12 +993,17 @@ export async function uploadEditedImages(input: {
         action: "edited_uploaded",
         updatedAt: nowIso()
       });
+      emitProgress();
     } catch (err: any) {
       result.unmatched += 1;
-      result.errors.push({ filename: file.originalFilename, reason: err?.message || "已修图保存失败" });
+      processed += 1;
+      pushError({ filename: file.originalFilename, reason: err?.message || "已修图保存失败" });
       getLogger().error({ err, file, imageId: image.id }, "已修图保存失败");
+      emitProgress();
     }
   }
 
+  currentFileName = "";
+  emitProgress();
   return result;
 }

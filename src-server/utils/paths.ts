@@ -18,8 +18,17 @@ export function getLogsDir(appDataRoot: string): string {
   return path.join(appDataRoot, "logs");
 }
 
-export function getDatabasePath(appDataRoot: string): string {
+export function getDefaultDatabasePath(appDataRoot: string): string {
   return path.join(getDataDir(appDataRoot), "app.db");
+}
+
+export function getDatabasePath(appDataRoot: string): string {
+  return getDefaultDatabasePath(appDataRoot);
+}
+
+export function resolveDatabasePath(appDataRoot: string, configuredPath?: string): string {
+  const trimmedPath = configuredPath?.trim();
+  return trimmedPath ? path.resolve(trimmedPath) : getDefaultDatabasePath(appDataRoot);
 }
 
 export function getConfigFilePath(appDataRoot: string): string {

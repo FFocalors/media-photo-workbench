@@ -9,6 +9,12 @@ export interface AppConfig {
   repository: {
     path: string;
   };
+  database: {
+    path: string;
+    autoBackupEnabled: boolean;
+    lastAutoBackupAt: string;
+    autoBackupRetention: number;
+  };
 }
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -17,11 +23,25 @@ const DEFAULT_CONFIG: AppConfig = {
   },
   repository: {
     path: ""
+  },
+  database: {
+    path: "",
+    autoBackupEnabled: true,
+    lastAutoBackupAt: "",
+    autoBackupRetention: 10
   }
 };
 
 let _configDir = "";
-let _config: AppConfig = { ...DEFAULT_CONFIG };
+let _config: AppConfig = createDefaultConfig();
+
+function createDefaultConfig(): AppConfig {
+  return {
+    server: { ...DEFAULT_CONFIG.server },
+    repository: { ...DEFAULT_CONFIG.repository },
+    database: { ...DEFAULT_CONFIG.database }
+  };
+}
 
 function normalizePreferredPort(port: unknown): number {
   const parsedPort = Number(port);
@@ -35,6 +55,33 @@ function normalizePreferredPort(port: unknown): number {
   return DEFAULT_CONFIG.server.port;
 }
 
+function normalizeAutoBackupRetention(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_CONFIG.database.autoBackupRetention;
+  return Math.max(1, Math.min(100, Math.trunc(parsed)));
+}
+
+function normalizeConfig(raw: any): AppConfig {
+  return {
+    server: {
+      port: normalizePreferredPort(raw?.server?.port)
+    },
+    repository: {
+      path: raw?.repository?.path ?? DEFAULT_CONFIG.repository.path
+    },
+    database: {
+      path: typeof raw?.database?.path === "string" ? raw.database.path : DEFAULT_CONFIG.database.path,
+      autoBackupEnabled: typeof raw?.database?.autoBackupEnabled === "boolean"
+        ? raw.database.autoBackupEnabled
+        : DEFAULT_CONFIG.database.autoBackupEnabled,
+      lastAutoBackupAt: typeof raw?.database?.lastAutoBackupAt === "string"
+        ? raw.database.lastAutoBackupAt
+        : DEFAULT_CONFIG.database.lastAutoBackupAt,
+      autoBackupRetention: normalizeAutoBackupRetention(raw?.database?.autoBackupRetention)
+    }
+  };
+}
+
 /**
  * 加载配置文件。如果不存在则创建默认配置。
  */
@@ -46,27 +93,24 @@ export function loadConfig(configDir: string): AppConfig {
   if (fs.existsSync(configPath)) {
     try {
       const raw = fs.readJsonSync(configPath);
-      _config = {
-        server: {
-          port: normalizePreferredPort(raw?.server?.port)
-        },
-        repository: {
-          path: raw?.repository?.path ?? DEFAULT_CONFIG.repository.path
-        }
-      };
-      if (raw?.server?.port !== _config.server.port) {
+      _config = normalizeConfig(raw);
+      const normalizedNeedsWrite =
+        raw?.server?.port !== _config.server.port ||
+        !raw?.database ||
+        raw?.database?.autoBackupRetention !== _config.database.autoBackupRetention;
+      if (normalizedNeedsWrite) {
         fs.writeJsonSync(configPath, _config, { spaces: 2 });
         logger.info({ configPath, preferredPort: _config.server.port }, "已重置主机服务默认端口配置");
       }
       logger.info({ configPath }, "配置文件已加载");
     } catch (err) {
       logger.warn({ err, configPath }, "配置文件读取失败，使用默认配置");
-      _config = { ...DEFAULT_CONFIG };
+      _config = createDefaultConfig();
     }
   } else {
     fs.ensureDirSync(configDir);
     fs.writeJsonSync(configPath, DEFAULT_CONFIG, { spaces: 2 });
-    _config = { ...DEFAULT_CONFIG };
+    _config = createDefaultConfig();
     logger.info({ configPath }, "配置文件不存在，已创建默认配置");
   }
 
@@ -93,6 +137,15 @@ export function saveConfig(patch: Partial<AppConfig>): AppConfig {
   }
   if (patch.repository) {
     _config.repository = { ..._config.repository, ...patch.repository };
+  }
+  if (patch.database) {
+    _config.database = {
+      ..._config.database,
+      ...patch.database,
+      autoBackupRetention: normalizeAutoBackupRetention(
+        patch.database.autoBackupRetention ?? _config.database.autoBackupRetention
+      )
+    };
   }
 
   try {

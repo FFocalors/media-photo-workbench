@@ -2,8 +2,10 @@ import { ImagePlus, UploadCloud } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Notice } from "../../components/ui/States";
-import { ClientUploadData, ClientUploadTaskData, EventData, fetchEvents, getClientApiBase, uploadClientImages } from "../../lib/api";
+import { ClientUploadData, ClientUploadTaskData, EventData, fetchEvents, fetchTask, getClientApiBase, uploadClientImages, type TaskData } from "../../lib/api";
 import { cn } from "../../lib/cn";
+import { subscribeRealtimeTaskEvent } from "../../lib/socket";
+import { formatTaskDuration, getTaskStats, taskStatusLabel } from "../../lib/taskStats";
 
 const visibleStatuses = new Set(["active", "reviewing", "draft"]);
 
@@ -19,10 +21,14 @@ export function ClientUploadPage() {
   const [uploading, setUploading] = useState(false);
   const [result, setResult] = useState<ClientUploadData | null>(null);
   const [startedTask, setStartedTask] = useState<ClientUploadTaskData | null>(null);
+  const [activeTask, setActiveTask] = useState<TaskData | null>(null);
+  const [dragActive, setDragActive] = useState(false);
   const [message, setMessage] = useState<{ tone: "success" | "warning" | "danger" | "info"; title: string; body: string } | null>(null);
 
   const hostAddress = getClientApiBase();
   const totalSize = useMemo(() => files.reduce((sum, file) => sum + file.size, 0), [files]);
+  const displayTask = activeTask ?? createInitialUploadTask(startedTask);
+  const taskStats = getTaskStats(displayTask);
 
   const loadEvents = useCallback(async () => {
     setLoadingEvents(true);
@@ -49,11 +55,126 @@ export function ClientUploadPage() {
     void loadEvents();
   }, [loadEvents]);
 
+  useEffect(() => {
+    if (!startedTask?.taskId) {
+      setActiveTask(null);
+      return;
+    }
+
+    let cancelled = false;
+    const taskId = startedTask.taskId;
+
+    fetchTask(taskId)
+      .then((res) => {
+        if (!cancelled && res.ok && res.data) {
+          setActiveTask(res.data);
+        }
+      })
+      .catch(() => {
+        // Realtime task updates will still update the panel when this request fails.
+      });
+
+    const unsubscribe = subscribeRealtimeTaskEvent((payload) => {
+      const payloadTaskId = payload.id || payload.taskId;
+      if (payloadTaskId !== taskId) return;
+      setActiveTask({
+        ...payload,
+        id: payloadTaskId
+      } as TaskData);
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [startedTask?.taskId]);
+
+  const applySelectedFiles = (nextFiles: File[], source: "select" | "drag") => {
+    setFiles(nextFiles);
+    setResult(null);
+    setStartedTask(null);
+    setActiveTask(null);
+    if (nextFiles.length > 0) {
+      setMessage({
+        tone: "info",
+        title: source === "drag" ? "已接收拖拽图片" : "已选择图片",
+        body: `已选择 ${nextFiles.length} 个 JPG/JPEG/PNG 文件，可点击开始上传。`
+      });
+    }
+  };
+
+  const handleUploadDragEnter = (event: React.DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setDragActive(true);
+  };
+
+  const handleUploadDragOver = (event: React.DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!dragActive) {
+      setDragActive(true);
+    }
+  };
+
+  const handleUploadDragLeave = (event: React.DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const nextTarget = event.relatedTarget as Node | null;
+    if (!nextTarget || !event.currentTarget.contains(nextTarget)) {
+      setDragActive(false);
+    }
+  };
+
+  const handleUploadDrop = (event: React.DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setDragActive(false);
+
+    if (uploading) {
+      setMessage({ tone: "warning", title: "上传任务进行中", body: "请等待当前上传结束后再拖入新的图片。" });
+      return;
+    }
+
+    const droppedFiles = Array.from(event.dataTransfer.files ?? []);
+    const supported = droppedFiles.filter(isSupportedUploadImage);
+    const unsupported = droppedFiles.filter((file) => !isSupportedUploadImage(file));
+    const hasDirectory = Array.from(event.dataTransfer.items ?? []).some((item) => {
+      const entry = (item as DataTransferItem & { webkitGetAsEntry?: () => { isDirectory?: boolean } | null }).webkitGetAsEntry?.();
+      return Boolean(entry?.isDirectory);
+    });
+
+    if (supported.length === 0) {
+      setMessage({
+        tone: "warning",
+        title: "未找到可上传图片",
+        body: hasDirectory
+          ? "客户端暂不支持拖拽文件夹，请拖入 JPG/JPEG/PNG 图片文件，或点击选择文件上传。"
+          : "请拖入 JPG、JPEG、PNG 图片文件。"
+      });
+      return;
+    }
+
+    applySelectedFiles(supported, "drag");
+    if (unsupported.length > 0 || hasDirectory) {
+      setMessage({
+        tone: "warning",
+        title: "已接收拖拽图片",
+        body: [
+          `已选择 ${supported.length} 个 JPG/JPEG/PNG 文件。`,
+          unsupported.length > 0 ? `已跳过不支持格式：${unsupported.slice(0, 5).map((file) => file.name || "未知项目").join("、")}${unsupported.length > 5 ? " 等" : ""}` : "",
+          hasDirectory ? "客户端暂不支持拖拽文件夹，文件夹内容未处理。" : ""
+        ].filter(Boolean).join(" ")
+      });
+    }
+  };
+
   const handleUpload = async () => {
     if (!selectedEventId || files.length === 0) return;
     setUploading(true);
     setResult(null);
     setStartedTask(null);
+    setActiveTask(null);
     setMessage(null);
 
     try {
@@ -130,15 +251,24 @@ export function ClientUploadPage() {
                 <h2 className="font-semibold text-slate-900">选择 JPG/JPEG/PNG 文件</h2>
                 <span className="text-xs text-slate-400">{files.length} 个文件 / {formatBytes(totalSize)}</span>
               </div>
-              <label className="flex min-h-56 cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center hover:border-blue-200 hover:bg-blue-50/30">
-                <ImagePlus className="mb-4 text-slate-400" size={34} />
-                <span className="text-sm font-medium text-slate-800">选择本机 JPG/JPEG/PNG 图片</span>
-                <span className="mt-2 text-xs text-slate-400">支持多选，主机端会复制入库并生成缩略图和预览图</span>
+              <label
+                className={cn(
+                  "flex min-h-56 cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed p-8 text-center transition-colors",
+                  dragActive ? "border-blue-400 bg-blue-50 shadow-sm" : "border-slate-200 bg-slate-50 hover:border-blue-200 hover:bg-blue-50/30"
+                )}
+                onDragEnter={handleUploadDragEnter}
+                onDragLeave={handleUploadDragLeave}
+                onDragOver={handleUploadDragOver}
+                onDrop={handleUploadDrop}
+              >
+                <ImagePlus className={cn("mb-4", dragActive ? "text-blue-600" : "text-slate-400")} size={34} />
+                <span className="text-sm font-medium text-slate-800">点击选择或拖拽 JPG/JPEG/PNG 图片</span>
+                <span className="mt-2 text-xs text-slate-400">支持单张或多张；客户端暂不支持拖拽文件夹</span>
                 <input
                   accept="image/jpeg,image/png,.jpg,.jpeg,.png"
                   className="hidden"
                   multiple
-                  onChange={(event) => setFiles(Array.from(event.target.files ?? []))}
+                  onChange={(event) => applySelectedFiles(Array.from(event.target.files ?? []), "select")}
                   type="file"
                 />
               </label>
@@ -178,21 +308,34 @@ export function ClientUploadPage() {
                 </div>
               ) : startedTask ? (
                 <div className="space-y-3 text-sm">
-                  <ResultLine label="已提交" value={startedTask.total} />
-                  <p className="rounded-lg bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-700">任务 {startedTask.taskId} 正在后台处理，请在任务中心查看进度。</p>
+                  <ResultLine label="总数" value={taskStats.total} />
+                  <ResultLine label="已处理" value={taskStats.processed} />
+                  <ResultLine label="成功" value={taskStats.success} />
+                  <ResultLine label="跳过" value={taskStats.skipped} />
+                  <ResultLine label="失败" value={taskStats.failed} />
+                  <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+                    <div
+                      className={cn("h-full rounded-full transition-all", displayTask?.status === "failed" ? "bg-red-500" : displayTask?.status === "success" ? "bg-emerald-500" : "bg-blue-600")}
+                      style={{ width: `${Math.max(taskStats.percent, displayTask?.status === "pending" ? 4 : 8)}%` }}
+                    />
+                  </div>
+                  <p className="rounded-lg bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-700">
+                    {displayTask ? taskStatusLabel(displayTask.status) : "后台处理"} · 任务 {startedTask.taskId}
+                    {displayTask && (displayTask.status === "running" || displayTask.status === "pending") ? ` · 已用 ${formatTaskDuration(taskStats.elapsedMs)} · 剩余 ${formatTaskDuration(taskStats.estimatedRemainingMs)}` : ""}
+                  </p>
                 </div>
               ) : (
                 <p className="text-sm leading-6 text-slate-400">等待上传结果。</p>
               )}
             </div>
 
-            {result?.errors.length ? (
+            {(result?.errors.length || (displayTask && taskStats.errors.length > 0)) ? (
               <div className="rounded-2xl border border-red-100 bg-red-50 p-5">
                 <h2 className="mb-3 font-semibold text-red-900">失败记录</h2>
                 <div className="space-y-2">
-                  {result.errors.map((error) => (
-                    <div className="rounded-lg bg-white/70 px-3 py-2 text-xs text-red-800" key={`${error.filename}-${error.reason}`}>
-                      <p className="font-medium">{error.filename}</p>
+                  {(displayTask ? taskStats.errors : result?.errors ?? []).map((error) => (
+                    <div className="rounded-lg bg-white/70 px-3 py-2 text-xs text-red-800" key={`${getErrorName(error)}-${error.reason}`}>
+                      <p className="font-medium">{getErrorName(error)}</p>
                       <p className="mt-1 opacity-80">{error.reason}</p>
                     </div>
                   ))}
@@ -228,8 +371,38 @@ function ResultLine({ label, value }: { label: string; value: number }) {
   );
 }
 
+function getErrorName(error: { filename?: string; imageId?: string }): string {
+  return error.filename || error.imageId || "未知文件";
+}
+
 function isClientUploadTaskData(data: ClientUploadData | ClientUploadTaskData): data is ClientUploadTaskData {
   return typeof (data as ClientUploadTaskData).taskId === "string";
+}
+
+function createInitialUploadTask(task: ClientUploadTaskData | null): TaskData | null {
+  if (!task) return null;
+  const now = new Date().toISOString();
+  return {
+    id: task.taskId,
+    type: "client_upload_import",
+    eventId: "",
+    title: `上传处理 ${task.total} 张图片`,
+    status: "pending",
+    total: task.total,
+    finished: 0,
+    successCount: 0,
+    failedCount: 0,
+    skippedCount: 0,
+    errors: [],
+    result: null,
+    createdAt: now,
+    startedAt: now,
+    updatedAt: now,
+    finishedAt: "",
+    elapsedMs: 0,
+    estimatedRemainingMs: null,
+    currentFileName: ""
+  };
 }
 
 function formatBytes(bytes: number): string {
@@ -237,4 +410,11 @@ function formatBytes(bytes: number): string {
   const units = ["B", "KB", "MB", "GB"];
   const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   return `${(bytes / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+}
+
+function isSupportedUploadImage(file: File): boolean {
+  const lowerName = file.name.toLowerCase();
+  const validExtension = lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg") || lowerName.endsWith(".png");
+  const validMime = !file.type || file.type === "image/jpeg" || file.type === "image/png";
+  return validExtension && validMime;
 }

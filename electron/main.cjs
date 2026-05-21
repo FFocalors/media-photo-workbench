@@ -174,6 +174,37 @@ function resolveWindowIcon() {
   });
 }
 
+function inspectDroppedPath(fullPath) {
+  const result = {
+    path: typeof fullPath === "string" ? fullPath : "",
+    name: "",
+    isFile: false,
+    isDirectory: false,
+    extension: "",
+    supported: false,
+    error: ""
+  };
+
+  if (!result.path) {
+    result.error = "EMPTY_PATH";
+    return result;
+  }
+
+  try {
+    const stat = fs.statSync(result.path);
+    result.name = path.basename(result.path);
+    result.isFile = stat.isFile();
+    result.isDirectory = stat.isDirectory();
+    result.extension = result.isFile ? path.extname(result.path).toLowerCase() : "";
+    result.supported = result.isFile && [".jpg", ".jpeg", ".png"].includes(result.extension);
+  } catch (err) {
+    result.name = path.basename(result.path);
+    result.error = err?.message || "PATH_STAT_FAILED";
+  }
+
+  return result;
+}
+
 /**
  * Render a simple error page when backend fails to start.
  */
@@ -332,6 +363,17 @@ app.whenReady().then(async () => {
       ]
     });
     return canceled ? [] : filePaths;
+  });
+
+  ipcMain.handle("drag:inspect-paths", async (_event, paths) => {
+    if (!Array.isArray(paths)) {
+      return [];
+    }
+
+    return paths
+      .filter((item) => typeof item === "string" && item.trim().length > 0)
+      .slice(0, 5000)
+      .map((item) => inspectDroppedPath(item));
   });
 
   ipcMain.handle("shell:open-path", async (_event, fullPath) => {

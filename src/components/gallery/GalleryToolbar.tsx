@@ -35,7 +35,8 @@ export function GalleryToolbar({
   filtersOpen = true,
   onToggleMetadata,
   metadataOpen = true,
-  hasMetadata = false
+  hasMetadata = false,
+  batchBusy = false
 }: {
   selectedCount: number;
   filteredCount: number;
@@ -57,6 +58,7 @@ export function GalleryToolbar({
   onToggleMetadata?: () => void;
   metadataOpen?: boolean;
   hasMetadata?: boolean;
+  batchBusy?: boolean;
 }) {
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const actionMenuRef = useRef<HTMLDivElement | null>(null);
@@ -81,6 +83,7 @@ export function GalleryToolbar({
   };
 
   const runStatusAction = (status: ImageStatus) => {
+    if (batchBusy) return;
     setActionMenuOpen(false);
     void onBatchStatus(status);
   };
@@ -194,7 +197,7 @@ export function GalleryToolbar({
                   <div className="my-1 h-px bg-slate-100" />
                   <p className="px-3 py-1 text-xs text-slate-400">批量标记</p>
                   {(["edit", "publish", "edited", "rejected"] as ImageStatus[]).map((status) => (
-                    <ActionMenuButton disabled={selectedCount === 0} key={status} onClick={() => runStatusAction(status)}>
+                    <ActionMenuButton disabled={selectedCount === 0 || batchBusy} key={status} onClick={() => runStatusAction(status)}>
                       标记为{imageStatusLabels[status]}
                     </ActionMenuButton>
                   ))}

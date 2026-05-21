@@ -2,7 +2,7 @@
 
 ## 当前阶段说明
 
-当前发布阶段为 **v0.15.0-rc.0：发布候选版，导入性能与稳定性增强**。
+当前开发阶段为 **v0.16.0**。v0.15.0 已发布，v0.16.0 内部批次已包含 16.1-16.5：图片墙实战问题修复、任务中心覆盖补齐、拖拽导入 / 上传、数据库备份与数据库位置迁移。
 
 本阶段延续生产模式访问方式：打包后 Express 托管前端 `dist/`，前端页面、`/api` 接口和 Socket.IO 复用同一个后端端口。开发模式仍使用 Vite `5173` 访问前端、`3030-3040` 访问后端 API。当前推荐交付物为 ZIP 便携包 `MediaPhotoWorkbench-v0.15.0-rc.0-x64.zip`，解压后运行 `Media Photo Workbench.exe`；单文件 self-extract portable EXE 暂不作为推荐交付物，NSIS 安装包暂不推荐。
 
@@ -71,7 +71,10 @@ Socket.IO：http://主机局域网IP:{serverPort}
     "data": {
       "service": "media-photo-workbench",
       "server": { "port": 3031, "configuredPort": 3030, "status": "running" },
-      "database": { "status": "connected" },
+      "database": {
+        "status": "connected",
+        "path": "D:\\project\\Image Workspace\\data\\app.db"
+      },
       "repository": {
         "configured": true,
         "exists": true,
@@ -121,12 +124,19 @@ Socket.IO：http://主机局域网IP:{serverPort}
     "data": {
       "server": { "port": 3030 },
       "repository": { "path": "D:\\photos" },
-      "database": { "path": "D:\\project\\Image Workspace\\data\\app.db" }
+      "database": {
+        "path": "D:\\project\\Image Workspace\\data\\app.db",
+        "configuredPath": "",
+        "defaultPath": "D:\\project\\Image Workspace\\data\\app.db",
+        "autoBackupEnabled": true,
+        "lastAutoBackupAt": "2026-05-21T08:00:00.000Z",
+        "autoBackupRetention": 10
+      }
     },
     "error": null
   }
   ```
-- **备注**：无
+- **备注**：`database.path` 是当前进程实际使用的数据库路径；`configuredPath` 是配置文件中的自定义数据库路径，未设置时为空；`defaultPath` 是未配置自定义路径时的默认位置。开发模式默认使用项目 `data/app.db`，打包模式默认使用 Electron userData 下的 `data/app.db`。
 
 ### [已实现] 检查仓库路径
 - **用途**：验证当前已保存仓库路径的可行性（是否存在、可读写）。
@@ -192,6 +202,87 @@ Socket.IO：http://主机局域网IP:{serverPort}
   - `INVALID_PATH`：`path` 不是字符串或为空字符串。
   - `SAVE_CONFIG_FAILED`：配置文件写入失败。
 - **备注**：该接口会保存 trim 后的路径并返回检查结果，但不会自动创建仓库根目录。
+
+### [已实现] 立即备份数据库
+- **用途**：将当前 SQLite 数据库备份到当前图片仓库的 `metadata/database-backups/`。
+- **请求方法**：`POST`
+- **路径**：`/api/settings/database/backup`
+- **请求参数示例**：无
+- **响应示例**：
+  ```json
+  {
+    "ok": true,
+    "data": {
+      "backupPath": "E:\\MediaPhotoWorkspace\\metadata\\database-backups\\app-manual-20260521-143012.db",
+      "size": 1234567,
+      "createdAt": "2026-05-21T14:30:12.000Z",
+      "method": "sqlite-backup"
+    },
+    "error": null
+  }
+  ```
+- **错误码**：
+  - `REPOSITORY_NOT_CONFIGURED`：尚未配置图片仓库路径。
+  - `REPOSITORY_NOT_WRITABLE`：仓库不可写或路径不可用。
+  - `DATABASE_BACKUP_FAILED`：SQLite 备份失败。
+- **备注**：备份前会对 WAL 执行 checkpoint，并使用 SQLite / better-sqlite3 backup 能力生成一致性备份。手动备份命名为 `app-manual-YYYYMMDD-HHmmss.db`，不会自动删除。
+
+### [已实现] 获取数据库备份列表
+- **用途**：列出当前图片仓库 `metadata/database-backups/` 下的数据库备份文件。
+- **请求方法**：`GET`
+- **路径**：`/api/settings/database/backups`
+- **请求参数示例**：无
+- **响应示例**：
+  ```json
+  {
+    "ok": true,
+    "data": [
+      {
+        "name": "app-auto-20260521-090000.db",
+        "path": "E:\\MediaPhotoWorkspace\\metadata\\database-backups\\app-auto-20260521-090000.db",
+        "size": 1234567,
+        "createdAt": "2026-05-21T09:00:00.000Z"
+      }
+    ],
+    "error": null
+  }
+  ```
+- **备注**：启动自动备份默认启用，每 24 小时最多一次，自动备份命名为 `app-auto-YYYYMMDD-HHmmss.db`。当前自动保留最近 10 份 `app-auto-*`，不会删除 `app-manual-*` 手动备份。
+
+### [已实现] 迁移数据库位置
+- **用途**：将当前数据库复制到新目录或新 `.db` 路径，并更新后续启动使用的数据库路径。
+- **请求方法**：`POST`
+- **路径**：`/api/settings/database/migrate`
+- **请求参数示例**：
+  ```json
+  {
+    "targetDirectory": "E:\\MediaPhotoDatabase"
+  }
+  ```
+  或：
+  ```json
+  {
+    "targetPath": "E:\\MediaPhotoDatabase\\app.db"
+  }
+  ```
+- **响应示例**：
+  ```json
+  {
+    "ok": true,
+    "data": {
+      "oldPath": "D:\\project\\Image Workspace\\data\\app.db",
+      "newPath": "E:\\MediaPhotoDatabase\\app.db",
+      "backupPath": "E:\\MediaPhotoWorkspace\\metadata\\database-backups\\app-migration-20260521-144455.db",
+      "requiresRestart": true
+    },
+    "error": null
+  }
+  ```
+- **错误码**：
+  - `INVALID_DATABASE_TARGET`：目标路径为空、与当前路径相同、位于明显不合理目录或目标文件已存在。
+  - `REPOSITORY_NOT_CONFIGURED`：迁移前备份需要先配置图片仓库路径。
+  - `DATABASE_MIGRATION_FAILED`：迁移、校验或配置写入失败。
+- **备注**：迁移前会强制生成 `app-migration-YYYYMMDD-HHmmss.db` 备份。迁移使用 SQLite backup 生成目标数据库并做只读校验，成功后只更新 `config.database.path`，当前进程仍使用旧连接，需重启后生效。旧数据库不会删除；用户图片仓库、`working/`、`archive/` 和原图不会被迁移流程删除。
 
 ---
 
@@ -487,11 +578,12 @@ working/{event_slug}/清单
 - **查询参数**：
   - `page`：页码，默认 `1`。
   - `pageSize`：每页数量，默认 `80`，最大 `200`。
-  - `rating`：最低星级，例如 `4` 表示查询星级大于等于 4 的图片。
+  - `rating`：星级筛选值，支持 `0-5`。默认配合 `ratingMode=gte` 表示最低星级。
+  - `ratingMode`：星级匹配方式，支持 `gte | eq`。不传时默认 `gte`，保持旧版“几星及以上”行为；`eq` 表示精确匹配某个星级，例如 `rating=3&ratingMode=eq` 只返回 3 星图片。
   - `status`：图片状态，支持 `unselected | rejected | archive | edit | edited | publish | published`。
   - `source_type`：图片来源，常用 `host_import` 或 `client_upload`。
   - `keyword`：关键字，匹配文件名、分类、备注、摄影师、相机和镜头字段。
-- **请求参数示例**：`?page=1&pageSize=80&rating=4&status=publish&source_type=host_import&keyword=现场`
+- **请求参数示例**：`?page=1&pageSize=80&rating=4&ratingMode=gte&status=publish&source_type=host_import&keyword=现场`
 - **响应示例**：
   ```json
   {
@@ -774,6 +866,7 @@ working/{event_slug}/清单
   - EXIF 读取失败不会导致导入失败。
   - 指定文件导入中，不存在、非文件或非 JPG/JPEG/PNG 的路径会进入 `errors`，不会中断整个批次。
   - 导入任务支持有限并发处理、进度统计、预计剩余时间和取消；取消后已成功导入的图片保留，未处理图片停止导入。
+  - v0.16.0 开发阶段 16.4 起，主机导入页支持拖拽图片文件或文件夹。拖拽图片文件最终仍通过 `filePaths` 提交；拖拽文件夹仍通过 `folderPath` 扫描第一层图片，不新增 API。
 
 ### [已实现] 获取任务列表
 - **用途**：获取当前运行期内的任务列表。
@@ -782,6 +875,27 @@ working/{event_slug}/清单
 - **请求参数示例**：无
 - **响应示例**：返回任务数组，按创建时间倒序。
 - **备注**：v0.10.0-dev 第一版任务系统使用内存存储，应用重启后任务记录会清空。
+- **统一统计字段**：v0.16.0 开发阶段起，前端任务中心和业务页面统一读取以下字段：
+  - `total`：任务总量。
+  - `finished`：已处理数量。
+  - `successCount`：成功数量。
+  - `failedCount`：失败数量。
+  - `skippedCount`：跳过数量。
+  - `elapsedMs`：已用时间。
+  - `estimatedRemainingMs`：预计剩余时间，可为 `null`。
+  - `currentFileName`：当前处理文件名，可为空。
+  - `errors`：错误摘要，导入等大批量任务最多保留前若干条。
+  - `result.total / result.success / result.failed / result.skipped`：任务完成后的业务结果字段；前端会兼容这些字段并映射为同一套统计。
+- **当前接入任务中心的任务类型**：
+  - `host_import`：主机图片导入。
+  - `client_upload_import`：客户端上传后的主机端图片处理。
+  - `download_zip`：批量 ZIP 下载。
+  - `publish_export`：发布导出。
+  - `edit_package`：待修包生成。
+  - `edited_upload`：已修图回传处理。
+  - `archive_prepare`：活动归档生成。
+  - `archive_cleanup`：归档后清理工作区。
+- **任务结果字段**：`result` 由具体任务写入，可能包含 `downloadUrl`、`downloadName`、`outputDir`、`zipPath`、`packagePath`、`items`、`errors` 等业务结果。任务状态变化会通过 Socket.IO `task-updated` 广播，前端任务中心和相关业务页面共用该事件。
 
 ### [已实现] 获取任务详情
 - **用途**：获取单个任务的状态和结果。
@@ -818,7 +932,7 @@ working/{event_slug}/清单
   ```
 
 ### [已实现] 取消任务
-- **用途**：请求取消任务。当前主要用于正在运行的导入类任务；任务收到取消请求后停止处理新图片，正在处理的单张图片允许完成，已导入图片不回滚。
+- **用途**：请求取消任务。当前主要用于正在运行的导入类任务、客户端上传处理和已修图回传处理；任务收到取消请求后停止处理新文件，正在处理的单个文件允许完成，已完成结果不回滚。
 - **请求方法**：`POST`
 - **路径**：`/api/tasks/:taskId/cancel`
 - **请求参数示例**：无
@@ -836,7 +950,7 @@ working/{event_slug}/清单
   ```
 - **错误码**：
   - `TASK_NOT_FOUND`：任务不存在。
-- **备注**：不是所有历史任务都能中途停止；导入任务会在批次循环中检查取消状态。
+- **备注**：不是所有历史任务都能中途停止；导入和已修图回传等处理类任务会在批次循环中检查取消状态。
 
 ---
 
@@ -880,6 +994,7 @@ working/{event_slug}/清单
   - 原图复制到 `working/{event_slug}/原图/客户端上传`，不移动、不删除客户端源文件。
   - 缩略图和预览图仍写入活动的 `缩略图`、`预览图` 目录。
   - 使用 sha256 `file_hash` 在同一活动内去重，当前活动已有相同图片时计入 `skipped`。
+  - v0.16.0 开发阶段 16.4 起，客户端上传页支持拖拽单张或多张 JPG/JPEG/PNG 图片，拖拽入口仍使用本 multipart 接口；客户端拖拽文件夹暂不支持。
   - 每张图片成功入库后广播 `image-created`；整体进度通过 `GET /api/tasks/:taskId` 和 `task-updated` 查看。
 
 ---
@@ -1161,7 +1276,7 @@ working/{event_slug}/清单
 - **备注**：删除成功写入 `operation_logs.type = edit_package_deleted`。客户端页面不提供删除入口。
 
 ### [已实现] 批量回传已修图
-- **用途**：修片师将修好的 JPG/JPEG 成片连同 manifest 一起上传。
+- **用途**：修片师将修好的 JPG/JPEG 成片连同 manifest 一起上传，并创建后台回传处理任务。
 - **请求方法**：`POST`
 - **路径**：`/api/events/:eventId/edited/upload`
 - **请求类型**：`multipart/form-data`
@@ -1173,6 +1288,25 @@ working/{event_slug}/清单
   {
     "ok": true,
     "data": {
+      "taskId": "task_xxx",
+      "total": 3,
+      "mode": "edited_upload"
+    },
+    "error": null
+  }
+  ```
+- **任务结果示例**：任务完成后可通过 `GET /api/tasks/:taskId` 或 Socket.IO `task-updated` 获取：
+  ```json
+  {
+    "id": "task_xxx",
+    "type": "edited_upload",
+    "status": "success",
+    "total": 3,
+    "finished": 3,
+    "successCount": 2,
+    "failedCount": 1,
+    "skippedCount": 1,
+    "result": {
       "total": 3,
       "matched": 2,
       "unmatched": 1,
@@ -1192,8 +1326,7 @@ working/{event_slug}/清单
           "status": "edited"
         }
       ]
-    },
-    "error": null
+    }
   }
   ```
 - **匹配规则**：
@@ -1209,6 +1342,7 @@ working/{event_slug}/清单
 - **备注**：
   - 当前已修图回传仍只支持 JPG/JPEG；即使待修原图为 PNG，也请回传 JPG/JPEG 成片。
   - 前端回传页支持拖拽 `已修图回传` 文件夹，并会递归读取其中的 JPG/JPEG 和 `edit_manifest.json`；API 本身仍使用 `multipart/form-data`。
+  - v0.16.0 开发阶段起，该接口返回 `taskId`，主机端和客户端回传页会监听 `task-updated` 显示处理进度、匹配成功 / 未匹配数量和错误列表。
   - 已修图保存到 `working/{event_slug}/已修图`，不覆盖原图。
   - 同一张图片重复回传时，会删除该图片旧的已修图文件并保存最新版本，避免 `已修图` 目录产生重复副本。
   - 成功回传后会用最新已修图重新生成该图片的 `缩略图` 和 `预览图` WebP，因此图片墙和预览弹窗显示最新已修版本。
@@ -1408,7 +1542,7 @@ working/{event_slug}/清单
 - `image-created`：主机本地导入或客户端上传成功后广播。
 - `image-updated`：图片星级、状态、分类或备注更新后广播。
 - `image-deleted-logical`：图片逻辑删除后广播。
-- `task-updated`：任务状态变化后广播，当前已接入主机导入、客户端上传处理、批量 ZIP 下载、发布导出和活动归档 prepare。
+- `task-updated`：任务状态变化后广播，当前已接入主机导入、客户端上传处理、批量 ZIP 下载、待修包生成、已修图回传、发布导出、活动归档 prepare 和归档 cleanup；主机导入页、客户端上传页、已修图回传页和任务中心共用该事件更新进度与最终统计。
 - `export-created`：发布导出完成后广播，当前前端暂未消费该事件。
 
 图片事件 payload 示例：

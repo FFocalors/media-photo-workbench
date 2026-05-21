@@ -6,13 +6,15 @@ export function FilterSidebar({
   events,
   selectedEventId,
   search,
-  minRating,
+  ratingValue,
+  ratingMode,
   statusFilter,
   sourceType,
   statusCounts,
   onEventChange,
   onSearchChange,
-  onMinRatingChange,
+  onRatingValueChange,
+  onRatingModeChange,
   onStatusChange,
   onSourceTypeChange,
   onReset,
@@ -23,13 +25,15 @@ export function FilterSidebar({
   events: EventData[];
   selectedEventId: string;
   search: string;
-  minRating: number;
+  ratingValue: number | "all";
+  ratingMode: "eq" | "gte";
   statusFilter: ImageStatus | "all";
   sourceType: string;
   statusCounts: Record<ImageStatus, number>;
   onEventChange: (eventId: string) => void;
   onSearchChange: (value: string) => void;
-  onMinRatingChange: (value: number) => void;
+  onRatingValueChange: (value: number | "all") => void;
+  onRatingModeChange: (value: "eq" | "gte") => void;
   onStatusChange: (status: ImageStatus | "all") => void;
   onSourceTypeChange: (value: string) => void;
   onReset: () => void;
@@ -91,22 +95,52 @@ export function FilterSidebar({
         <FilterSection title="星级">
           <select
             className="mb-2 w-full rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm text-slate-700"
-            onChange={(event) => onMinRatingChange(Number(event.target.value))}
-            value={minRating}
+            onChange={(event) => {
+              const value = event.target.value;
+              onRatingValueChange(value === "all" ? "all" : Number(value));
+            }}
+            value={ratingValue}
           >
-            <option value={0}>全部星级</option>
-            <option value={1}>1 星及以上</option>
-            <option value={2}>2 星及以上</option>
-            <option value={3}>3 星及以上</option>
-            <option value={4}>4 星及以上</option>
+            <option value="all">全部星级</option>
+            <option value={0}>0 星</option>
+            <option value={1}>1 星</option>
+            <option value={2}>2 星</option>
+            <option value={3}>3 星</option>
+            <option value={4}>4 星</option>
             <option value={5}>5 星</option>
           </select>
+          <div className="mb-2 grid grid-cols-2 gap-2 rounded-lg bg-slate-100 p-1">
+            <button
+              className={cn(
+                "rounded-md px-2 py-1 text-xs font-medium",
+                ratingMode === "eq" ? "bg-white text-blue-600 shadow-sm" : "text-slate-500 hover:text-slate-700",
+                ratingValue === "all" && "cursor-not-allowed opacity-50"
+              )}
+              disabled={ratingValue === "all"}
+              onClick={() => onRatingModeChange("eq")}
+              type="button"
+            >
+              等于
+            </button>
+            <button
+              className={cn(
+                "rounded-md px-2 py-1 text-xs font-medium",
+                ratingMode === "gte" ? "bg-white text-blue-600 shadow-sm" : "text-slate-500 hover:text-slate-700",
+                (ratingValue === "all" || ratingValue === 0) && "cursor-not-allowed opacity-50"
+              )}
+              disabled={ratingValue === "all" || ratingValue === 0}
+              onClick={() => onRatingModeChange("gte")}
+              type="button"
+            >
+              及以上
+            </button>
+          </div>
           <div className="flex justify-between px-1">
             {[1, 2, 3, 4, 5].map((star) => (
               <button
-                className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-medium ${minRating === star ? "bg-blue-600 text-white" : "text-slate-500 hover:bg-slate-100"}`}
+                className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-medium ${ratingValue === star ? "bg-blue-600 text-white" : "text-slate-500 hover:bg-slate-100"}`}
                 key={star}
-                onClick={() => onMinRatingChange(minRating === star ? 0 : star)}
+                onClick={() => onRatingValueChange(ratingValue === star ? "all" : star)}
                 type="button"
               >
                 {star}

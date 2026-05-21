@@ -20,9 +20,21 @@ interface MediaPhotoWorkbenchBridge {
   };
   selectDirectory: () => Promise<string | null>;
   selectImageFiles: () => Promise<string[]>;
+  getPathForFile?: (file: File) => string;
+  inspectDroppedPaths?: (paths: string[]) => Promise<DroppedPathInfo[]>;
   openPath: (path: string) => Promise<string>;
 }
 
 interface Window {
   mediaPhotoWorkbench?: MediaPhotoWorkbenchBridge;
+}
+
+interface DroppedPathInfo {
+  path: string;
+  name: string;
+  isFile: boolean;
+  isDirectory: boolean;
+  extension: string;
+  supported: boolean;
+  error?: string;
 }

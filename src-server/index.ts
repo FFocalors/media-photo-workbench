@@ -5,10 +5,11 @@ import { initDatabase, closeDatabase } from "./db/database";
 import { initRealtime, getRealtime } from "./realtime/socket";
 import { initLogger, getLogger } from "./utils/logger";
 import { safeLog, setLoggerShuttingDown } from "./utils/logger";
-import { ensureDataDirs, getDatabasePath, getConfigDir, getLogsDir } from "./utils/paths";
+import { ensureDataDirs, resolveDatabasePath, getConfigDir, getLogsDir } from "./utils/paths";
 import { setAppDataRoot } from "./routes/settings";
 import { setRuntimeServerPort } from "./runtime";
 import { cancelRunningTasks } from "./services/tasks";
+import { runStartupAutoBackup } from "./services/databaseMaintenance";
 
 export interface ServerHandle {
   port: number;
@@ -87,7 +88,7 @@ export async function startServer(
   setAppDataRoot(appDataRoot);
 
   // 5. 初始化数据库
-  const dbPath = getDatabasePath(appDataRoot);
+  const dbPath = resolveDatabasePath(appDataRoot, config.database.path);
   initDatabase(dbPath);
 
   // 6. 创建 Express 应用
@@ -111,6 +112,10 @@ export async function startServer(
   }
 
   logger.info({ port: actualPort }, `后端服务已启动：http://localhost:${actualPort}`);
+
+  setTimeout(() => {
+    void runStartupAutoBackup();
+  }, 1500);
 
   return {
     port: actualPort,

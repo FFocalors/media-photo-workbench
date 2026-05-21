@@ -135,7 +135,7 @@ async function parseApiResponse<T>(res: Response): Promise<ApiResponse<T>> {
 export interface HealthData {
   service: string;
   server: { port: number; configuredPort?: number; status: string };
-  database: { status: string };
+  database: { status: string; path?: string };
   repository: {
     configured: boolean;
     exists: boolean;
@@ -176,11 +176,62 @@ export async function fetchHealthFrom(baseUrl: string, options?: RequestInit): P
 export interface SettingsData {
   server: { port: number };
   repository: { path: string };
-  database: { path: string };
+  database: {
+    path: string;
+    configuredPath?: string;
+    defaultPath?: string;
+    autoBackupEnabled: boolean;
+    lastAutoBackupAt: string;
+    autoBackupRetention: number;
+  };
 }
 
 export async function fetchSettings(): Promise<ApiResponse<SettingsData>> {
   return request<SettingsData>("/api/settings");
+}
+
+export interface DatabaseBackupData {
+  backupPath: string;
+  size: number;
+  createdAt: string;
+  method: "sqlite-backup";
+  kind: "manual" | "auto" | "migration";
+}
+
+export interface DatabaseBackupListItem {
+  name: string;
+  path: string;
+  size: number;
+  createdAt: string;
+  kind: "manual" | "auto" | "migration" | "unknown";
+}
+
+export interface DatabaseMigrationData {
+  oldPath: string;
+  newPath: string;
+  backupPath: string;
+  requiresRestart: boolean;
+}
+
+export async function backupDatabaseNow(): Promise<ApiResponse<DatabaseBackupData>> {
+  return request<DatabaseBackupData>("/api/settings/database/backup", {
+    method: "POST"
+  });
+}
+
+export async function fetchDatabaseBackups(): Promise<ApiResponse<DatabaseBackupListItem[]>> {
+  return request<DatabaseBackupListItem[]>("/api/settings/database/backups");
+}
+
+export async function migrateDatabaseLocation(input: {
+  targetDirectory?: string;
+  targetPath?: string;
+}): Promise<ApiResponse<DatabaseMigrationData>> {
+  return request<DatabaseMigrationData>("/api/settings/database/migrate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
 }
 
 // ---------- Repository ----------
@@ -500,6 +551,7 @@ export interface EventImagesParams {
   page?: number;
   pageSize?: number;
   rating?: number;
+  ratingMode?: "eq" | "gte";
   status?: ImageStatus | "all";
   source_type?: string;
   keyword?: string;
@@ -903,13 +955,19 @@ export interface EditedUploadData {
   items: EditedUploadItem[];
 }
 
+export interface EditedUploadTaskData {
+  taskId: string;
+  total: number;
+  mode: "edited_upload";
+}
+
 export async function uploadEditedImages(
   eventId: string,
   input: {
     files: File[];
     manifestFile?: File | null;
   }
-): Promise<ApiResponse<EditedUploadData>> {
+): Promise<ApiResponse<EditedUploadData | EditedUploadTaskData>> {
   const formData = new FormData();
   if (input.manifestFile) {
     formData.append("manifest", input.manifestFile);
@@ -918,7 +976,7 @@ export async function uploadEditedImages(
     formData.append("files", file);
   }
 
-  return request<EditedUploadData>(`/api/events/${eventId}/edited/upload`, {
+  return request<EditedUploadData | EditedUploadTaskData>(`/api/events/${eventId}/edited/upload`, {
     method: "POST",
     body: formData
   });

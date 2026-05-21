@@ -4,12 +4,17 @@ import { BrandLogo } from "../../components/common/BrandLogo";
 import { Notice, StatusPill } from "../../components/ui/States";
 import { cn } from "../../lib/cn";
 import {
+  backupDatabaseNow,
   checkRepository,
   eventStatusLabels,
   fetchEvents,
+  fetchDatabaseBackups,
   fetchHealth,
   fetchSettings,
   getApiBase,
+  migrateDatabaseLocation,
+  type DatabaseBackupData,
+  type DatabaseBackupListItem,
   type EventData,
   type HealthData,
   type RepositoryCheckData,
@@ -35,6 +40,12 @@ export function SettingsPage() {
   const [repositoryPath, setRepositoryPath] = useState("");
   const [savedRepositoryPath, setSavedRepositoryPath] = useState("");
   const [databasePath, setDatabasePath] = useState("./data/app.db");
+  const [databaseLastAutoBackupAt, setDatabaseLastAutoBackupAt] = useState("");
+  const [databaseBackups, setDatabaseBackups] = useState<DatabaseBackupListItem[]>([]);
+  const [databaseBackupResult, setDatabaseBackupResult] = useState<DatabaseBackupData | null>(null);
+  const [databaseBackupLoading, setDatabaseBackupLoading] = useState(false);
+  const [databaseMigrationLoading, setDatabaseMigrationLoading] = useState(false);
+  const [databaseMessage, setDatabaseMessage] = useState<{ tone: "success" | "warning" | "danger"; title: string; body: string } | null>(null);
   const [port, setPort] = useState("3030");
   const [jpegQuality, setJpegQuality] = useState(90);
   const [keepDuplicates, setKeepDuplicates] = useState(false);
@@ -67,7 +78,9 @@ export function SettingsPage() {
           setSavedRepositoryPath(path);
           setPort(String(res.data.server.port));
           setDatabasePath(res.data.database.path);
+          setDatabaseLastAutoBackupAt(res.data.database.lastAutoBackupAt || "");
           setRepositoryMessage(null);
+          void refreshDatabaseBackups();
         } else {
           setApiAvailable(false);
           setRepositoryMessage({ tone: "danger", title: "设置读取失败", body: res.error?.message || "无法读取后端配置。" });
@@ -83,6 +96,17 @@ export function SettingsPage() {
     loadSettings();
     return () => { cancelled = true; };
   }, []);
+
+  const refreshDatabaseBackups = async () => {
+    try {
+      const res = await fetchDatabaseBackups();
+      if (res.ok && res.data) {
+        setDatabaseBackups(res.data);
+      }
+    } catch {
+      // 备份列表仅作为辅助信息，读取失败不影响设置页主流程。
+    }
+  };
 
   const handleCheckRepository = async () => {
     if (!savedRepositoryPath.trim()) {
@@ -166,6 +190,77 @@ export function SettingsPage() {
     const result = await window.mediaPhotoWorkbench?.openPath(trimmedRepositoryPath);
     if (result) {
       setRepositoryMessage({ tone: "danger", title: "无法打开文件夹", body: result });
+    }
+  };
+
+  const handleBackupDatabase = async () => {
+    setDatabaseBackupLoading(true);
+    setDatabaseMessage(null);
+    setDatabaseBackupResult(null);
+    try {
+      const res = await backupDatabaseNow();
+      if (res.ok && res.data) {
+        setDatabaseBackupResult(res.data);
+        setDatabaseMessage({
+          tone: "success",
+          title: "数据库备份完成",
+          body: `备份已保存到：${res.data.backupPath}`
+        });
+        await refreshDatabaseBackups();
+      } else {
+        setDatabaseMessage({
+          tone: "danger",
+          title: "数据库备份失败",
+          body: res.error?.message || "备份失败，请检查仓库路径和写入权限。"
+        });
+      }
+    } catch (err: any) {
+      setDatabaseMessage({
+        tone: "danger",
+        title: "数据库备份失败",
+        body: err?.message || "备份失败，请检查仓库路径和后端服务。"
+      });
+    } finally {
+      setDatabaseBackupLoading(false);
+    }
+  };
+
+  const handleMigrateDatabase = async () => {
+    if (!window.mediaPhotoWorkbench?.selectDirectory) {
+      setDatabaseMessage({ tone: "warning", title: "无法选择目标目录", body: "当前运行环境没有提供目录选择能力，请在 Electron 桌面端中使用此功能。" });
+      return;
+    }
+
+    const targetDirectory = await window.mediaPhotoWorkbench.selectDirectory();
+    if (!targetDirectory) return;
+
+    setDatabaseMigrationLoading(true);
+    setDatabaseMessage(null);
+    try {
+      const res = await migrateDatabaseLocation({ targetDirectory });
+      if (res.ok && res.data) {
+        setDatabasePath(res.data.newPath);
+        setDatabaseMessage({
+          tone: "success",
+          title: "数据库位置已迁移",
+          body: `新数据库：${res.data.newPath}。迁移前备份：${res.data.backupPath}。请重启应用后生效。`
+        });
+        await refreshDatabaseBackups();
+      } else {
+        setDatabaseMessage({
+          tone: "danger",
+          title: "数据库迁移失败",
+          body: `${res.error?.message || "迁移失败。"} 配置未修改，当前数据库仍可继续使用。`
+        });
+      }
+    } catch (err: any) {
+      setDatabaseMessage({
+        tone: "danger",
+        title: "数据库迁移失败",
+        body: `${err?.message || "迁移失败。"} 配置未修改，当前数据库仍可继续使用。`
+      });
+    } finally {
+      setDatabaseMigrationLoading(false);
     }
   };
 
@@ -320,8 +415,71 @@ export function SettingsPage() {
 
               <div>
                 <label className="mb-2 block text-sm font-medium text-slate-900">数据库位置</label>
-                <p className="mb-3 text-sm text-slate-600">{databasePath}</p>
-                <button className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50" type="button">立即备份</button>
+                <p className="mb-3 break-all rounded-lg bg-slate-50 px-4 py-3 text-sm text-slate-600">{databasePath}</p>
+
+                {databaseMessage && (
+                  <Notice className="mb-3" tone={databaseMessage.tone} title={databaseMessage.title}>
+                    {databaseMessage.body}
+                  </Notice>
+                )}
+
+                <div className="mb-3 grid gap-3 text-sm text-slate-600 sm:grid-cols-2">
+                  <div className="rounded-lg bg-slate-50 px-4 py-3">
+                    <p className="text-xs font-medium text-slate-400">启动自动备份</p>
+                    <p className="mt-1 font-medium text-slate-700">已启用，每 24 小时最多一次</p>
+                  </div>
+                  <div className="rounded-lg bg-slate-50 px-4 py-3">
+                    <p className="text-xs font-medium text-slate-400">最近自动备份</p>
+                    <p className="mt-1 font-medium text-slate-700">{databaseLastAutoBackupAt ? formatDateTime(databaseLastAutoBackupAt) : "暂无记录"}</p>
+                  </div>
+                </div>
+
+                {databaseBackupResult && (
+                  <div className="mb-3 rounded-lg border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+                    <p>备份大小：{formatBytes(databaseBackupResult.size)}</p>
+                    <p className="mt-1 break-all">备份路径：{databaseBackupResult.backupPath}</p>
+                  </div>
+                )}
+
+                <div className="flex flex-wrap gap-3">
+                  <button
+                    className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                    disabled={databaseBackupLoading || databaseMigrationLoading}
+                    onClick={handleBackupDatabase}
+                    type="button"
+                  >
+                    {databaseBackupLoading ? "备份中..." : "立即备份"}
+                  </button>
+                  <button
+                    className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                    disabled={databaseBackupLoading || databaseMigrationLoading}
+                    onClick={handleMigrateDatabase}
+                    type="button"
+                  >
+                    {databaseMigrationLoading ? "迁移中..." : "迁移数据库位置"}
+                  </button>
+                </div>
+
+                <p className="mt-3 text-xs leading-5 text-slate-500">
+                  数据库路径和图片仓库路径是两个不同概念。迁移前会自动备份，旧数据库不会删除，新路径重启后生效。
+                </p>
+
+                {databaseBackups.length > 0 && (
+                  <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50 p-4">
+                    <h4 className="mb-3 text-sm font-medium text-slate-900">最近数据库备份</h4>
+                    <div className="space-y-2">
+                      {databaseBackups.slice(0, 5).map((item) => (
+                        <div className="rounded-lg bg-white px-3 py-2 text-xs text-slate-600" key={item.path}>
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="truncate font-medium text-slate-700">{item.name}</span>
+                            <span className="shrink-0 text-slate-400">{formatBytes(item.size)}</span>
+                          </div>
+                          <p className="mt-1 truncate text-slate-400" title={item.path}>{item.path}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <Divider />
@@ -619,6 +777,12 @@ function formatBytes(value: number | null | undefined): string {
     index += 1;
   }
   return `${size.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+}
+
+function formatDateTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
 }
 
 function buildDiagnosticsText(input: {

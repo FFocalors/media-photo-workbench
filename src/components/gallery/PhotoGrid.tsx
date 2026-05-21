@@ -2,6 +2,7 @@ import { AlertTriangle, Check, Download, ImageOff, Star } from "lucide-react";
 import { EmptyState } from "../ui/States";
 import { EventImageData, imageStatusLabels } from "../../lib/api";
 import { cn } from "../../lib/cn";
+import { RetryableImage } from "./RetryableImage";
 
 export function PhotoGrid({
   photos,
@@ -88,7 +89,7 @@ function PhotoCard({
       role="button"
       tabIndex={0}
     >
-      <img alt={photo.original_filename} className="h-full w-full object-cover" src={photo.thumb_url} />
+      <RetryableImage alt={photo.original_filename} className="h-full w-full object-cover" src={photo.thumb_url} />
       <div className="absolute inset-x-0 top-0 z-20 flex items-start justify-between gap-2 bg-gradient-to-b from-black/55 to-transparent p-2">
         <div className="flex items-center gap-1">
           <button

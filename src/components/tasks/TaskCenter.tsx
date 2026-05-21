@@ -2,25 +2,13 @@ import { AlertCircle, CheckCircle2, ChevronDown, Clock3, Download, Loader2, XCir
 import { useEffect, useMemo, useState } from "react";
 import { cancelTask, fetchTasks, getApiBase, type TaskData } from "../../lib/api";
 import { subscribeRealtimeTaskEvent } from "../../lib/socket";
-
-function taskStatusLabel(status: TaskData["status"]): string {
-  if (status === "pending") return "等待中";
-  if (status === "running") return "执行中";
-  if (status === "success") return "已完成";
-  if (status === "failed") return "失败";
-  return "已取消";
-}
+import { formatTaskDuration, getTaskStats, taskStatusLabel } from "../../lib/taskStats";
 
 function taskStatusIcon(status: TaskData["status"]) {
   if (status === "running" || status === "pending") return <Loader2 className="animate-spin text-blue-500" size={15} />;
   if (status === "success") return <CheckCircle2 className="text-emerald-500" size={15} />;
   if (status === "failed") return <XCircle className="text-red-500" size={15} />;
   return <AlertCircle className="text-slate-400" size={15} />;
-}
-
-function progressPercent(task: TaskData): number {
-  if (task.total <= 0) return task.status === "success" ? 100 : 0;
-  return Math.min(100, Math.round((task.finished / task.total) * 100));
 }
 
 function taskDownloadHref(task: TaskData): string {
@@ -30,19 +18,22 @@ function taskDownloadHref(task: TaskData): string {
 }
 
 function canCancelTask(task: TaskData): boolean {
-  return task.type === "host_import" || task.type === "client_upload_import";
+  return task.type === "host_import" || task.type === "client_upload_import" || task.type === "edited_upload";
 }
 
-function formatDuration(ms?: number | null): string {
-  if (!ms || ms < 0) return "估算中";
-  const totalSeconds = Math.max(0, Math.round(ms / 1000));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  if (minutes <= 0) return `${seconds} 秒`;
-  const hours = Math.floor(minutes / 60);
-  const remainingMinutes = minutes % 60;
-  if (hours <= 0) return `${minutes} 分 ${seconds} 秒`;
-  return `${hours} 小时 ${remainingMinutes} 分`;
+function taskTypeLabel(task: TaskData): string {
+  if (task.title) return task.title;
+  const labels: Record<string, string> = {
+    host_import: "导入图片",
+    client_upload_import: "客户端上传处理",
+    download_zip: "批量 ZIP 下载",
+    publish_export: "导出发布",
+    edit_package: "生成待修包",
+    edited_upload: "回传已修图",
+    archive_prepare: "生成归档",
+    archive_cleanup: "清理工作区"
+  };
+  return labels[task.type] ?? task.type;
 }
 
 export function TaskCenter({ placement = "sidebar" }: { placement?: "sidebar" | "floating" }) {
@@ -160,6 +151,7 @@ export function TaskCenter({ placement = "sidebar" }: { placement?: "sidebar" | 
             ) : (
               <div className="space-y-2">
                 {visibleTasks.map((task) => {
+                  const stats = getTaskStats(task);
                   const href = taskDownloadHref(task);
                   const canCancel = canCancelTask(task);
                   const isActive = task.status === "running" || task.status === "pending";
@@ -169,15 +161,15 @@ export function TaskCenter({ placement = "sidebar" }: { placement?: "sidebar" | 
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
                             {taskStatusIcon(task.status)}
-                            <span className="truncate text-sm font-semibold text-slate-800">{task.title || task.type}</span>
+                            <span className="truncate text-sm font-semibold text-slate-800">{taskTypeLabel(task)}</span>
                           </div>
                           <div className="mt-1 text-xs text-slate-500">
-                            {taskStatusLabel(task.status)} · {task.finished}/{task.total || 0} · 成功 {task.successCount} · 失败 {task.failedCount} · 跳过 {task.skippedCount}
+                            {taskStatusLabel(task.status)} · {stats.processed}/{stats.total || 0} · 成功 {stats.success} · 失败 {stats.failed} · 跳过 {stats.skipped}
                           </div>
                           {isActive && (
                             <div className="mt-1 text-xs text-slate-400">
-                              已用 {formatDuration(task.elapsedMs)} · 剩余 {formatDuration(task.estimatedRemainingMs)}
-                              {task.currentFileName ? ` · ${task.currentFileName}` : ""}
+                              已用 {formatTaskDuration(stats.elapsedMs)} · 剩余 {formatTaskDuration(stats.estimatedRemainingMs)}
+                              {stats.currentFileName ? ` · ${stats.currentFileName}` : ""}
                             </div>
                           )}
                         </div>
@@ -207,18 +199,18 @@ export function TaskCenter({ placement = "sidebar" }: { placement?: "sidebar" | 
                       <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white">
                         <div
                           className={`h-full rounded-full ${task.status === "failed" ? "bg-red-500" : task.status === "success" ? "bg-emerald-500" : "bg-blue-500"}`}
-                          style={{ width: `${progressPercent(task)}%` }}
+                          style={{ width: `${stats.percent}%` }}
                         />
                       </div>
 
-                      {task.errors.length > 0 && (
+                      {stats.errors.length > 0 && (
                         <div className="mt-2 rounded-lg bg-white px-2.5 py-2 text-xs text-red-600">
-                          {task.errors.slice(0, 3).map((error, index) => (
+                          {stats.errors.slice(0, 3).map((error, index) => (
                             <div className="truncate" key={`${task.id}-${index}`}>
                               {error.filename || error.imageId || "错误"}：{error.reason}
                             </div>
                           ))}
-                          {task.errors.length > 3 && <div className="text-red-400">还有 {task.errors.length - 3} 条错误</div>}
+                          {stats.errors.length > 3 && <div className="text-red-400">还有 {stats.errors.length - 3} 条错误</div>}
                         </div>
                       )}
                     </div>

@@ -23,7 +23,7 @@ import { getImageDtoById, listEventImages, listEventTrashedImages } from "../ser
 import { getLogger } from "../utils/logger";
 import { emitImageCreated } from "../realtime/socket";
 import { parseMultipartForm } from "../utils/multipart";
-import { createEditPackage, listEditPackages, uploadEditedImages } from "../services/editWorkflow";
+import { createEditPackage, EditedUploadProgressSnapshot, listEditPackages, uploadEditedImages } from "../services/editWorkflow";
 import { createPublishExport } from "../services/publishExport";
 import { cleanupEventArchive, prepareEventArchive, verifyEventArchive } from "../services/archive";
 import { createDownloadZipTask } from "../services/downloadPackages";
@@ -37,6 +37,11 @@ function getBaseUrl(req: Request): string {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function parseOptionalNumber(value: unknown): number | undefined {
+  if (typeof value !== "string" || value.trim() === "") return undefined;
+  return Number(value);
 }
 
 function emitCreatedImages(importedIds: string[], baseUrl: string): void {
@@ -219,6 +224,113 @@ function startImportBackgroundTask(input: {
   })();
 }
 
+function estimateSimpleRemainingMs(input: {
+  startedAtMs: number;
+  processed: number;
+  total: number;
+}): number | null {
+  if (input.processed <= 0 || input.total <= input.processed) return null;
+  const elapsedMs = Date.now() - input.startedAtMs;
+  if (elapsedMs < 1500) return null;
+  return Math.max(0, Math.round((elapsedMs / input.processed) * (input.total - input.processed)));
+}
+
+function startEditedUploadBackgroundTask(input: {
+  taskId: string;
+  eventId: string;
+  files: Parameters<typeof uploadEditedImages>[0]["files"];
+  manifestFile?: Parameters<typeof uploadEditedImages>[0]["manifestFile"];
+  baseUrl: string;
+  cleanup?: () => Promise<void>;
+}): void {
+  const startedAtMs = Date.now();
+  const startedAt = new Date(startedAtMs).toISOString();
+  let lastProgressAt = 0;
+
+  const applyProgress = (snapshot: EditedUploadProgressSnapshot) => {
+    if (isTaskCancellationRequested(input.taskId)) return;
+    const now = Date.now();
+    if (now - lastProgressAt < 500 && snapshot.processed < snapshot.total) return;
+    lastProgressAt = now;
+    updateTask(input.taskId, {
+      status: "running",
+      startedAt,
+      total: snapshot.total,
+      finished: snapshot.processed,
+      successCount: snapshot.matched,
+      failedCount: snapshot.unmatched,
+      skippedCount: 0,
+      errors: snapshot.errors,
+      elapsedMs: now - startedAtMs,
+      estimatedRemainingMs: estimateSimpleRemainingMs({
+        startedAtMs,
+        processed: snapshot.processed,
+        total: snapshot.total
+      }),
+      currentFileName: snapshot.currentFileName
+    });
+  };
+
+  void (async () => {
+    try {
+      updateTask(input.taskId, {
+        status: "running",
+        startedAt,
+        total: input.files.length,
+        elapsedMs: 0,
+        estimatedRemainingMs: null
+      });
+
+      const result = await uploadEditedImages({
+        eventId: input.eventId,
+        files: input.files,
+        manifestFile: input.manifestFile,
+        baseUrl: input.baseUrl,
+        options: {
+          maxErrors: 100,
+          isCancelled: () => isTaskCancellationRequested(input.taskId),
+          onProgress: applyProgress
+        }
+      });
+      const elapsedMs = Date.now() - startedAtMs;
+      const responseData = {
+        total: result.total,
+        matched: result.matched,
+        unmatched: result.unmatched,
+        errors: result.errors,
+        items: result.items
+      };
+
+      updateTask(input.taskId, {
+        total: result.total,
+        finished: result.matched + result.unmatched,
+        successCount: result.matched,
+        failedCount: result.unmatched,
+        skippedCount: 0,
+        errors: result.errors,
+        result: responseData,
+        elapsedMs,
+        estimatedRemainingMs: null,
+        currentFileName: ""
+      });
+
+      if (isTaskCancellationRequested(input.taskId)) {
+        updateTask(input.taskId, {
+          status: "cancelled",
+          finishedAt: nowIso()
+        });
+        return;
+      }
+
+      finishTask(input.taskId, responseData);
+    } catch (err: any) {
+      failTask(input.taskId, [{ reason: err?.message || "已修图回传任务失败" }]);
+    } finally {
+      await input.cleanup?.();
+    }
+  })();
+}
+
 /**
  * GET /api/events
  * 获取活动列表，支持 ?status=draft|active|reviewing 筛选。
@@ -291,7 +403,8 @@ router.get("/:id/images/trash", (req, res) => {
     const result = listEventTrashedImages(req.params.id, {
       page: req.query.page ? Number(req.query.page) : undefined,
       pageSize: req.query.pageSize ? Number(req.query.pageSize) : undefined,
-      rating: req.query.rating ? Number(req.query.rating) : undefined,
+      rating: parseOptionalNumber(req.query.rating),
+      ratingMode: typeof req.query.ratingMode === "string" ? req.query.ratingMode : undefined,
       status: typeof req.query.status === "string" ? req.query.status : undefined,
       sourceType: typeof req.query.source_type === "string" ? req.query.source_type : undefined,
       keyword: typeof req.query.keyword === "string" ? req.query.keyword : undefined
@@ -316,7 +429,8 @@ router.get("/:id/images", (req, res) => {
     const result = listEventImages(req.params.id, {
       page: req.query.page ? Number(req.query.page) : undefined,
       pageSize: req.query.pageSize ? Number(req.query.pageSize) : undefined,
-      rating: req.query.rating ? Number(req.query.rating) : undefined,
+      rating: parseOptionalNumber(req.query.rating),
+      ratingMode: typeof req.query.ratingMode === "string" ? req.query.ratingMode : undefined,
       status: typeof req.query.status === "string" ? req.query.status : undefined,
       sourceType: typeof req.query.source_type === "string" ? req.query.source_type : undefined,
       keyword: typeof req.query.keyword === "string" ? req.query.keyword : undefined
@@ -509,14 +623,55 @@ router.post("/:id/upload", async (req, res) => {
  * 将当前活动 status = edit 的图片打包为待修包。
  */
 router.post("/:id/edit-package", async (req, res) => {
+  const task = createTask({
+    type: "edit_package",
+    eventId: req.params.id,
+    title: "生成待修包",
+    total: 1
+  });
   try {
+    updateTask(task.id, { status: "running" });
     const result = await createEditPackage(req.params.id, getBaseUrl(req), {
       splitMode: req.body?.splitMode,
       packageCount: req.body?.packageCount,
       packages: req.body?.packages
     });
+    const errors = result.errors.slice(0, 100).map((error) => ({
+      imageId: error.imageId,
+      filename: error.filename,
+      reason: error.reason
+    }));
+    updateTask(task.id, {
+      total: result.total,
+      finished: result.total,
+      successCount: result.success,
+      failedCount: errors.length,
+      skippedCount: result.skipped,
+      errors,
+      result: {
+        packageCount: result.packageCount,
+        packages: result.packages,
+        total: result.total,
+        success: result.success,
+        failed: errors.length,
+        skipped: result.skipped,
+        errors,
+        downloadUrl: result.packages[0]?.downloadUrl
+      }
+    });
+    finishTask(task.id, {
+      packageCount: result.packageCount,
+      packages: result.packages,
+      total: result.total,
+      success: result.success,
+      failed: errors.length,
+      skipped: result.skipped,
+      errors,
+      downloadUrl: result.packages[0]?.downloadUrl
+    });
     sendSuccess(res, result);
   } catch (err: any) {
+    failTask(task.id, [{ reason: err?.message || "生成待修包失败" }]);
     if (err?.code) {
       const status = err.code === "EVENT_NOT_FOUND" ? 404 : 400;
       sendError(res, err.code, err.message, status);
@@ -567,15 +722,29 @@ router.post("/:id/edited/upload", async (req, res) => {
       return;
     }
 
-    const result = await uploadEditedImages({
+    const task = createTask({
+      type: "edited_upload",
+      eventId: req.params.id,
+      title: `回传已修图 ${imageFiles.length} 张`,
+      total: imageFiles.length
+    });
+
+    const formForTask = form;
+    form = null;
+    startEditedUploadBackgroundTask({
+      taskId: task.id,
       eventId: req.params.id,
       files: imageFiles,
       manifestFile,
-      baseUrl: getBaseUrl(req)
+      baseUrl: getBaseUrl(req),
+      cleanup: () => formForTask.cleanup()
     });
 
-    const { images: _images, ...responseData } = result;
-    sendSuccess(res, responseData);
+    sendSuccess(res, {
+      taskId: task.id,
+      total: imageFiles.length,
+      mode: "edited_upload"
+    }, 202);
   } catch (err: any) {
     if (err?.code) {
       sendError(res, err.code, err.message, err.code === "EVENT_NOT_FOUND" ? 404 : 400);
@@ -636,6 +805,30 @@ router.post("/:id/export", async (req, res) => {
       limitFileSize10Mb: req.body.limitFileSize10Mb === true,
       baseUrl: getBaseUrl(req)
     });
+    const errors = result.errors.slice(0, 100).map((error) => ({
+      imageId: error.imageId,
+      filename: error.filename,
+      reason: error.reason
+    }));
+    updateTask(task.id, {
+      total: result.total,
+      finished: result.total,
+      successCount: result.success,
+      failedCount: result.failed,
+      skippedCount: 0,
+      errors,
+      result: {
+        jobId: result.jobId,
+        downloadUrl: result.downloadUrl,
+        outputDir: result.outputDir,
+        zipPath: result.zipPath,
+        total: result.total,
+        success: result.success,
+        failed: result.failed,
+        skipped: 0,
+        errors
+      }
+    });
     finishTask(task.id, {
       jobId: result.jobId,
       downloadUrl: result.downloadUrl,
@@ -644,7 +837,8 @@ router.post("/:id/export", async (req, res) => {
       total: result.total,
       success: result.success,
       failed: result.failed,
-      errors: result.errors
+      skipped: 0,
+      errors
     });
     sendSuccess(res, result);
   } catch (err: any) {
@@ -673,13 +867,42 @@ router.post("/:id/archive/prepare", async (req, res) => {
   try {
     updateTask(task.id, { status: "running" });
     const result = await prepareEventArchive(req.params.id);
+    const errors = result.missingFiles.slice(0, 100).map((item: any) => ({
+      imageId: item.imageId,
+      filename: item.filename || item.archivePath || item.sourcePath,
+      reason: item.reason || "归档文件缺失"
+    }));
+    updateTask(task.id, {
+      total: result.totalImages,
+      finished: result.totalImages,
+      successCount: result.thumbCopied,
+      failedCount: errors.length,
+      skippedCount: 0,
+      errors,
+      result: {
+        archivePath: result.archivePath,
+        total: result.totalImages,
+        success: result.thumbCopied,
+        failed: errors.length,
+        skipped: 0,
+        errors,
+        missingFiles: result.missingFiles,
+        manifestPath: result.manifestPath,
+        eventDbPath: result.eventDbPath
+      }
+    });
     finishTask(task.id, {
       archivePath: result.archivePath,
       totalImages: result.totalImages,
+      total: result.totalImages,
+      success: result.thumbCopied,
+      failed: errors.length,
+      skipped: 0,
       originalCopied: result.originalCopied,
       editedCopied: result.editedCopied,
       exportCopied: result.exportCopied,
       missingFiles: result.missingFiles,
+      errors,
       manifestPath: result.manifestPath,
       eventDbPath: result.eventDbPath
     });

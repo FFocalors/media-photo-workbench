@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require("electron");
+const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 /**
  * Preload 脚本。
@@ -78,5 +78,13 @@ contextBridge.exposeInMainWorld("mediaPhotoWorkbench", {
 
   selectDirectory: () => ipcRenderer.invoke("dialog:select-directory"),
   selectImageFiles: () => ipcRenderer.invoke("dialog:select-image-files"),
+  getPathForFile: (file) => {
+    try {
+      return webUtils?.getPathForFile?.(file) || file?.path || "";
+    } catch (_) {
+      return file?.path || "";
+    }
+  },
+  inspectDroppedPaths: (paths) => ipcRenderer.invoke("drag:inspect-paths", paths),
   openPath: (path) => ipcRenderer.invoke("shell:open-path", path)
 });

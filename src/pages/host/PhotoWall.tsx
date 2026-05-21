@@ -32,6 +32,27 @@ import {
 import type { RealtimeConnectionState, RealtimeImagePayload } from "../../lib/socket";
 
 const GALLERY_PAGE_SIZE = 200;
+type RatingFilterValue = number | "all";
+type RatingMode = "eq" | "gte";
+
+function withCacheKey(url: string, key: string): string {
+  try {
+    const parsed = new URL(url, window.location.origin);
+    parsed.searchParams.set("v", key);
+    return parsed.toString();
+  } catch {
+    const separator = url.includes("?") ? "&" : "?";
+    return `${url}${separator}v=${encodeURIComponent(key)}`;
+  }
+}
+
+function withImageCacheKey(image: EventImageData, key: string): EventImageData {
+  return {
+    ...image,
+    thumb_url: withCacheKey(image.thumb_url, key),
+    preview_url: withCacheKey(image.preview_url, key)
+  };
+}
 
 export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
   const [events, setEvents] = useState<EventData[]>([]);
@@ -41,8 +62,10 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [activePhotoId, setActivePhotoId] = useState<string | null>(null);
   const [previewPhotoId, setPreviewPhotoId] = useState<string | null>(null);
+  const [previewSnapshot, setPreviewSnapshot] = useState<EventImageData[]>([]);
   const [search, setSearch] = useState("");
-  const [minRating, setMinRating] = useState(0);
+  const [ratingValue, setRatingValue] = useState<RatingFilterValue>("all");
+  const [ratingMode, setRatingMode] = useState<RatingMode>("gte");
   const [statusFilter, setStatusFilter] = useState<ImageStatus | "all">("all");
   const [sourceType, setSourceType] = useState("all");
   const [trashMode, setTrashMode] = useState(false);
@@ -51,6 +74,7 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [batchUpdating, setBatchUpdating] = useState(false);
   const [realtimeStatus, setRealtimeStatus] = useState<RealtimeConnectionState>("disconnected");
   const [statusCounts, setStatusCounts] = useState<Record<ImageStatus, number>>({
     unselected: 0,
@@ -65,11 +89,20 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
   const [message, setMessage] = useState<{ tone: "success" | "warning" | "danger" | "info"; title: string; body: string } | null>(null);
 
   const activePhoto = photos.find((photo) => photo.id === activePhotoId) ?? null;
-  const previewPhoto = photos.find((photo) => photo.id === previewPhotoId) ?? null;
+  const previewPhotos = useMemo(() => {
+    if (!previewPhotoId) return [];
+    return previewSnapshot.map((snapshotPhoto) => photos.find((photo) => photo.id === snapshotPhoto.id) ?? snapshotPhoto);
+  }, [photos, previewPhotoId, previewSnapshot]);
+  const previewPhoto = previewPhotoId
+    ? previewPhotos.find((photo) => photo.id === previewPhotoId) ?? photos.find((photo) => photo.id === previewPhotoId) ?? previewSnapshot.find((photo) => photo.id === previewPhotoId) ?? null
+    : null;
   const hasMorePhotos = photos.length < total;
 
   const matchesCurrentFilters = useCallback((photo: EventImageData) => {
-    if (minRating > 0 && photo.rating < minRating) return false;
+    if (ratingValue !== "all") {
+      if (ratingMode === "eq" && photo.rating !== ratingValue) return false;
+      if (ratingMode === "gte" && photo.rating < ratingValue) return false;
+    }
     if (statusFilter !== "all" && photo.status !== statusFilter) return false;
     if (sourceType !== "all" && photo.source_type !== sourceType) return false;
 
@@ -85,7 +118,7 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
       photo.camera_model,
       photo.lens_model
     ].some((value) => value.toLowerCase().includes(keyword));
-  }, [minRating, search, sourceType, statusFilter]);
+  }, [ratingMode, ratingValue, search, sourceType, statusFilter]);
 
   const loadEvents = useCallback(async () => {
     try {
@@ -110,11 +143,12 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
   const buildImageQueryParams = useCallback((targetPage: number, status?: ImageStatus | "all", pageSize = GALLERY_PAGE_SIZE) => ({
     page: targetPage,
     pageSize,
-    rating: minRating > 0 ? minRating : undefined,
+    rating: ratingValue === "all" ? undefined : ratingValue,
+    ratingMode: ratingValue === "all" ? undefined : ratingMode,
     status: status ?? statusFilter,
     source_type: sourceType,
     keyword: search.trim() || undefined
-  }), [minRating, search, sourceType, statusFilter]);
+  }), [ratingMode, ratingValue, search, sourceType, statusFilter]);
 
   const fetchImagesForPage = useCallback((targetPage: number, status?: ImageStatus | "all", pageSize?: number) => {
     const params = buildImageQueryParams(targetPage, status, pageSize);
@@ -221,6 +255,7 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
 
   const replacePhoto = (updated: EventImageData) => {
     setPhotos((current) => current.map((photo) => (photo.id === updated.id ? updated : photo)));
+    setPreviewSnapshot((current) => current.map((photo) => (photo.id === updated.id ? updated : photo)));
   };
 
   const removePhotoFromView = useCallback((imageId: string) => {
@@ -232,11 +267,24 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
     setSelectedIds((current) => current.filter((id) => id !== imageId));
     setActivePhotoId((current) => current === imageId ? null : current);
     setPreviewPhotoId((current) => current === imageId ? null : current);
+    setPreviewSnapshot((current) => current.filter((photo) => photo.id !== imageId));
   }, []);
+
+  const openPreview = useCallback((imageId: string) => {
+    setActivePhotoId(imageId);
+    setPreviewSnapshot(photos);
+    setPreviewPhotoId(imageId);
+  }, [photos]);
+
+  const closePreview = useCallback(() => {
+    setPreviewPhotoId(null);
+    setPreviewSnapshot([]);
+    void loadImages();
+  }, [loadImages]);
 
   const handleRealtimeCreated = useCallback((payload: RealtimeImagePayload) => {
     if (payload.eventId !== selectedEventId || !payload.image) return;
-    const image = payload.image;
+    const image = withImageCacheKey(payload.image, payload.updatedAt || String(Date.now()));
 
     if (!matchesCurrentFilters(image)) {
       setMessage({ tone: "info", title: "收到新图片", body: "当前筛选条件未显示这张新图片，可清空筛选后查看。" });
@@ -255,7 +303,9 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
 
   const handleRealtimeUpdated = useCallback((payload: RealtimeImagePayload) => {
     if (payload.eventId !== selectedEventId || !payload.image) return;
-    const image = payload.image;
+    const image = withImageCacheKey(payload.image, payload.updatedAt || String(Date.now()));
+
+    setPreviewSnapshot((current) => current.map((photo) => (photo.id === image.id ? image : photo)));
 
     if (trashMode && !image.is_deleted) {
       removePhotoFromView(image.id);
@@ -270,7 +320,6 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
         setTotal((value) => Math.max(0, value - 1));
         setSelectedIds((ids) => ids.filter((id) => id !== image.id));
         setActivePhotoId((id) => id === image.id ? null : id);
-        setPreviewPhotoId((id) => id === image.id ? null : id);
         return current.filter((photo) => photo.id !== image.id);
       }
 
@@ -305,7 +354,7 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
     try {
       const res = await operation();
       if (res.ok && res.data) {
-        replacePhoto(res.data);
+        replacePhoto(withImageCacheKey(res.data, String(Date.now())));
         setMessage({ tone: "success", title: successTitle, body: "图片信息已更新。" });
       } else {
         setMessage({ tone: "danger", title: "更新失败", body: res.error?.message || "图片更新失败。" });
@@ -371,6 +420,7 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
     setSelectedIds([]);
     setActivePhotoId((current) => current && ids.includes(current) ? null : current);
     setPreviewPhotoId((current) => current && ids.includes(current) ? null : current);
+    setPreviewSnapshot((current) => current.filter((photo) => !ids.includes(photo.id)));
     await loadImages();
 
     if (failed.length > 0) {
@@ -406,6 +456,7 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
     setSelectedIds([]);
     setActivePhotoId(null);
     setPreviewPhotoId(null);
+    setPreviewSnapshot([]);
     await loadImages();
     setMessage(failed.length > 0
       ? { tone: "warning", title: "部分图片恢复失败", body: `已恢复 ${success} 张，失败 ${failed.length} 张。${failed[0] || ""}` }
@@ -441,6 +492,7 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
     setSelectedIds([]);
     setActivePhotoId(null);
     setPreviewPhotoId(null);
+    setPreviewSnapshot([]);
     await loadImages();
     setMessage(failed.length > 0
       ? { tone: "danger", title: "部分图片永久删除失败", body: `已删除 ${success} 张，失败 ${failed.length} 张。${failed[0] || ""}` }
@@ -481,30 +533,57 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
   };
 
   const batchStatus = async (status: ImageStatus) => {
-    if (selectedIds.length === 0) return;
+    if (selectedIds.length === 0 || batchUpdating) return;
     const ids = [...selectedIds];
-    for (const id of ids) {
-      await runImageUpdate(() => updateImageStatus(id, status), "批量状态已更新");
+    setBatchUpdating(true);
+    try {
+      const results = await Promise.allSettled(ids.map(async (id) => {
+        const res = await updateImageStatus(id, status);
+        if (!res.ok || !res.data) {
+          throw new Error(res.error?.message || `${id} 更新失败`);
+        }
+        return res.data;
+      }));
+
+      const successImages = results
+        .filter((result): result is PromiseFulfilledResult<EventImageData> => result.status === "fulfilled")
+        .map((result) => result.value);
+      const failures = results
+        .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+        .map((result) => result.reason?.message || "图片更新失败");
+
+      successImages.forEach((image) => replacePhoto(withImageCacheKey(image, String(Date.now()))));
+      setSelectedIds([]);
+      await loadImages();
+      await loadStatusCounts();
+
+      setMessage(failures.length > 0
+        ? { tone: "warning", title: "批量状态部分完成", body: `成功 ${successImages.length} 张，失败 ${failures.length} 张。${failures[0] || ""}` }
+        : { tone: "success", title: "批量状态已更新", body: `已更新 ${successImages.length} 张图片。` });
+    } finally {
+      setBatchUpdating(false);
     }
   };
 
   const resetFilters = () => {
     setSearch("");
-    setMinRating(0);
+    setRatingValue("all");
+    setRatingMode("gte");
     setStatusFilter("all");
     setSourceType("all");
   };
 
   const movePreview = useCallback((direction: 1 | -1) => {
     const currentId = previewPhotoId ?? activePhotoId;
-    const index = photos.findIndex((photo) => photo.id === currentId);
-    const nextIndex = index === -1 ? 0 : (index + direction + photos.length) % photos.length;
-    const next = photos[nextIndex];
+    const source = previewPhotos.length > 0 ? previewPhotos : photos;
+    const index = source.findIndex((photo) => photo.id === currentId);
+    const nextIndex = index === -1 ? 0 : (index + direction + source.length) % source.length;
+    const next = source[nextIndex];
     if (next) {
       setActivePhotoId(next.id);
       setPreviewPhotoId(next.id);
     }
-  }, [activePhotoId, photos, previewPhotoId]);
+  }, [activePhotoId, photos, previewPhotoId, previewPhotos]);
 
   useEffect(() => {
     if (!previewPhotoId) return;
@@ -515,7 +594,7 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
       if (editing && event.key !== "Escape") return;
 
       if (event.key === "Escape") {
-        setPreviewPhotoId(null);
+        closePreview();
         return;
       }
       if (event.key === "ArrowRight") {
@@ -542,12 +621,13 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [movePreview, previewPhoto, previewPhotoId]);
+  }, [closePreview, movePreview, previewPhoto, previewPhotoId]);
 
-  const emptyTitle = selectedEventId && total === 0 && !search && minRating === 0 && statusFilter === "all" ? "暂无图片" : "当前筛选没有图片";
+  const noActiveFilters = !search && ratingValue === "all" && statusFilter === "all" && sourceType === "all";
+  const emptyTitle = selectedEventId && total === 0 && noActiveFilters ? "暂无图片" : "当前筛选没有图片";
   const emptyBody = trashMode
     ? "图片回收站为空。逻辑删除后的图片会显示在这里。"
-    : selectedEventId && total === 0 && !search && minRating === 0 && statusFilter === "all"
+    : selectedEventId && total === 0 && noActiveFilters
     ? "暂无图片，请先导入图片。"
     : "当前筛选条件下没有可显示的图片。可以清空筛选、降低星级条件，或切换到全部状态。";
   const selectedPhotos = photos.filter((photo) => selectedIds.includes(photo.id));
@@ -560,7 +640,8 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
 
   const filterSidebarProps = {
     events,
-    minRating,
+    ratingMode,
+    ratingValue,
     search,
     selectedEventId,
     sourceType,
@@ -571,9 +652,14 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
       setSelectedIds([]);
       setActivePhotoId(null);
       setPreviewPhotoId(null);
+      setPreviewSnapshot([]);
       setFilterPanelOpen(false);
     },
-    onMinRatingChange: setMinRating,
+    onRatingModeChange: setRatingMode,
+    onRatingValueChange: (value: RatingFilterValue) => {
+      setRatingValue(value);
+      if (value === 0) setRatingMode("eq");
+    },
     onReset: resetFilters,
     onSearchChange: setSearch,
     onSourceTypeChange: setSourceType,
@@ -588,7 +674,7 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
     },
     onClearActive: () => setActivePhotoId(null),
     onOpenPreview: () => {
-      if (activePhoto) setPreviewPhotoId(activePhoto.id);
+      if (activePhoto) openPreview(activePhoto.id);
     },
     onRatingChange: (rating: number) => {
       if (activePhoto) handleRatingChange(activePhoto.id, rating);
@@ -627,6 +713,7 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
           search={search}
           selectedCount={selectedIds.length}
           onBatchStatus={batchStatus}
+          batchBusy={batchUpdating}
           onClearSelection={() => {
             setSelectedIds([]);
             setActivePhotoId(null);
@@ -650,6 +737,7 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
             setSelectedIds([]);
             setActivePhotoId(null);
             setPreviewPhotoId(null);
+            setPreviewSnapshot([]);
           } : undefined}
         />
 
@@ -671,7 +759,7 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
               selectedIds={selectedIds}
               onActivate={setActivePhotoId}
               onDownloadOriginal={(id) => handleDownloadImage(id, "original")}
-              onOpenPreview={setPreviewPhotoId}
+              onOpenPreview={openPreview}
               onToggleSelected={toggleSelected}
             />
           )}
@@ -730,9 +818,9 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
       {previewPhoto && (
         <PreviewModal
           photo={previewPhoto}
-          photos={photos}
+          photos={previewPhotos}
           onCategoryChange={handleCategoryChange}
-          onClose={() => setPreviewPhotoId(null)}
+          onClose={closePreview}
           onDownload={handleDownloadImage}
           onNext={() => movePreview(1)}
           onPrevious={() => movePreview(-1)}

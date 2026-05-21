@@ -4,14 +4,19 @@ import { Notice } from "../../components/ui/States";
 import {
   downloadEditPackage,
   EditedUploadData,
+  EditedUploadTaskData,
   EditPackageData,
   EventData,
   fetchEditPackages,
   fetchEvents,
+  fetchTask,
   getClientApiBase,
+  TaskData,
   uploadEditedImages
 } from "../../lib/api";
 import { cn } from "../../lib/cn";
+import { subscribeRealtimeTaskEvent } from "../../lib/socket";
+import { formatTaskDuration, getTaskStats } from "../../lib/taskStats";
 
 const visibleStatuses = new Set(["active", "reviewing", "draft"]);
 const supportedEditedExtensions = new Set([".jpg", ".jpeg"]);
@@ -76,6 +81,28 @@ async function getDroppedFiles(dataTransfer: DataTransfer): Promise<File[]> {
   return files.flat();
 }
 
+function isEditedUploadTaskData(data: EditedUploadData | EditedUploadTaskData): data is EditedUploadTaskData {
+  return typeof (data as EditedUploadTaskData).taskId === "string";
+}
+
+function getEditedUploadResultFromTask(task: TaskData): EditedUploadData | null {
+  const result = task.result;
+  if (!result) return null;
+  const total = Number(result.total ?? task.total ?? 0);
+  const matched = Number(result.matched ?? task.successCount ?? 0);
+  const unmatched = Number(result.unmatched ?? task.failedCount ?? 0);
+  return {
+    total: Number.isFinite(total) ? total : 0,
+    matched: Number.isFinite(matched) ? matched : 0,
+    unmatched: Number.isFinite(unmatched) ? unmatched : 0,
+    errors: Array.isArray(result.errors) ? result.errors as EditedUploadData["errors"] : task.errors.map((error) => ({
+      filename: error.filename ?? "",
+      reason: error.reason
+    })),
+    items: Array.isArray(result.items) ? result.items as EditedUploadData["items"] : []
+  };
+}
+
 export function ClientRetouchPage() {
   const hostAddress = getClientApiBase();
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -90,6 +117,8 @@ export function ClientRetouchPage() {
   const [downloadingPackageId, setDownloadingPackageId] = useState("");
   const [uploading, setUploading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
+  const [activeTaskId, setActiveTaskId] = useState("");
+  const [activeTask, setActiveTask] = useState<TaskData | null>(null);
   const [message, setMessage] = useState<{ tone: "success" | "warning" | "danger" | "info"; title: string; body: string } | null>(null);
 
   const selectedEvent = useMemo(() => events.find((event) => event.id === selectedEventId), [events, selectedEventId]);
@@ -143,6 +172,49 @@ export function ClientRetouchPage() {
     void loadPackages();
   }, [loadPackages]);
 
+  const applyUploadTask = useCallback((task: TaskData) => {
+    setActiveTask(task);
+    if (task.status === "success") {
+      const result = getEditedUploadResultFromTask(task);
+      if (result) {
+        setUploadResult(result);
+        setMessage({ tone: "success", title: "已修图回传完成", body: `匹配 ${result.matched} 张，未匹配 ${result.unmatched} 张。` });
+      }
+      setActiveTaskId("");
+      setUploading(false);
+    } else if (task.status === "failed") {
+      setMessage({ tone: "danger", title: "已修图回传失败", body: task.errors[0]?.reason || "回传任务失败。" });
+      setActiveTaskId("");
+      setUploading(false);
+    } else if (task.status === "cancelled") {
+      setMessage({ tone: "warning", title: "已修图回传已取消", body: "未处理的文件已停止回传，已处理成功的图片会保留。" });
+      setActiveTaskId("");
+      setUploading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!activeTaskId) return;
+    let cancelled = false;
+    fetchTask(activeTaskId)
+      .then((res) => {
+        if (!cancelled && res.ok && res.data) applyUploadTask(res.data);
+      })
+      .catch(() => {
+        // Task center remains the source of truth; page-level state is updated by realtime events.
+      });
+
+    const unsubscribe = subscribeRealtimeTaskEvent((payload) => {
+      const task = { ...payload, id: payload.id || payload.taskId || "" } as TaskData;
+      if (task.id === activeTaskId) applyUploadTask(task);
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [activeTaskId, applyUploadTask]);
+
   const handleSelectFiles = (files: File[] | FileList | null) => {
     const selected = Array.from(files ?? []);
     const manifest = selected.find((file) => file.name.toLowerCase() === "edit_manifest.json") ?? null;
@@ -177,23 +249,53 @@ export function ClientRetouchPage() {
     if (!selectedEventId || editedFiles.length === 0) return;
     setUploading(true);
     setMessage(null);
+    let taskStarted = false;
     try {
       const res = await uploadEditedImages(selectedEventId, {
         files: editedFiles,
         manifestFile
       });
       if (res.ok && res.data) {
-        setUploadResult(res.data);
-        setMessage({ tone: "success", title: "已修图回传完成", body: `匹配 ${res.data.matched} 张，未匹配 ${res.data.unmatched} 张。` });
+        if (isEditedUploadTaskData(res.data)) {
+          taskStarted = true;
+          const now = new Date().toISOString();
+          setActiveTaskId(res.data.taskId);
+          setActiveTask({
+            id: res.data.taskId,
+            type: "edited_upload",
+            eventId: selectedEventId,
+            title: `回传已修图 ${res.data.total} 张`,
+            status: "pending",
+            total: res.data.total,
+            finished: 0,
+            successCount: 0,
+            failedCount: 0,
+            skippedCount: 0,
+            errors: [],
+            result: null,
+            createdAt: now,
+            startedAt: "",
+            updatedAt: now,
+            finishedAt: "",
+            elapsedMs: 0,
+            estimatedRemainingMs: null,
+            currentFileName: ""
+          });
+          setMessage({ tone: "info", title: "已修图回传任务已创建", body: "处理进度会在任务中心和本页面同步显示。" });
+        } else {
+          setUploadResult(res.data);
+          setMessage({ tone: "success", title: "已修图回传完成", body: `匹配 ${res.data.matched} 张，未匹配 ${res.data.unmatched} 张。` });
+        }
       } else {
         setMessage({ tone: "danger", title: "已修图回传失败", body: res.error?.message || "上传失败。" });
       }
     } catch (err: any) {
       setMessage({ tone: "danger", title: "已修图回传失败", body: err?.message || "请求失败，请检查主机连接。" });
     } finally {
-      setUploading(false);
+      if (!taskStarted) setUploading(false);
     }
   };
+  const activeTaskStats = getTaskStats(activeTask);
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-[#F8F9FA]">
@@ -347,6 +449,22 @@ export function ClientRetouchPage() {
                 <UploadCloud size={16} />
                 {uploading ? "上传中..." : "上传已修图"}
               </button>
+
+              {activeTask && (activeTask.status === "pending" || activeTask.status === "running") && (
+                <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50/70 p-3">
+                  <div className="flex items-center justify-between text-xs font-medium text-blue-900">
+                    <span>正在处理回传</span>
+                    <span>{activeTaskStats.processed}/{activeTaskStats.total || 0}</span>
+                  </div>
+                  <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white">
+                    <div className="h-full rounded-full bg-blue-500 transition-all" style={{ width: `${activeTaskStats.percent}%` }} />
+                  </div>
+                  <p className="mt-2 text-xs text-blue-700">
+                    成功 {activeTaskStats.success} · 失败 {activeTaskStats.failed} · 剩余 {formatTaskDuration(activeTaskStats.estimatedRemainingMs)}
+                    {activeTaskStats.currentFileName ? ` · ${activeTaskStats.currentFileName}` : ""}
+                  </p>
+                </div>
+              )}
             </div>
 
             <div className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">

@@ -9,15 +9,20 @@ import {
   deleteEditPackage,
   downloadEditPackage,
   EditedUploadData,
+  EditedUploadTaskData,
   EditPackageData,
   EventData,
   EventImageData,
   fetchEditPackages,
   fetchEventImages,
   fetchEvents,
+  fetchTask,
+  TaskData,
   uploadEditedImages
 } from "../../lib/api";
 import { cn } from "../../lib/cn";
+import { subscribeRealtimeTaskEvent } from "../../lib/socket";
+import { formatTaskDuration, getTaskStats } from "../../lib/taskStats";
 
 const visibleStatuses = new Set(["active", "reviewing", "draft"]);
 const supportedEditedExtensions = new Set([".jpg", ".jpeg"]);
@@ -35,6 +40,28 @@ function createCustomPackageDraft(index: number): CustomPackageDraft {
     id: `custom_${Date.now()}_${Math.random().toString(16).slice(2)}`,
     name: `自定义包 ${index}`,
     imageIds: []
+  };
+}
+
+function isEditedUploadTaskData(data: EditedUploadData | EditedUploadTaskData): data is EditedUploadTaskData {
+  return typeof (data as EditedUploadTaskData).taskId === "string";
+}
+
+function getEditedUploadResultFromTask(task: TaskData): EditedUploadData | null {
+  const result = task.result;
+  if (!result) return null;
+  const total = Number(result.total ?? task.total ?? 0);
+  const matched = Number(result.matched ?? task.successCount ?? 0);
+  const unmatched = Number(result.unmatched ?? task.failedCount ?? 0);
+  return {
+    total: Number.isFinite(total) ? total : 0,
+    matched: Number.isFinite(matched) ? matched : 0,
+    unmatched: Number.isFinite(unmatched) ? unmatched : 0,
+    errors: Array.isArray(result.errors) ? result.errors as EditedUploadData["errors"] : task.errors.map((error) => ({
+      filename: error.filename ?? "",
+      reason: error.reason
+    })),
+    items: Array.isArray(result.items) ? result.items as EditedUploadData["items"] : []
   };
 }
 
@@ -694,6 +721,63 @@ function RetouchDone({ canUpload, selectedEventId, uploadResult, uploading, onRe
   const [manifestFile, setManifestFile] = useState<File | null>(null);
   const [editedFiles, setEditedFiles] = useState<File[]>([]);
   const [dragActive, setDragActive] = useState(false);
+  const [activeTaskId, setActiveTaskId] = useState("");
+  const [activeTask, setActiveTask] = useState<TaskData | null>(null);
+
+  const applyUploadTask = useCallback((task: TaskData) => {
+    setActiveTask(task);
+    if (task.status === "success") {
+      const result = getEditedUploadResultFromTask(task);
+      if (result) {
+        onResult(result);
+        onSetMessage({
+          tone: "success",
+          title: "已修图回传完成",
+          body: `匹配 ${result.matched} 张，未匹配 ${result.unmatched} 张。`
+        });
+      }
+      setActiveTaskId("");
+      onUploadingChange(false);
+    } else if (task.status === "failed") {
+      onSetMessage({
+        tone: "danger",
+        title: "已修图回传失败",
+        body: task.errors[0]?.reason || "回传任务失败。"
+      });
+      setActiveTaskId("");
+      onUploadingChange(false);
+    } else if (task.status === "cancelled") {
+      onSetMessage({
+        tone: "warning",
+        title: "已修图回传已取消",
+        body: "未处理的文件已停止回传，已处理成功的图片会保留。"
+      });
+      setActiveTaskId("");
+      onUploadingChange(false);
+    }
+  }, [onResult, onSetMessage, onUploadingChange]);
+
+  useEffect(() => {
+    if (!activeTaskId) return;
+    let cancelled = false;
+    fetchTask(activeTaskId)
+      .then((res) => {
+        if (!cancelled && res.ok && res.data) applyUploadTask(res.data);
+      })
+      .catch(() => {
+        // Task center remains the source of truth; page-level message is updated by realtime events.
+      });
+
+    const unsubscribe = subscribeRealtimeTaskEvent((payload) => {
+      const task = { ...payload, id: payload.id || payload.taskId || "" } as TaskData;
+      if (task.id === activeTaskId) applyUploadTask(task);
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [activeTaskId, applyUploadTask]);
 
   const handleSelectFiles = (files: File[] | FileList | null) => {
     const selected = Array.from(files ?? []);
@@ -714,22 +798,51 @@ function RetouchDone({ canUpload, selectedEventId, uploadResult, uploading, onRe
   const handleUpload = async () => {
     if (!selectedEventId || editedFiles.length === 0) return;
     onUploadingChange(true);
+    let taskStarted = false;
     try {
       const res = await uploadEditedImages(selectedEventId, {
         files: editedFiles,
         manifestFile
       });
       if (res.ok && res.data) {
-        onResult(res.data);
+        if (isEditedUploadTaskData(res.data)) {
+          taskStarted = true;
+          setActiveTaskId(res.data.taskId);
+          setActiveTask({
+            id: res.data.taskId,
+            type: "edited_upload",
+            eventId: selectedEventId,
+            title: `回传已修图 ${res.data.total} 张`,
+            status: "pending",
+            total: res.data.total,
+            finished: 0,
+            successCount: 0,
+            failedCount: 0,
+            skippedCount: 0,
+            errors: [],
+            result: null,
+            createdAt: new Date().toISOString(),
+            startedAt: "",
+            updatedAt: new Date().toISOString(),
+            finishedAt: "",
+            elapsedMs: 0,
+            estimatedRemainingMs: null,
+            currentFileName: ""
+          });
+          onSetMessage({ tone: "info", title: "已修图回传任务已创建", body: "处理进度会在任务中心和本页面同步显示。" });
+        } else {
+          onResult(res.data);
+        }
       } else {
         onSetMessage({ tone: "danger", title: "已修图上传失败", body: res.error?.message || "上传失败。" });
       }
     } catch (err: any) {
       onSetMessage({ tone: "danger", title: "已修图上传失败", body: err?.message || "请求失败。" });
     } finally {
-      onUploadingChange(false);
+      if (!taskStarted) onUploadingChange(false);
     }
   };
+  const activeTaskStats = getTaskStats(activeTask);
 
   return (
     <div className="flex min-h-[520px] flex-1 flex-col rounded-2xl border border-slate-100 bg-white p-4 shadow-sm xl:p-6">
@@ -766,6 +879,22 @@ function RetouchDone({ canUpload, selectedEventId, uploadResult, uploading, onRe
         ref={inputRef}
         type="file"
       />
+
+      {activeTask && (activeTask.status === "pending" || activeTask.status === "running") && (
+        <div className="mb-5 rounded-xl border border-blue-100 bg-blue-50/70 p-4">
+          <div className="flex items-center justify-between gap-4 text-sm">
+            <span className="font-medium text-blue-900">正在处理已修图回传</span>
+            <span className="text-blue-700">{activeTaskStats.processed}/{activeTaskStats.total || 0}</span>
+          </div>
+          <div className="mt-3 h-2 overflow-hidden rounded-full bg-white">
+            <div className="h-full rounded-full bg-blue-500 transition-all" style={{ width: `${activeTaskStats.percent}%` }} />
+          </div>
+          <div className="mt-2 text-xs text-blue-700">
+            成功 {activeTaskStats.success} · 失败 {activeTaskStats.failed} · 剩余 {formatTaskDuration(activeTaskStats.estimatedRemainingMs)}
+            {activeTaskStats.currentFileName ? ` · ${activeTaskStats.currentFileName}` : ""}
+          </div>
+        </div>
+      )}
 
       <div className="grid flex-1 gap-6 xl:grid-cols-[1fr_340px]">
         <div

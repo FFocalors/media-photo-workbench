@@ -28,6 +28,153 @@
 
 ## 开发记录
 
+### v0.16.0 开发阶段：16.5 数据库备份与数据库位置迁移
+- **日期**：2026-05-21
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - 设置页数据库区域接入真实“立即备份”能力，备份文件写入当前图片仓库 `metadata/database-backups/`。
+  - 新增启动自动备份策略：仓库可写时默认启用，每 24 小时最多生成一次自动备份，并保留最近 10 份自动备份。
+  - 数据库配置新增独立 `database.path`、`autoBackupEnabled`、`lastAutoBackupAt`、`autoBackupRetention`，明确区分数据库路径和图片仓库路径。
+  - 后端启动时优先使用 `config.database.path`，未配置时开发模式使用项目 `data/app.db`，打包模式使用 userData 下的 `data/app.db`。
+  - 新增数据库位置迁移接口：迁移前强制备份，使用 SQLite backup 生成目标数据库，验证成功后写入配置并提示重启生效。
+  - 迁移失败时回滚配置并清理临时文件；旧数据库不会删除，用户图片仓库不会删除。
+  - `/api/settings`、`/api/health` 和设置页展示当前数据库路径、配置路径、默认路径、最近自动备份和备份结果。
+- **修改文件**：
+  - `src-server/config/config.ts`
+  - `src-server/db/database.ts`
+  - `src-server/index.ts`
+  - `src-server/routes/health.ts`
+  - `src-server/routes/settings.ts`
+  - `src-server/services/databaseMaintenance.ts`
+  - `src-server/utils/paths.ts`
+  - `src/lib/api.ts`
+  - `src/pages/host/Settings.tsx`
+  - `API_SPEC.md`
+  - `CHANGELOG.md`
+  - `DEVELOPMENT_LOG.md`
+  - `README.md`
+  - `ROADMAP.md`
+  - `TESTING_NOTES.md`
+- **验证方式**：
+  - 执行 `pnpm build` 通过。
+- **安全策略**：
+  - 备份失败不阻断主流程。
+  - 自动备份失败只记录 warning，不影响启动。
+  - 数据库迁移失败不修改配置或自动回滚配置。
+  - 迁移完成后不删除旧数据库，需要重启后才切换到新路径。
+  - 图片仓库和数据库路径是两个独立概念，任何数据库维护操作都不会删除用户图片仓库。
+- **未完成事项**：
+  - 本轮不提交、不打 tag、不创建 Release；待后续 16.x 修复完成后统一进入 v0.16.0。
+
+### v0.16.0 开发阶段：16.4 拖拽导入 / 拖拽上传体验增强
+- **日期**：2026-05-21
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - 主机导入页新增拖拽区域，支持拖入 JPG/JPEG/PNG 图片文件，拖入后形成待导入文件列表并继续通过 `host_import` 后台任务处理。
+  - 主机导入页支持拖入文件夹，拖入后沿用现有文件夹导入逻辑，只扫描文件夹第一层图片，不递归子目录。
+  - 客户端上传页新增拖拽上传区域，支持拖入单张或多张 JPG/JPEG/PNG 图片，并复用现有客户端上传和后端处理任务。
+  - 客户端拖入文件夹时显示“暂不支持拖拽文件夹”的明确提示，不会崩溃或误触发上传。
+  - Electron preload 增加 `getPathForFile` 和 `inspectDroppedPaths` 能力，主进程新增只读路径检查 IPC，用于识别拖拽文件 / 文件夹、扩展名和支持状态。
+  - 拖拽入口继续复用现有导入 / 上传 / 同一活动内去重 / 任务中心流程，不新增第二套导入逻辑。
+- **修改文件**：
+  - `electron/main.cjs`
+  - `electron/preload.cjs`
+  - `src/global.d.ts`
+  - `src/pages/host/Import.tsx`
+  - `src/pages/client/ClientUpload.tsx`
+  - `README.md`
+  - `API_SPEC.md`
+  - `CHANGELOG.md`
+  - `DEVELOPMENT_LOG.md`
+  - `ROADMAP.md`
+  - `TESTING_NOTES.md`
+- **验证方式**：
+  - 执行 `pnpm build` 通过。
+- **未完成事项**：
+  - 客户端浏览器端暂不支持拖拽文件夹上传；如需上传文件夹，仍应在主机导入页拖拽文件夹或使用选择文件夹入口。
+  - 本轮不提交、不打 tag、不创建 Release；待后续 16.x 修复完成后统一进入 v0.16.0。
+
+### v0.16.0 开发阶段：16.3 任务中心覆盖补齐
+- **日期**：2026-05-20
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - 梳理现有任务系统覆盖范围，确认主机导入、客户端上传处理、批量 ZIP 下载、待修包生成、发布导出、活动归档 prepare 和归档 cleanup 均复用统一任务模型与 `task-updated`。
+  - 已修图回传新增后台 `edited_upload` 任务，上传请求快速返回 `taskId`，后端逐张处理匹配、保存、缩略图 / 预览图刷新和状态更新。
+  - 主机“已修图回传”和客户端“修图任务”页面会监听对应任务，显示总数、已处理、匹配成功、未匹配、错误摘要、当前文件和预计剩余时间，并在任务完成后同步页面结果。
+  - 任务中心补充 `edited_upload` 类型识别、中文任务名和取消入口，任务列表对导入、上传处理、回传、下载、导出、待修包和归档清理的展示更一致。
+  - API 文档补充任务系统通用字段、已接入任务类型和已修图回传任务化响应。
+- **修改文件**：
+  - `src-server/services/editWorkflow.ts`
+  - `src-server/routes/events.ts`
+  - `src/components/tasks/TaskCenter.tsx`
+  - `src/pages/host/Retouch.tsx`
+  - `src/pages/client/ClientRetouch.tsx`
+  - `src/lib/api.ts`
+  - `API_SPEC.md`
+  - `CHANGELOG.md`
+  - `DEVELOPMENT_LOG.md`
+  - `ROADMAP.md`
+  - `TESTING_NOTES.md`
+- **验证方式**：
+  - 执行 `pnpm build` 通过。
+- **未完成事项**：
+  - 本轮不提交、不打 tag、不创建 Release；待后续 16.x 修复完成后统一进入 v0.16.0。
+
+### v0.16.0 开发阶段：16.2 任务中心一致性与导入结果面板修复
+- **日期**：2026-05-20
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - 修复主机导入页右侧“处理结果”只显示初始 0/0/0、不随后台导入任务完成结果更新的问题。
+  - 导入页在 `import/start` 返回 `taskId` 后，会读取一次 `GET /api/tasks/:taskId` 并监听对应 Socket.IO `task-updated`，右侧面板与任务中心使用同一任务状态来源。
+  - 新增 `src/lib/taskStats.ts`，统一归一化任务统计字段，兼容 `successCount / failedCount / skippedCount` 和 `result.success / result.failed / result.skipped` 等历史字段。
+  - 任务中心、主机导入页、客户端上传页统一使用任务统计工具，显示总数、已处理、成功、失败、跳过、进度、已用时间、预计剩余时间和错误摘要。
+  - 客户端上传页在多图上传后同步显示后端处理任务进度，避免任务中心完成但页面仍显示“后台处理”的不一致。
+  - 待修包生成、发布导出和归档 prepare 的轻量任务记录补充图片级成功 / 失败 / 跳过统计，任务中心完成结果更接近业务页面结果。
+- **修改文件**：
+  - `src/lib/taskStats.ts`
+  - `src/components/tasks/TaskCenter.tsx`
+  - `src/pages/host/Import.tsx`
+  - `src/pages/client/ClientUpload.tsx`
+  - `src-server/routes/events.ts`
+  - `API_SPEC.md`
+  - `CHANGELOG.md`
+  - `DEVELOPMENT_LOG.md`
+  - `ROADMAP.md`
+  - `TESTING_NOTES.md`
+- **验证方式**：
+  - 执行 `pnpm build`。
+- **未完成事项**：
+  - 本轮不提交、不打 tag、不创建 Release；待后续 16.x 修复完成后统一进入 v0.16.0。
+
+### v0.16.0 开发阶段：16.1 实战问题修复第一批
+- **日期**：2026-05-20
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - 为图片墙缩略图、预览弹窗大图和底部胶片条增加有限自动重试，降低实时接收新图后资源短暂不可读或缓存失败导致的空图问题。
+  - 实时 `image-created` / `image-updated` 写入图片墙时为缩略图和预览图 URL 增加缓存键，避免客户端继续使用失败缓存。
+  - 批量状态修改改为基于选中 ID 快照并发执行，单张失败不阻断其他图片，完成后统一显示成功 / 失败数量并刷新列表和状态统计。
+  - 预览弹窗打开时冻结当前图片列表 snapshot；在筛选结果中修改当前图片状态后，预览不再立即关闭或跳出当前浏览会话，关闭预览后再刷新图片墙筛选结果。
+  - 星级筛选新增“等于 / 及以上”两种模式，后端图片查询接口新增 `ratingMode=eq | gte` 参数；不传 `ratingMode` 时仍按旧版“几星及以上”处理。
+- **修改文件**：
+  - `src/pages/host/PhotoWall.tsx`
+  - `src/components/gallery/FilterSidebar.tsx`
+  - `src/components/gallery/GalleryToolbar.tsx`
+  - `src/components/gallery/PhotoGrid.tsx`
+  - `src/components/gallery/PreviewModal.tsx`
+  - `src/components/gallery/RetryableImage.tsx`
+  - `src/lib/api.ts`
+  - `src-server/routes/events.ts`
+  - `src-server/services/images.ts`
+  - `API_SPEC.md`
+  - `CHANGELOG.md`
+  - `DEVELOPMENT_LOG.md`
+  - `ROADMAP.md`
+  - `TESTING_NOTES.md`
+- **验证方式**：
+  - 执行 `pnpm build` 通过。
+- **未完成事项**：
+  - 本轮不提交、不打 tag、不创建 Release；待后续 16.x 修复完成后统一进入 v0.16.0。
+
 ### v0.15.0-rc.0：发布候选整理与版本同步
 - **日期**：2026-05-20
 - **开发者 / 工具**：Codex

@@ -1,9 +1,11 @@
-import { AlertCircle, CheckCircle2, FolderOpen, Image, Loader2, Play, Search, XCircle } from "lucide-react";
+import { AlertCircle, CheckCircle2, FolderOpen, Image, Loader2, Play, Search, UploadCloud, XCircle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Step } from "../../components/ui/FormControls";
 import { Notice } from "../../components/ui/States";
-import { EventData, fetchEvents, ImportScanData, ImportStartData, ImportTaskStartData, scanImportFolder, startImport } from "../../lib/api";
+import { EventData, fetchEvents, fetchTask, ImportScanData, ImportStartData, ImportTaskStartData, scanImportFolder, startImport, type TaskData } from "../../lib/api";
 import { cn } from "../../lib/cn";
+import { subscribeRealtimeTaskEvent } from "../../lib/socket";
+import { formatTaskDuration, getTaskStats, taskStatusLabel } from "../../lib/taskStats";
 
 type MessageState = {
   tone: "success" | "warning" | "danger" | "info";
@@ -12,6 +14,8 @@ type MessageState = {
 };
 
 type ImportSourceMode = "folder" | "files";
+
+const SUPPORTED_IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png"]);
 
 export function ImportPage() {
   const [events, setEvents] = useState<EventData[]>([]);
@@ -25,12 +29,17 @@ export function ImportPage() {
   const [scanResult, setScanResult] = useState<ImportScanData | null>(null);
   const [importResult, setImportResult] = useState<ImportStartData | null>(null);
   const [startedTask, setStartedTask] = useState<ImportTaskStartData | null>(null);
+  const [activeTask, setActiveTask] = useState<TaskData | null>(null);
+  const [dragActive, setDragActive] = useState(false);
   const [message, setMessage] = useState<MessageState | null>(null);
 
   const selectedEvent = useMemo(() => events.find((event) => event.id === selectedEventId), [events, selectedEventId]);
   const hasSelectedFiles = sourceMode === "files" && selectedFiles.length > 0;
   const canStartImport = sourceMode === "folder" ? Boolean(scanResult && scanResult.count > 0) : hasSelectedFiles;
-  const step = importing || startedTask ? 3 : importResult ? 4 : scanResult || hasSelectedFiles ? 2 : 1;
+  const displayTask = activeTask ?? createInitialImportTask(startedTask);
+  const taskStats = getTaskStats(displayTask);
+  const taskTerminal = Boolean(displayTask && (displayTask.status === "success" || displayTask.status === "failed" || displayTask.status === "cancelled"));
+  const step = importing || (displayTask && !taskTerminal) ? 3 : importResult || taskTerminal ? 4 : scanResult || hasSelectedFiles ? 2 : 1;
 
   useEffect(() => {
     let cancelled = false;
@@ -64,6 +73,191 @@ export function ImportPage() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!startedTask?.taskId) {
+      setActiveTask(null);
+      return;
+    }
+
+    let cancelled = false;
+    const taskId = startedTask.taskId;
+
+    fetchTask(taskId)
+      .then((res) => {
+        if (!cancelled && res.ok && res.data) {
+          setActiveTask(res.data);
+        }
+      })
+      .catch(() => {
+        // Socket updates will keep the panel moving when the initial fetch is unavailable.
+      });
+
+    const unsubscribe = subscribeRealtimeTaskEvent((payload) => {
+      const payloadTaskId = payload.id || payload.taskId;
+      if (payloadTaskId !== taskId) return;
+      const task = {
+        ...payload,
+        id: payloadTaskId
+      } as TaskData;
+      setActiveTask(task);
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [startedTask?.taskId]);
+
+  const resetImportStateForNewSource = () => {
+    setScanResult(null);
+    setImportResult(null);
+    setStartedTask(null);
+    setActiveTask(null);
+  };
+
+  const applyDroppedFilesFallback = (paths: string[], unavailableReason?: string): boolean => {
+    const supported = paths.filter((item) => SUPPORTED_IMAGE_EXTENSIONS.has(getExtension(item)));
+    if (supported.length === 0) {
+      setMessage({
+        tone: "warning",
+        title: "拖拽路径检查不可用",
+        body: [
+          "当前 Electron 主进程未加载拖拽路径检查能力，无法判断拖入内容是否为文件夹。",
+          unavailableReason ? `原因：${unavailableReason}` : "",
+          "请重启桌面应用后再拖拽文件夹，或使用“选择文件夹 / 选择图片文件”按钮。"
+        ].filter(Boolean).join(" ")
+      });
+      return false;
+    }
+
+    setSourceMode("files");
+    setSelectedFiles(supported);
+    setSourceFolder("");
+    resetImportStateForNewSource();
+    setMessage({
+      tone: unavailableReason ? "warning" : "info",
+      title: unavailableReason ? "已使用兼容模式接收拖拽图片" : "已接收拖拽图片",
+      body: [
+        `已识别 ${supported.length} 个 JPG/JPEG/PNG 图片文件，可直接开始导入。`,
+        unavailableReason ? "文件夹拖拽需要重启桌面应用以加载最新主进程能力。" : ""
+      ].filter(Boolean).join(" ")
+    });
+    return true;
+  };
+
+  const handleDropPaths = async (paths: string[]) => {
+    if (paths.length === 0) {
+      setMessage({
+        tone: "warning",
+        title: "无法读取拖拽路径",
+        body: "当前环境没有提供本机文件路径，请使用“选择文件夹”或“选择图片文件”按钮。"
+      });
+      return;
+    }
+
+    if (!window.mediaPhotoWorkbench?.inspectDroppedPaths) {
+      applyDroppedFilesFallback(paths);
+      return;
+    }
+
+    let inspected: DroppedPathInfo[] = [];
+    try {
+      inspected = await window.mediaPhotoWorkbench.inspectDroppedPaths(paths);
+    } catch (err: any) {
+      applyDroppedFilesFallback(paths, err?.message || "拖拽路径检查 IPC 未注册。");
+      return;
+    }
+    const directories = inspected.filter((item) => item.isDirectory);
+    const supportedFiles = inspected.filter((item) => item.isFile && item.supported).map((item) => item.path);
+    const unsupported = inspected.filter((item) => item.isFile && !item.supported && !item.error);
+    const failed = inspected.filter((item) => item.error);
+
+    if (supportedFiles.length > 0) {
+      setSourceMode("files");
+      setSelectedFiles(supportedFiles);
+      setSourceFolder("");
+      resetImportStateForNewSource();
+
+      const details = [
+        `已接收 ${supportedFiles.length} 个 JPG/JPEG/PNG 图片文件，可直接开始导入。`,
+        directories.length > 0 ? "检测到文件和文件夹混合拖入：本次优先导入拖入的图片文件，文件夹请单独拖入。" : "",
+        unsupported.length > 0 ? `已跳过不支持格式：${unsupported.slice(0, 5).map((item) => item.name).join("、")}${unsupported.length > 5 ? " 等" : ""}` : "",
+        failed.length > 0 ? `有 ${failed.length} 个路径无法读取。` : ""
+      ].filter(Boolean).join(" ");
+
+      setMessage({ tone: unsupported.length > 0 || directories.length > 0 || failed.length > 0 ? "warning" : "info", title: "已接收拖拽图片", body: details });
+      return;
+    }
+
+    if (directories.length > 0) {
+      const folder = directories[0];
+      setSourceMode("folder");
+      setSourceFolder(folder.path);
+      setSelectedFiles([]);
+      resetImportStateForNewSource();
+
+      setMessage({
+        tone: directories.length > 1 || unsupported.length > 0 || failed.length > 0 ? "warning" : "info",
+        title: "已接收拖拽文件夹",
+        body: [
+          `已选择文件夹“${folder.name || folder.path}”，点击扫描后会统计第一层 JPG/JPEG/PNG 图片。`,
+          directories.length > 1 ? `本次只使用第一个文件夹，另外 ${directories.length - 1} 个文件夹未处理。` : "",
+          unsupported.length > 0 ? `已跳过不支持格式：${unsupported.slice(0, 5).map((item) => item.name).join("、")}${unsupported.length > 5 ? " 等" : ""}` : "",
+          failed.length > 0 ? `有 ${failed.length} 个路径无法读取。` : ""
+        ].filter(Boolean).join(" ")
+      });
+      return;
+    }
+
+    setMessage({
+      tone: "warning",
+      title: "未找到支持的图片",
+      body: unsupported.length > 0
+        ? `拖入内容中没有 JPG/JPEG/PNG 图片。已跳过：${unsupported.slice(0, 5).map((item) => item.name).join("、")}${unsupported.length > 5 ? " 等" : ""}`
+        : "请拖入 JPG、JPEG、PNG 图片文件或包含这些图片的文件夹。"
+    });
+  };
+
+  const handleDragEnter = (event: React.DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setDragActive(true);
+  };
+
+  const handleDragOver = (event: React.DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!dragActive) {
+      setDragActive(true);
+    }
+  };
+
+  const handleDragLeave = (event: React.DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const nextTarget = event.relatedTarget as Node | null;
+    if (!nextTarget || !event.currentTarget.contains(nextTarget)) {
+      setDragActive(false);
+    }
+  };
+
+  const handleDrop = async (event: React.DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setDragActive(false);
+
+    if (importing) {
+      setMessage({ tone: "warning", title: "导入任务进行中", body: "请等待当前导入任务结束或取消后再拖入新的图片。" });
+      return;
+    }
+
+    try {
+      await handleDropPaths(getDroppedPathsFromEvent(event));
+    } catch (err: any) {
+      setMessage({ tone: "danger", title: "拖拽导入失败", body: err?.message || "无法处理拖入内容。" });
+    }
+  };
+
   const handleBrowse = async () => {
     if (!window.mediaPhotoWorkbench?.selectDirectory) {
       setMessage({ tone: "danger", title: "无法选择文件夹", body: "当前环境没有 Electron 文件夹选择能力，请在桌面应用中使用导入功能。" });
@@ -78,6 +272,7 @@ export function ImportPage() {
       setScanResult(null);
       setImportResult(null);
       setStartedTask(null);
+      setActiveTask(null);
       setMessage({ tone: "info", title: "已选择源文件夹", body: "点击扫描后会统计当前文件夹第一层中的 JPG/JPEG/PNG 文件。" });
     }
   };
@@ -95,6 +290,7 @@ export function ImportPage() {
       setScanResult(null);
       setImportResult(null);
       setStartedTask(null);
+      setActiveTask(null);
       setMessage({ tone: "info", title: "已选择图片文件", body: `已选择 ${selected.length} 个文件，可直接开始导入。` });
     }
   };
@@ -117,6 +313,7 @@ export function ImportPage() {
     setMessage(null);
     setImportResult(null);
     setStartedTask(null);
+    setActiveTask(null);
 
     try {
       const res = await scanImportFolder(selectedEventId, sourceFolder.trim());
@@ -157,9 +354,10 @@ export function ImportPage() {
       return;
     }
 
-      setImporting(true);
+    setImporting(true);
     setMessage(null);
     setStartedTask(null);
+    setActiveTask(null);
 
     try {
       const res = await startImport(
@@ -224,6 +422,29 @@ export function ImportPage() {
 
           <div className="flex-1 space-y-5 overflow-y-auto pr-2">
             {message && <Notice tone={message.tone} title={message.title}>{message.body}</Notice>}
+
+            <div
+              className={cn(
+                "rounded-2xl border border-dashed p-5 transition-colors",
+                dragActive ? "border-blue-400 bg-blue-50 shadow-sm" : "border-slate-200 bg-slate-50/70 hover:border-blue-200 hover:bg-blue-50/30"
+              )}
+              onDragEnter={handleDragEnter}
+              onDragLeave={handleDragLeave}
+              onDragOver={handleDragOver}
+              onDrop={handleDrop}
+            >
+              <div className="flex flex-col items-center justify-center gap-3 text-center sm:flex-row sm:text-left">
+                <div className={cn("flex h-12 w-12 items-center justify-center rounded-2xl", dragActive ? "bg-blue-600 text-white" : "bg-white text-blue-600")}>
+                  <UploadCloud size={22} />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-slate-900">拖拽图片文件或文件夹到这里导入</p>
+                  <p className="mt-1 text-xs leading-5 text-slate-500">
+                    支持 JPG、JPEG、PNG；文件夹仅扫描第一层；暂不支持 RAW、HEIC、视频。
+                  </p>
+                </div>
+              </div>
+            </div>
 
             <label>
               <span className="mb-1.5 block text-xs font-medium text-slate-500">所属活动</span>
@@ -374,6 +595,7 @@ export function ImportPage() {
               setScanResult(null);
               setImportResult(null);
               setStartedTask(null);
+              setActiveTask(null);
               setSelectedFiles([]);
               setMessage(null);
             }} type="button">清空结果</button>
@@ -397,25 +619,47 @@ export function ImportPage() {
           </div>
 
           <div className="mb-8">
-            <div className="mb-3 text-4xl font-bold text-slate-900">{importResult ? completionRate(importResult) : startedTask ? "任务" : scanResult ? "0" : "--"}{importResult && <span className="text-2xl">%</span>}</div>
-            <div className="mb-3 h-2 w-full overflow-hidden rounded-full bg-slate-100">
-              <div className="h-full rounded-full bg-blue-600 transition-all" style={{ width: `${importResult ? completionRate(importResult) : importing || startedTask ? 12 : 0}%` }} />
+            <div className="mb-3 text-4xl font-bold text-slate-900">
+              {importResult ? completionRate(importResult) : displayTask ? taskStats.percent : scanResult ? "0" : "--"}
+              {(importResult || displayTask) && <span className="text-2xl">%</span>}
             </div>
-            <p className="text-sm text-slate-500">
-              {importResult ? `已处理 ${importResult.total} 张` : startedTask ? `任务 ${startedTask.taskId} 已提交，共 ${startedTask.total} 张` : scanResult ? `待导入 ${scanResult.count} 张` : hasSelectedFiles ? `待导入 ${selectedFiles.length} 张` : "等待选择导入来源"}
-            </p>
+            <div className="mb-3 h-2 w-full overflow-hidden rounded-full bg-slate-100">
+              <div
+                className={cn("h-full rounded-full transition-all", displayTask?.status === "failed" ? "bg-red-500" : displayTask?.status === "success" ? "bg-emerald-500" : "bg-blue-600")}
+                style={{ width: `${importResult ? completionRate(importResult) : displayTask ? Math.max(taskStats.percent, displayTask.status === "pending" ? 4 : 8) : 0}%` }}
+              />
+            </div>
+            <div className="space-y-1 text-sm text-slate-500">
+              <p>
+                {importResult
+                  ? `已处理 ${importResult.total} 张`
+                  : displayTask
+                    ? `${taskStatusLabel(displayTask.status)} · 已处理 ${taskStats.processed}/${taskStats.total || 0} 张`
+                    : scanResult
+                      ? `待导入 ${scanResult.count} 张`
+                      : hasSelectedFiles
+                        ? `待导入 ${selectedFiles.length} 张`
+                        : "等待选择导入来源"}
+              </p>
+              {displayTask && (displayTask.status === "running" || displayTask.status === "pending") && (
+                <p className="text-xs text-slate-400">
+                  已用 {formatTaskDuration(taskStats.elapsedMs)} · 剩余 {formatTaskDuration(taskStats.estimatedRemainingMs)}
+                  {taskStats.currentFileName ? ` · ${taskStats.currentFileName}` : ""}
+                </p>
+              )}
+            </div>
           </div>
 
           <div className="mb-8 space-y-4">
-            <ProgressRow color="text-emerald-600" icon={<CheckCircle2 size={16} />} label="成功" value={(importResult?.success ?? 0).toString()} />
-            <ProgressRow color="text-red-500" icon={<XCircle size={16} />} label="失败" value={(importResult?.failed ?? 0).toString()} />
-            <ProgressRow color="text-slate-400" icon={<AlertCircle size={16} />} label="跳过" value={(importResult?.skipped ?? 0).toString()} />
+            <ProgressRow color="text-emerald-600" icon={<CheckCircle2 size={16} />} label="成功" value={(displayTask ? taskStats.success : importResult?.success ?? 0).toString()} />
+            <ProgressRow color="text-red-500" icon={<XCircle size={16} />} label="失败" value={(displayTask ? taskStats.failed : importResult?.failed ?? 0).toString()} />
+            <ProgressRow color="text-slate-400" icon={<AlertCircle size={16} />} label="跳过" value={(displayTask ? taskStats.skipped : importResult?.skipped ?? 0).toString()} />
           </div>
 
-          {importResult && importResult.errors.length > 0 && (
+          {((displayTask && taskStats.errors.length > 0) || (importResult && importResult.errors.length > 0)) && (
             <Notice tone="warning" title="失败记录">
-              {importResult.errors.slice(0, 3).map((error) => `${error.filename}: ${error.reason}`).join("；")}
-              {importResult.errors.length > 3 ? `；还有 ${importResult.errors.length - 3} 条失败记录` : ""}
+              {(displayTask ? taskStats.errors : importResult?.errors ?? []).slice(0, 3).map((error) => `${error.filename || "未知文件"}: ${error.reason}`).join("；")}
+              {(displayTask ? taskStats.errors.length : importResult?.errors.length ?? 0) > 3 ? `；还有 ${(displayTask ? taskStats.errors.length : importResult?.errors.length ?? 0) - 3} 条失败记录` : ""}
             </Notice>
           )}
 
@@ -460,6 +704,32 @@ function isImportTaskStartData(data: ImportStartData | ImportTaskStartData): dat
   return typeof (data as ImportTaskStartData).taskId === "string";
 }
 
+function createInitialImportTask(task: ImportTaskStartData | null): TaskData | null {
+  if (!task) return null;
+  const now = new Date().toISOString();
+  return {
+    id: task.taskId,
+    type: "host_import",
+    eventId: "",
+    title: `导入 ${task.total} 张图片`,
+    status: "pending",
+    total: task.total,
+    finished: 0,
+    successCount: 0,
+    failedCount: 0,
+    skippedCount: 0,
+    errors: [],
+    result: null,
+    createdAt: now,
+    startedAt: now,
+    updatedAt: now,
+    finishedAt: "",
+    elapsedMs: 0,
+    estimatedRemainingMs: null,
+    currentFileName: ""
+  };
+}
+
 function formatBytes(bytes: number): string {
   if (bytes <= 0) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -470,4 +740,24 @@ function formatBytes(bytes: number): string {
 
 function getFilename(filePath: string): string {
   return filePath.split(/[\\/]/).pop() || filePath;
+}
+
+function getExtension(filePath: string): string {
+  const filename = getFilename(filePath);
+  const dotIndex = filename.lastIndexOf(".");
+  return dotIndex >= 0 ? filename.slice(dotIndex).toLowerCase() : "";
+}
+
+function getDroppedPathsFromEvent(event: React.DragEvent<HTMLElement>): string[] {
+  const paths = Array.from(event.dataTransfer.files ?? [])
+    .map((file) => {
+      const directPath = (file as File & { path?: string }).path;
+      if (directPath) {
+        return directPath;
+      }
+      return window.mediaPhotoWorkbench?.getPathForFile?.(file) || "";
+    })
+    .filter((item): item is string => Boolean(item));
+
+  return Array.from(new Set(paths));
 }

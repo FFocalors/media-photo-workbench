@@ -1,9 +1,16 @@
 import { Router } from "express";
 import { getConfig, saveConfig } from "../config/config";
 import { checkRepository } from "../services/repository";
-import { getDatabasePath } from "../utils/paths";
+import { getCurrentDatabasePath } from "../db/database";
+import { getDefaultDatabasePath, resolveDatabasePath } from "../utils/paths";
 import { getLogger } from "../utils/logger";
 import { sendSuccess, sendError } from "../utils/response";
+import {
+  createDatabaseBackup,
+  listDatabaseBackups,
+  migrateDatabaseLocation,
+  toServiceError
+} from "../services/databaseMaintenance";
 
 let _appDataRoot = "";
 
@@ -23,7 +30,12 @@ router.get("/", (_req, res) => {
     server: config.server,
     repository: config.repository,
     database: {
-      path: getDatabasePath(_appDataRoot)
+      path: getCurrentDatabasePath() || resolveDatabasePath(_appDataRoot, config.database.path),
+      configuredPath: config.database.path,
+      defaultPath: getDefaultDatabasePath(_appDataRoot),
+      autoBackupEnabled: config.database.autoBackupEnabled,
+      lastAutoBackupAt: config.database.lastAutoBackupAt,
+      autoBackupRetention: config.database.autoBackupRetention
     }
   });
 });
@@ -65,6 +77,51 @@ router.patch("/repository", (req, res) => {
   } catch (err) {
     logger.error({ err }, "更新仓库路径失败");
     sendError(res, "SAVE_CONFIG_FAILED", "保存配置失败", 500);
+  }
+});
+
+/**
+ * POST /api/settings/database/backup
+ * 手动备份当前 SQLite 数据库到仓库 metadata/database-backups。
+ */
+router.post("/database/backup", async (_req, res) => {
+  try {
+    const result = await createDatabaseBackup("manual");
+    sendSuccess(res, result);
+  } catch (err) {
+    const serviceError = toServiceError(err, "DATABASE_BACKUP_FAILED", "数据库备份失败");
+    sendError(res, serviceError.code ?? "DATABASE_BACKUP_FAILED", serviceError.message, serviceError.status ?? 500);
+  }
+});
+
+/**
+ * GET /api/settings/database/backups
+ * 返回当前仓库中的数据库备份列表。
+ */
+router.get("/database/backups", async (_req, res) => {
+  try {
+    const backups = await listDatabaseBackups();
+    sendSuccess(res, backups);
+  } catch (err) {
+    const serviceError = toServiceError(err, "DATABASE_BACKUP_LIST_FAILED", "读取数据库备份列表失败");
+    sendError(res, serviceError.code ?? "DATABASE_BACKUP_LIST_FAILED", serviceError.message, serviceError.status ?? 500);
+  }
+});
+
+/**
+ * POST /api/settings/database/migrate
+ * 将数据库复制到新位置并写入 config.database.path。当前进程仍使用旧连接，重启后生效。
+ */
+router.post("/database/migrate", async (req, res) => {
+  try {
+    const result = await migrateDatabaseLocation({
+      targetDirectory: typeof req.body?.targetDirectory === "string" ? req.body.targetDirectory : undefined,
+      targetPath: typeof req.body?.targetPath === "string" ? req.body.targetPath : undefined
+    });
+    sendSuccess(res, result);
+  } catch (err) {
+    const serviceError = toServiceError(err, "DATABASE_MIGRATION_FAILED", "数据库位置迁移失败");
+    sendError(res, serviceError.code ?? "DATABASE_MIGRATION_FAILED", serviceError.message, serviceError.status ?? 500);
   }
 });
 

@@ -5,6 +5,7 @@ import { getLogger } from "../utils/logger";
 import SCHEMA_SQL from "./schema";
 
 let _db: Database.Database | null = null;
+let _dbPath = "";
 
 function columnExists(db: Database.Database, tableName: string, columnName: string): boolean {
   const columns = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
@@ -55,6 +56,7 @@ export function initDatabase(dbPath: string): Database.Database {
   logger.info("数据库初始化完成，所有核心表已就绪");
 
   _db = db;
+  _dbPath = dbPath;
   return db;
 }
 
@@ -68,6 +70,22 @@ export function getDatabase(): Database.Database {
   return _db;
 }
 
+export function getCurrentDatabasePath(): string {
+  return _dbPath;
+}
+
+export function checkpointDatabase(): void {
+  const db = getDatabase();
+  db.pragma("wal_checkpoint(TRUNCATE)");
+}
+
+export async function backupDatabase(targetPath: string): Promise<void> {
+  const db = getDatabase();
+  fs.ensureDirSync(path.dirname(targetPath));
+  checkpointDatabase();
+  await db.backup(targetPath);
+}
+
 /**
  * 关闭数据库连接。
  */
@@ -75,6 +93,7 @@ export function closeDatabase(): void {
   if (_db) {
     _db.close();
     _db = null;
+    _dbPath = "";
     getLogger().info("数据库连接已关闭");
   }
 }

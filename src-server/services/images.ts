@@ -71,6 +71,7 @@ export interface ImageListParams {
   page?: number;
   pageSize?: number;
   rating?: number;
+  ratingMode?: string;
   status?: string;
   sourceType?: string;
   keyword?: string;
@@ -167,9 +168,24 @@ export function listEventImages(eventId: string, params: ImageListParams, baseUr
   const where: string[] = ["event_id = ?", params.deleted ? "is_deleted = 1" : "is_deleted = 0"];
   const values: unknown[] = [eventId];
 
-  if (typeof params.rating === "number" && Number.isFinite(params.rating) && params.rating > 0) {
-    where.push("rating >= ?");
-    values.push(params.rating);
+  if (typeof params.ratingMode === "string" && !["eq", "gte"].includes(params.ratingMode)) {
+    throw { code: "INVALID_RATING_MODE", message: "ratingMode 只能是 eq 或 gte" };
+  }
+
+  if (typeof params.rating === "number" && Number.isFinite(params.rating)) {
+    const rating = Math.trunc(params.rating);
+    if (rating < 0 || rating > 5) {
+      throw { code: "INVALID_RATING", message: "rating 只能是 0-5 的整数" };
+    }
+
+    const ratingMode = params.ratingMode === "eq" ? "eq" : "gte";
+    if (ratingMode === "eq") {
+      where.push("rating = ?");
+      values.push(rating);
+    } else if (rating > 0) {
+      where.push("rating >= ?");
+      values.push(rating);
+    }
   }
 
   if (params.status && params.status !== "all") {

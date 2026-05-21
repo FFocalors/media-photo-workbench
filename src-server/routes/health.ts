@@ -4,6 +4,7 @@ import { getConfig } from "../config/config";
 import { sendSuccess } from "../utils/response";
 import { checkRepository } from "../services/repository";
 import { getRuntimeServerPort } from "../runtime";
+import { getCurrentDatabasePath } from "../db/database";
 
 const router = Router();
 
@@ -94,7 +95,8 @@ router.get("/", (_req, res) => {
       status: "running"
     },
     database: {
-      status: "connected"
+      status: getCurrentDatabasePath() ? "connected" : "disconnected",
+      path: getCurrentDatabasePath()
     },
     repository: {
       configured: !!config.repository.path,

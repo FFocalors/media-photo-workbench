@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { EventImageData, ImageDownloadType, ImageStatus, imageStatusLabels, imageStatusOptions } from "../../lib/api";
 import { cn } from "../../lib/cn";
 import { RatingStars } from "./RatingStars";
+import { RetryableImage } from "./RetryableImage";
 
 export function PreviewModal({
   photo,
@@ -67,7 +68,7 @@ export function PreviewModal({
 
         <div className="flex min-h-0 flex-1 items-center justify-center p-6">
           <button className="mr-4 rounded-lg px-3 py-2 text-sm text-white/70 hover:bg-white/10" onClick={onPrevious} type="button">上一张</button>
-          <img alt={photo.original_filename} className="max-h-full max-w-full rounded-lg object-contain shadow-2xl" src={photo.preview_url} />
+          <RetryableImage alt={photo.original_filename} className="max-h-full max-w-full rounded-lg object-contain shadow-2xl" src={photo.preview_url} />
           <button className="ml-4 rounded-lg px-3 py-2 text-sm text-white/70 hover:bg-white/10" onClick={onNext} type="button">下一张</button>
         </div>
 
@@ -79,7 +80,7 @@ export function PreviewModal({
               onClick={() => onSelectPhoto(item.id)}
               type="button"
             >
-              <img alt={item.original_filename} className="h-full w-full object-cover" src={item.thumb_url} />
+              <RetryableImage alt={item.original_filename} className="h-full w-full object-cover" src={item.thumb_url} />
             </button>
           ))}
         </div>
