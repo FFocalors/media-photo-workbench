@@ -21,6 +21,9 @@ interface OperationLogRow {
   target_id: string;
   operator: string;
   device: string;
+  actor_type: string;
+  actor_id: string;
+  actor_name: string;
   detail: string;
   created_at: string;
 }
@@ -459,6 +462,10 @@ async function writeEventDatabase(input: {
         category TEXT,
         remark TEXT,
         source TEXT,
+        uploaded_by_client_id TEXT,
+        uploaded_by_name TEXT,
+        uploaded_by_role TEXT,
+        uploaded_at TEXT,
         file_size INTEGER,
         file_hash TEXT,
         exif_shot_at TEXT,
@@ -476,6 +483,9 @@ async function writeEventDatabase(input: {
         target_id TEXT,
         operator TEXT,
         device TEXT,
+        actor_type TEXT,
+        actor_id TEXT,
+        actor_name TEXT,
         detail TEXT,
         created_at TEXT
       );
@@ -505,12 +515,14 @@ async function writeEventDatabase(input: {
       INSERT INTO images VALUES (
         @id, @event_id, @original_filename, @stored_filename, @thumb_path, @preview_path,
         @original_path, @edited_path, @photographer, @camera_model, @lens_model, @shot_at,
-        @rating, @status, @category, @remark, @source, @file_size, @file_hash, @exif_shot_at,
+        @rating, @status, @category, @remark, @source,
+        @uploaded_by_client_id, @uploaded_by_name, @uploaded_by_role, @uploaded_at,
+        @file_size, @file_hash, @exif_shot_at,
         @width, @height, @is_deleted, @deleted_at, @created_at, @updated_at
       )
     `);
     const insertLog = archiveDb.prepare(`
-      INSERT INTO operation_logs VALUES (@id, @type, @target_type, @target_id, @operator, @device, @detail, @created_at)
+      INSERT INTO operation_logs VALUES (@id, @type, @target_type, @target_id, @operator, @device, @actor_type, @actor_id, @actor_name, @detail, @created_at)
     `);
     const insertExportJob = archiveDb.prepare(`
       INSERT INTO export_jobs VALUES (
@@ -917,6 +929,11 @@ export async function prepareEventArchive(eventId: string): Promise<ArchivePrepa
       "category",
       "remark",
       "photographer",
+      "source",
+      "uploaded_by_client_id",
+      "uploaded_by_name",
+      "uploaded_by_role",
+      "uploaded_at",
       "camera_model",
       "lens_model",
       "shot_at",
@@ -937,6 +954,11 @@ export async function prepareEventArchive(eventId: string): Promise<ArchivePrepa
         category: image.category,
         remark: image.remark,
         photographer: image.photographer,
+        source: image.source,
+        uploaded_by_client_id: image.uploaded_by_client_id,
+        uploaded_by_name: image.uploaded_by_name,
+        uploaded_by_role: image.uploaded_by_role,
+        uploaded_at: image.uploaded_at,
         camera_model: image.camera_model,
         lens_model: image.lens_model,
         shot_at: image.shot_at,
@@ -955,6 +977,9 @@ export async function prepareEventArchive(eventId: string): Promise<ArchivePrepa
       "target_id",
       "operator",
       "device",
+      "actor_type",
+      "actor_id",
+      "actor_name",
       "detail",
       "created_at"
     ], operationLogs.map((log) => ({ ...log })));

@@ -16,7 +16,24 @@
 
 - 后续如需修改或扩展表结构，应在项目 `migrations/` 目录下创建标准的 SQL 迁移脚本文件，随应用升级按顺序执行。
 - **绝对不允许**在生产环境中直接手动修改 SQLite 数据库的表结构。
-- v0.13.0-dev Windows 打包发布阶段不新增数据库表或字段；当前数据库结构仍沿用 v0.11.5-dev / v0.12.0-dev 的任务、待修包、轻量归档、回收站和永久删除相关设计。
+- v0.17.0 开发阶段 17.1 允许轻量兼容迁移：启动时通过 `PRAGMA table_info` 检查字段，缺失时才为 `images` 增加上传来源追踪字段、为 `operation_logs` 增加 actor 字段；字段已存在则跳过，不要求重新初始化旧库。
+- v0.17.0 开发阶段 17.2 不新增 SQLite 字段或表。批量操作后选择行为保存在本地 `config.json` 的 `gallery` 配置中。
+
+---
+
+## 配置文件扩展：`config.json`
+
+17.2 新增图片墙偏好配置，不属于 SQLite schema：
+
+```json
+{
+  "gallery": {
+    "batchSelectionBehavior": "clear"
+  }
+}
+```
+
+`batchSelectionBehavior` 支持 `clear | keep`，默认 `clear`。旧配置文件没有 `gallery` 时会在加载时自动补齐默认值。
 
 ---
 
@@ -58,6 +75,10 @@
 | `category` | TEXT | 主分类 | NOT NULL, DEFAULT '' |
 | `remark` | TEXT | 修图备注/意见 | NOT NULL, DEFAULT '' |
 | `source` | TEXT | 导入来源 | NOT NULL, DEFAULT 'host_import', 取值见枚举 |
+| `uploaded_by_client_id` | TEXT | 上传客户端 ID；主机导入可为 `host`，旧数据可为空 | NOT NULL, DEFAULT '' |
+| `uploaded_by_name` | TEXT | 上传设备名称或来源名称，如“修图电脑A” | NOT NULL, DEFAULT '' |
+| `uploaded_by_role` | TEXT | 轻量来源角色，如 `client` / `host`，不是账号权限 | NOT NULL, DEFAULT '' |
+| `uploaded_at` | TEXT | 上传 / 导入入库时间 | NOT NULL, DEFAULT '' |
 | `file_size` | INTEGER | 文件大小 (Bytes) | NOT NULL, DEFAULT 0 |
 | `file_hash` | TEXT | 防重 hash (可选) | NOT NULL, DEFAULT '' |
 | `exif_shot_at`| TEXT | 原始 EXIF 拍摄时间字符串 | NOT NULL, DEFAULT '' |
@@ -95,6 +116,9 @@
 | `target_id` | TEXT | 操作对象ID | NOT NULL, DEFAULT '' |
 | `operator` | TEXT | 操作人姓名 | NOT NULL, DEFAULT '' |
 | `device` | TEXT | 客户端设备名 | NOT NULL, DEFAULT '' |
+| `actor_type` | TEXT | 操作者类型：`host` / `client` / `unknown` | NOT NULL, DEFAULT '' |
+| `actor_id` | TEXT | 操作者 ID；客户端为 `clientId`，主机为 `host` | NOT NULL, DEFAULT '' |
+| `actor_name` | TEXT | 操作者显示名，如“主机”或客户端设备名 | NOT NULL, DEFAULT '' |
 | `detail` | TEXT | JSON格式的变更详情 | NOT NULL, DEFAULT '' |
 | `created_at`| TEXT | 记录时间 | NOT NULL, DEFAULT `now` |
 
@@ -162,6 +186,8 @@
 - `idx_images_file_hash`：Phase 3 主机本地导入按 sha256 `file_hash` 去重；去重范围为同一活动，发现当前 `event_id` 下已有相同 hash 时跳过导入。
 - `idx_images_event_hash`：按 `event_id + file_hash` 加速同一活动内去重查询。
 - `idx_images_deleted`：默认图片墙查询过滤 `is_deleted = 0`。
+- `idx_images_uploaded_by_client`：按活动和上传客户端筛选图片。
+- `idx_operation_logs_actor`：按操作者类型和 ID 查询操作日志。
 
 ### `events.status`
 - `draft`：草稿/未开始（保留状态，当前新建活动不默认使用）
@@ -177,6 +203,13 @@
 - `client_upload`：客户端通过局域网网页/软件主动上传
 - `remote_import`：远程传输(如 SFTP)自动同步接入
 - `manual_import`：其他零星手动导入方式
+
+### 17.1 协作追踪字段说明
+
+- `images.uploaded_by_*` 只记录协作来源，不代表账号、登录用户或权限主体。
+- 客户端上传时，前端随 multipart 请求提交 `clientId` 和 `clientName`；当前无账号系统，后端先作为现场协作标识记录。
+- 主机导入时，来源显示为“主机导入 / 主机”。历史旧数据字段为空时，前端按 `images.source` 兜底显示。
+- `operation_logs.actor_*` 用于标记谁修改了星级、状态、分类、备注、删除或恢复。旧日志 actor 字段为空时应显示“未知操作者”或继续读取旧 `operator/device`。
 
 ### `images.status`
 - `unselected`：未挑选（新导入默认初态）

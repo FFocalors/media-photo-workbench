@@ -25,8 +25,35 @@ function runLightweightMigrations(db: Database.Database): void {
     logger.info("数据库迁移完成：images.deleted_at");
   }
 
+  const imageColumns = [
+    ["uploaded_by_client_id", "TEXT NOT NULL DEFAULT ''"],
+    ["uploaded_by_name", "TEXT NOT NULL DEFAULT ''"],
+    ["uploaded_by_role", "TEXT NOT NULL DEFAULT ''"],
+    ["uploaded_at", "TEXT NOT NULL DEFAULT ''"]
+  ] as const;
+  for (const [column, definition] of imageColumns) {
+    if (!columnExists(db, "images", column)) {
+      db.exec(`ALTER TABLE images ADD COLUMN ${column} ${definition}`);
+      logger.info(`数据库迁移完成：images.${column}`);
+    }
+  }
+
+  const operationLogColumns = [
+    ["actor_type", "TEXT NOT NULL DEFAULT ''"],
+    ["actor_id", "TEXT NOT NULL DEFAULT ''"],
+    ["actor_name", "TEXT NOT NULL DEFAULT ''"]
+  ] as const;
+  for (const [column, definition] of operationLogColumns) {
+    if (!columnExists(db, "operation_logs", column)) {
+      db.exec(`ALTER TABLE operation_logs ADD COLUMN ${column} ${definition}`);
+      logger.info(`数据库迁移完成：operation_logs.${column}`);
+    }
+  }
+
   db.exec("CREATE INDEX IF NOT EXISTS idx_images_deleted ON images(is_deleted)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_images_event_hash ON images(event_id, file_hash)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_images_uploaded_by_client ON images(event_id, uploaded_by_client_id)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_operation_logs_actor ON operation_logs(actor_type, actor_id)");
 }
 
 /**
@@ -51,7 +78,12 @@ export function initDatabase(dbPath: string): Database.Database {
 
   // 执行建表 SQL
   db.exec(SCHEMA_SQL);
-  runLightweightMigrations(db);
+  try {
+    runLightweightMigrations(db);
+  } catch (err) {
+    logger.error({ err, dbPath }, "数据库轻量迁移失败");
+    throw err;
+  }
 
   logger.info("数据库初始化完成，所有核心表已就绪");
 

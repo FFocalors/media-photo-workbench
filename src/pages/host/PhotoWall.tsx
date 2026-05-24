@@ -9,11 +9,17 @@ import { Notice } from "../../components/ui/States";
 import {
   EventData,
   EventImageData,
+  EventUploaderData,
+  ClientPresenceData,
+  BatchSelectionBehavior,
   createDownloadZipTask,
   deleteImage,
   downloadImageFile,
   fetchEventImages,
   fetchEvents,
+  fetchEventUploaders,
+  fetchOnlineClients,
+  fetchSettings,
   ImageDownloadType,
   ImageStatus,
   imageStatusOptions,
@@ -26,6 +32,7 @@ import {
   updateImageStatus
 } from "../../lib/api";
 import {
+  subscribeClientsUpdated,
   subscribeRealtimeConnection,
   subscribeRealtimeImageEvent
 } from "../../lib/socket";
@@ -68,6 +75,10 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
   const [ratingMode, setRatingMode] = useState<RatingMode>("gte");
   const [statusFilter, setStatusFilter] = useState<ImageStatus | "all">("all");
   const [sourceType, setSourceType] = useState("all");
+  const [uploadedByClientId, setUploadedByClientId] = useState("all");
+  const [uploaders, setUploaders] = useState<EventUploaderData[]>([]);
+  const [batchSelectionBehavior, setBatchSelectionBehavior] = useState<BatchSelectionBehavior>("clear");
+  const [onlineClients, setOnlineClients] = useState<ClientPresenceData[]>([]);
   const [trashMode, setTrashMode] = useState(false);
   const [filterPanelOpen, setFilterPanelOpen] = useState(false);
   const [metadataPanelOpen, setMetadataPanelOpen] = useState(false);
@@ -75,6 +86,8 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [batchUpdating, setBatchUpdating] = useState(false);
+  const [batchCategoryOpen, setBatchCategoryOpen] = useState(false);
+  const [batchCategoryDraft, setBatchCategoryDraft] = useState("");
   const [realtimeStatus, setRealtimeStatus] = useState<RealtimeConnectionState>("disconnected");
   const [statusCounts, setStatusCounts] = useState<Record<ImageStatus, number>>({
     unselected: 0,
@@ -86,6 +99,7 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
     published: 0
   });
   const [confirmAction, setConfirmAction] = useState<"delete" | "restore" | "purge" | null>(null);
+  const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
   const [message, setMessage] = useState<{ tone: "success" | "warning" | "danger" | "info"; title: string; body: string } | null>(null);
 
   const activePhoto = photos.find((photo) => photo.id === activePhotoId) ?? null;
@@ -105,6 +119,10 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
     }
     if (statusFilter !== "all" && photo.status !== statusFilter) return false;
     if (sourceType !== "all" && photo.source_type !== sourceType) return false;
+    if (uploadedByClientId !== "all") {
+      if (uploadedByClientId === "host" && photo.source_type !== "host_import") return false;
+      if (uploadedByClientId !== "host" && photo.uploaded_by_client_id !== uploadedByClientId) return false;
+    }
 
     const keyword = search.trim().toLowerCase();
     if (!keyword) return true;
@@ -118,7 +136,7 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
       photo.camera_model,
       photo.lens_model
     ].some((value) => value.toLowerCase().includes(keyword));
-  }, [ratingMode, ratingValue, search, sourceType, statusFilter]);
+  }, [ratingMode, ratingValue, search, sourceType, statusFilter, uploadedByClientId]);
 
   const loadEvents = useCallback(async () => {
     try {
@@ -147,8 +165,9 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
     ratingMode: ratingValue === "all" ? undefined : ratingMode,
     status: status ?? statusFilter,
     source_type: sourceType,
+    uploadedByClientId,
     keyword: search.trim() || undefined
-  }), [ratingMode, ratingValue, search, sourceType, statusFilter]);
+  }), [ratingMode, ratingValue, search, sourceType, statusFilter, uploadedByClientId]);
 
   const fetchImagesForPage = useCallback((targetPage: number, status?: ImageStatus | "all", pageSize?: number) => {
     const params = buildImageQueryParams(targetPage, status, pageSize);
@@ -211,6 +230,22 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
     }
   }, [fetchImagesForPage, selectedEventId]);
 
+  const loadUploaders = useCallback(async () => {
+    if (!selectedEventId) {
+      setUploaders([]);
+      return;
+    }
+
+    try {
+      const res = await fetchEventUploaders(selectedEventId);
+      if (res.ok && res.data) {
+        setUploaders(res.data);
+      }
+    } catch {
+      setUploaders([]);
+    }
+  }, [selectedEventId]);
+
   const loadMoreImages = useCallback(async () => {
     if (!selectedEventId || loading || loadingMore || !hasMorePhotos) return;
     const nextPage = page + 1;
@@ -240,12 +275,37 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
   }, [loadEvents]);
 
   useEffect(() => {
+    let cancelled = false;
+
+    async function loadGallerySettings() {
+      try {
+        const settingsRes = await fetchSettings();
+        if (cancelled) return;
+        if (settingsRes.ok && settingsRes.data?.gallery) {
+          setBatchSelectionBehavior(settingsRes.data.gallery.batchSelectionBehavior || "clear");
+        }
+      } catch {
+        if (!cancelled) {
+          setBatchSelectionBehavior("clear");
+        }
+      }
+    }
+
+    void loadGallerySettings();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
     loadImages();
   }, [loadImages]);
 
   useEffect(() => {
     loadStatusCounts();
   }, [loadStatusCounts]);
+
+  useEffect(() => {
+    void loadUploaders();
+  }, [loadUploaders]);
 
   useEffect(() => {
     if (!activePhotoId) {
@@ -298,8 +358,9 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
       setTotal((value) => value + 1);
       return [image, ...current];
     });
+    void loadUploaders();
     setMessage({ tone: "info", title: "收到新图片", body: "实时同步已将新图片加入当前图片墙。" });
-  }, [matchesCurrentFilters, selectedEventId]);
+  }, [loadUploaders, matchesCurrentFilters, selectedEventId]);
 
   const handleRealtimeUpdated = useCallback((payload: RealtimeImagePayload) => {
     if (payload.eventId !== selectedEventId || !payload.image) return;
@@ -341,12 +402,24 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
     const unsubscribeCreated = subscribeRealtimeImageEvent("image-created", handleRealtimeCreated);
     const unsubscribeUpdated = subscribeRealtimeImageEvent("image-updated", handleRealtimeUpdated);
     const unsubscribeDeleted = subscribeRealtimeImageEvent("image-deleted-logical", handleRealtimeDeleted);
+    const unsubscribeClients = subscribeClientsUpdated((payload) => {
+      setOnlineClients(payload.clients);
+    });
+
+    fetchOnlineClients()
+      .then((res) => {
+        if (res.ok && res.data) setOnlineClients(res.data.clients);
+      })
+      .catch(() => {
+        // Socket.IO updates will keep this fresh when the request is unavailable.
+      });
 
     return () => {
       unsubscribeConnection();
       unsubscribeCreated();
       unsubscribeUpdated();
       unsubscribeDeleted();
+      unsubscribeClients();
     };
   }, [handleRealtimeCreated, handleRealtimeDeleted, handleRealtimeUpdated]);
 
@@ -399,10 +472,15 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
     setConfirmAction("delete");
   };
 
+  const getSelectionAfterBatch = useCallback((ids: string[], failedIds: string[]) => {
+    return batchSelectionBehavior === "keep" ? ids : failedIds;
+  }, [batchSelectionBehavior]);
+
   const executeDeleteSelected = async () => {
     const ids = [...selectedIds];
     let success = 0;
-    const failed: string[] = [];
+    const failedMessages: string[] = [];
+    const failedIds: string[] = [];
 
     for (const id of ids) {
       try {
@@ -410,21 +488,23 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
         if (res.ok) {
           success += 1;
         } else {
-          failed.push(res.error?.message || id);
+          failedIds.push(id);
+          failedMessages.push(res.error?.message || id);
         }
       } catch (err: any) {
-        failed.push(err?.message || id);
+        failedIds.push(id);
+        failedMessages.push(err?.message || id);
       }
     }
 
-    setSelectedIds([]);
+    setSelectedIds(getSelectionAfterBatch(ids, failedIds));
     setActivePhotoId((current) => current && ids.includes(current) ? null : current);
     setPreviewPhotoId((current) => current && ids.includes(current) ? null : current);
     setPreviewSnapshot((current) => current.filter((photo) => !ids.includes(photo.id)));
     await loadImages();
 
-    if (failed.length > 0) {
-      setMessage({ tone: "danger", title: "部分图片删除失败", body: `已删除 ${success} 张，失败 ${failed.length} 张。${failed[0] || ""}` });
+    if (failedMessages.length > 0) {
+      setMessage({ tone: "danger", title: "部分图片删除失败", body: `已删除 ${success} 张，失败 ${failedMessages.length} 张。${failedMessages[0] || ""}` });
     } else {
       setMessage({ tone: "success", title: "图片已删除", body: `已从图片墙移除 ${success} 张图片，仓库文件未被删除。` });
     }
@@ -439,27 +519,30 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
   const executeRestoreSelected = async () => {
     const ids = [...selectedIds];
     let success = 0;
-    const failed: string[] = [];
+    const failedMessages: string[] = [];
+    const failedIds: string[] = [];
     for (const id of ids) {
       try {
         const res = await restoreImage(id);
         if (res.ok) {
           success += 1;
         } else {
-          failed.push(res.error?.message || id);
+          failedIds.push(id);
+          failedMessages.push(res.error?.message || id);
         }
       } catch (err: any) {
-        failed.push(err?.message || id);
+        failedIds.push(id);
+        failedMessages.push(err?.message || id);
       }
     }
 
-    setSelectedIds([]);
+    setSelectedIds(getSelectionAfterBatch(ids, failedIds));
     setActivePhotoId(null);
     setPreviewPhotoId(null);
     setPreviewSnapshot([]);
     await loadImages();
-    setMessage(failed.length > 0
-      ? { tone: "warning", title: "部分图片恢复失败", body: `已恢复 ${success} 张，失败 ${failed.length} 张。${failed[0] || ""}` }
+    setMessage(failedMessages.length > 0
+      ? { tone: "warning", title: "部分图片恢复失败", body: `已恢复 ${success} 张，失败 ${failedMessages.length} 张。${failedMessages[0] || ""}` }
       : { tone: "success", title: "图片已恢复", body: `已恢复 ${success} 张图片，返回图片墙后可查看。` });
     setConfirmAction(null);
   };
@@ -472,30 +555,34 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
   const executePurgeSelected = async () => {
     const ids = [...selectedIds];
     let success = 0;
-    const failed: string[] = [];
+    const failedMessages: string[] = [];
+    const failedIds: string[] = [];
     for (const id of ids) {
       try {
         const res = await purgeImage(id);
         if (res.ok) {
           success += 1;
           if (res.data?.errors?.length) {
-            failed.push(res.data.errors[0]);
+            failedIds.push(id);
+            failedMessages.push(res.data.errors[0]);
           }
         } else {
-          failed.push(res.error?.message || id);
+          failedIds.push(id);
+          failedMessages.push(res.error?.message || id);
         }
       } catch (err: any) {
-        failed.push(err?.message || id);
+        failedIds.push(id);
+        failedMessages.push(err?.message || id);
       }
     }
 
-    setSelectedIds([]);
+    setSelectedIds(getSelectionAfterBatch(ids, failedIds));
     setActivePhotoId(null);
     setPreviewPhotoId(null);
     setPreviewSnapshot([]);
     await loadImages();
-    setMessage(failed.length > 0
-      ? { tone: "danger", title: "部分图片永久删除失败", body: `已删除 ${success} 张，失败 ${failed.length} 张。${failed[0] || ""}` }
+    setMessage(failedMessages.length > 0
+      ? { tone: "danger", title: "部分图片永久删除失败", body: `已删除 ${success} 张，失败 ${failedMessages.length} 张。${failedMessages[0] || ""}` }
       : { tone: "success", title: "图片已永久删除", body: `已永久删除 ${success} 张图片。` });
     setConfirmAction(null);
   };
@@ -540,7 +627,7 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
       const results = await Promise.allSettled(ids.map(async (id) => {
         const res = await updateImageStatus(id, status);
         if (!res.ok || !res.data) {
-          throw new Error(res.error?.message || `${id} 更新失败`);
+          throw new Error(`${id}|${res.error?.message || "更新失败"}`);
         }
         return res.data;
       }));
@@ -551,15 +638,63 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
       const failures = results
         .filter((result): result is PromiseRejectedResult => result.status === "rejected")
         .map((result) => result.reason?.message || "图片更新失败");
+      const failedIds = failures
+        .map((message) => message.split("|")[0])
+        .filter((id) => ids.includes(id));
+      const failureMessages = failures.map((message) => message.includes("|") ? message.split("|").slice(1).join("|") : message);
 
       successImages.forEach((image) => replacePhoto(withImageCacheKey(image, String(Date.now()))));
-      setSelectedIds([]);
+      setSelectedIds(getSelectionAfterBatch(ids, failedIds));
       await loadImages();
       await loadStatusCounts();
 
-      setMessage(failures.length > 0
-        ? { tone: "warning", title: "批量状态部分完成", body: `成功 ${successImages.length} 张，失败 ${failures.length} 张。${failures[0] || ""}` }
+      setMessage(failureMessages.length > 0
+        ? { tone: "warning", title: "批量状态部分完成", body: `成功 ${successImages.length} 张，失败 ${failureMessages.length} 张。${failureMessages[0] || ""}` }
         : { tone: "success", title: "批量状态已更新", body: `已更新 ${successImages.length} 张图片。` });
+    } finally {
+      setBatchUpdating(false);
+    }
+  };
+
+  const openBatchCategoryDialog = () => {
+    if (selectedIds.length === 0 || batchUpdating) return;
+    setBatchCategoryDraft(activePhoto?.category || "");
+    setBatchCategoryOpen(true);
+  };
+
+  const batchCategory = async () => {
+    if (selectedIds.length === 0 || batchUpdating) return;
+    const ids = [...selectedIds];
+    const category = batchCategoryDraft.trim();
+    setBatchUpdating(true);
+    try {
+      const results = await Promise.allSettled(ids.map(async (id) => {
+        const res = await updateImageCategory(id, category);
+        if (!res.ok || !res.data) {
+          throw new Error(`${id}|${res.error?.message || "更新失败"}`);
+        }
+        return res.data;
+      }));
+
+      const successImages = results
+        .filter((result): result is PromiseFulfilledResult<EventImageData> => result.status === "fulfilled")
+        .map((result) => result.value);
+      const failures = results
+        .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+        .map((result) => result.reason?.message || "图片分类更新失败");
+      const failedIds = failures
+        .map((message) => message.split("|")[0])
+        .filter((id) => ids.includes(id));
+      const failureMessages = failures.map((message) => message.includes("|") ? message.split("|").slice(1).join("|") : message);
+
+      successImages.forEach((image) => replacePhoto(withImageCacheKey(image, String(Date.now()))));
+      setSelectedIds(getSelectionAfterBatch(ids, failedIds));
+      await loadImages();
+      setBatchCategoryOpen(false);
+
+      setMessage(failureMessages.length > 0
+        ? { tone: "warning", title: "批量分类部分完成", body: `成功 ${successImages.length} 张，失败 ${failureMessages.length} 张。${failureMessages[0] || ""}` }
+        : { tone: "success", title: "批量分类已更新", body: category ? `已将 ${successImages.length} 张图片分类为“${category}”。` : `已清空 ${successImages.length} 张图片的分类。` });
     } finally {
       setBatchUpdating(false);
     }
@@ -571,6 +706,7 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
     setRatingMode("gte");
     setStatusFilter("all");
     setSourceType("all");
+    setUploadedByClientId("all");
   };
 
   const movePreview = useCallback((direction: 1 | -1) => {
@@ -623,7 +759,7 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [closePreview, movePreview, previewPhoto, previewPhotoId]);
 
-  const noActiveFilters = !search && ratingValue === "all" && statusFilter === "all" && sourceType === "all";
+  const noActiveFilters = !search && ratingValue === "all" && statusFilter === "all" && sourceType === "all" && uploadedByClientId === "all";
   const emptyTitle = selectedEventId && total === 0 && noActiveFilters ? "暂无图片" : "当前筛选没有图片";
   const emptyBody = trashMode
     ? "图片回收站为空。逻辑删除后的图片会显示在这里。"
@@ -647,6 +783,8 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
     sourceType,
     statusCounts,
     statusFilter,
+    uploadedByClientId,
+    uploaders,
     onEventChange: (eventId: string) => {
       setSelectedEventId(eventId);
       setSelectedIds([]);
@@ -662,7 +800,10 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
     },
     onReset: resetFilters,
     onSearchChange: setSearch,
-    onSourceTypeChange: setSourceType,
+    onUploadSourceChange: (nextSourceType: string, nextUploadedByClientId: string) => {
+      setSourceType(nextSourceType);
+      setUploadedByClientId(nextUploadedByClientId);
+    },
     onStatusChange: setStatusFilter
   };
 
@@ -713,6 +854,7 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
           search={search}
           selectedCount={selectedIds.length}
           onBatchStatus={batchStatus}
+          onOpenBatchCategory={openBatchCategoryDialog}
           batchBusy={batchUpdating}
           onClearSelection={() => {
             setSelectedIds([]);
@@ -732,6 +874,7 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
           metadataOpen={metadataPanelOpen}
           onToggleFilters={() => setFilterPanelOpen((open) => !open)}
           onToggleMetadata={() => setMetadataPanelOpen((open) => !open)}
+          onOpenShortcuts={() => setShortcutHelpOpen(true)}
           onToggleTrashMode={mode === "host" ? () => {
             setTrashMode((value) => !value);
             setSelectedIds([]);
@@ -739,6 +882,7 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
             setPreviewPhotoId(null);
             setPreviewSnapshot([]);
           } : undefined}
+          onlineClientCount={mode === "host" ? onlineClients.length : undefined}
         />
 
         {message && (
@@ -831,7 +975,40 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
             setPreviewPhotoId(id);
           }}
           onStatusChange={handleStatusChange}
+          onOpenShortcuts={() => setShortcutHelpOpen(true)}
         />
+      )}
+
+      {shortcutHelpOpen && (
+        <ShortcutHelpDialog onClose={() => setShortcutHelpOpen(false)} />
+      )}
+
+      {batchCategoryOpen && (
+        <ConfirmDialog
+          confirmLabel="应用分类"
+          confirming={batchUpdating}
+          description="将同一个分类写入当前选中的所有图片。留空可以清空所选图片分类。"
+          details={[{ label: "图片数量", value: `${selectedIds.length} 张` }]}
+          onCancel={() => {
+            if (!batchUpdating) setBatchCategoryOpen(false);
+          }}
+          onConfirm={() => { void batchCategory(); }}
+          title="批量设置分类"
+          tone="info"
+        >
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-medium text-slate-700">分类名称</span>
+            <input
+              autoFocus
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+              maxLength={80}
+              onChange={(event) => setBatchCategoryDraft(event.target.value)}
+              placeholder="例如：领导特写 / 舞台 / 合影"
+              value={batchCategoryDraft}
+            />
+            <p className="mt-2 text-xs leading-5 text-slate-500">分类为空时会清空所选图片的分类字段。</p>
+          </label>
+        </ConfirmDialog>
       )}
 
       {confirmAction === "delete" && (
@@ -880,6 +1057,54 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
           </div>
         </ConfirmDialog>
       )}
+    </div>
+  );
+}
+
+function ShortcutHelpDialog({ onClose }: { onClose: () => void }) {
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
+  const shortcuts = [
+    ["1-5", "预览弹窗中设置当前图片星级"],
+    ["0", "预览弹窗中清除当前图片星级"],
+    ["X", "预览弹窗中标记当前图片为废片"],
+    ["E", "预览弹窗中标记当前图片为待修图"],
+    ["P", "预览弹窗中标记当前图片为可发布"],
+    ["← / →", "预览弹窗中切换上一张 / 下一张"],
+    ["Esc", "关闭预览或关闭快捷键提示"]
+  ];
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/40 p-4">
+      <div className="w-full max-w-lg rounded-2xl border border-slate-100 bg-white p-5 shadow-2xl">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold text-slate-900">图片墙快捷键</h2>
+            <p className="mt-1 text-xs text-slate-500">以下快捷键在预览弹窗打开时生效。</p>
+          </div>
+          <button
+            className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50"
+            onClick={onClose}
+            type="button"
+          >
+            关闭
+          </button>
+        </div>
+        <div className="grid gap-2">
+          {shortcuts.map(([keyName, description]) => (
+            <div className="flex items-center justify-between gap-4 rounded-xl bg-slate-50 px-4 py-3" key={keyName}>
+              <span className="text-sm text-slate-700">{description}</span>
+              <kbd className="shrink-0 rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-600">{keyName}</kbd>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

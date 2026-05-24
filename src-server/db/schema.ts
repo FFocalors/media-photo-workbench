@@ -40,6 +40,10 @@ CREATE TABLE IF NOT EXISTS images (
   remark            TEXT NOT NULL DEFAULT '',
   source            TEXT NOT NULL DEFAULT 'host_import'
                     CHECK (source IN ('host_import', 'client_upload', 'remote_import', 'manual_import')),
+  uploaded_by_client_id TEXT NOT NULL DEFAULT '',
+  uploaded_by_name  TEXT NOT NULL DEFAULT '',
+  uploaded_by_role  TEXT NOT NULL DEFAULT '',
+  uploaded_at       TEXT NOT NULL DEFAULT '',
   file_size         INTEGER NOT NULL DEFAULT 0,
   file_hash         TEXT NOT NULL DEFAULT '',
   exif_shot_at      TEXT NOT NULL DEFAULT '',
@@ -77,6 +81,9 @@ CREATE TABLE IF NOT EXISTS operation_logs (
   target_id   TEXT NOT NULL DEFAULT '',
   operator    TEXT NOT NULL DEFAULT '',
   device      TEXT NOT NULL DEFAULT '',
+  actor_type  TEXT NOT NULL DEFAULT '',
+  actor_id    TEXT NOT NULL DEFAULT '',
+  actor_name  TEXT NOT NULL DEFAULT '',
   detail      TEXT NOT NULL DEFAULT '',
   created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );

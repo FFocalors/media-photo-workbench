@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { getConfig, saveConfig } from "../config/config";
+import { getConfig, saveConfig, type BatchSelectionBehavior } from "../config/config";
 import { checkRepository } from "../services/repository";
 import { getCurrentDatabasePath } from "../db/database";
 import { getDefaultDatabasePath, resolveDatabasePath } from "../utils/paths";
@@ -36,8 +36,35 @@ router.get("/", (_req, res) => {
       autoBackupEnabled: config.database.autoBackupEnabled,
       lastAutoBackupAt: config.database.lastAutoBackupAt,
       autoBackupRetention: config.database.autoBackupRetention
-    }
+    },
+    gallery: config.gallery
   });
+});
+
+/**
+ * PATCH /api/settings/gallery
+ * 更新图片墙偏好设置。
+ */
+router.patch("/gallery", (req, res) => {
+  const behavior = req.body?.batchSelectionBehavior as BatchSelectionBehavior | undefined;
+  if (behavior !== undefined && behavior !== "clear" && behavior !== "keep") {
+    sendError(res, "INVALID_BATCH_SELECTION_BEHAVIOR", "batchSelectionBehavior 只能是 clear 或 keep");
+    return;
+  }
+
+  const config = getConfig();
+  try {
+    const next = saveConfig({
+      gallery: {
+        ...config.gallery,
+        batchSelectionBehavior: behavior ?? config.gallery.batchSelectionBehavior
+      }
+    });
+    sendSuccess(res, next.gallery);
+  } catch (err) {
+    getLogger().error({ err }, "保存图片墙偏好失败");
+    sendError(res, "SAVE_GALLERY_SETTINGS_FAILED", "保存图片墙偏好失败", 500);
+  }
 });
 
 /**

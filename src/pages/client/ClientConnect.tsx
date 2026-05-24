@@ -12,7 +12,9 @@ import {
   normalizeApiBaseUrl,
   setClientApiBase
 } from "../../lib/api";
+import { getClientName, setClientName } from "../../lib/clientIdentity";
 import { cn } from "../../lib/cn";
+import { registerClientPresence } from "../../lib/socket";
 
 const roles = ["编辑", "修图", "访客"];
 const CONNECTION_TIMEOUT_MS = 6000;
@@ -29,13 +31,14 @@ export function ClientConnectPage() {
   const [hostAddress, setHostAddress] = useState(recentHosts[0] || getClientApiBase() || "http://127.0.0.1:3030");
   const [userName, setUserName] = useState(localStorage.getItem("mediaPhotoWorkbench.clientUserName") || "外拍同学");
   const [role, setRole] = useState(localStorage.getItem("mediaPhotoWorkbench.clientRole") || "编辑");
-  const [deviceName, setDeviceName] = useState(localStorage.getItem("mediaPhotoWorkbench.clientDevice") || "Client-A");
+  const [deviceName, setDeviceNameState] = useState(getClientName());
   const [testing, setTesting] = useState(false);
   const [health, setHealth] = useState<HealthData | null>(null);
   const [message, setMessage] = useState<ConnectionMessage | null>(null);
 
   const connected = Boolean(health);
-  const canConnect = hostAddress.trim().length > 0 && userName.trim().length > 0 && deviceName.trim().length > 0;
+  const normalizedDeviceName = deviceName.trim() || getClientName();
+  const canConnect = hostAddress.trim().length > 0 && userName.trim().length > 0;
   const qrAddress = useMemo(() => {
     try {
       return normalizeApiBaseUrl(hostAddress);
@@ -63,7 +66,9 @@ export function ClientConnectPage() {
       const savedBase = setClientApiBase(normalized);
       localStorage.setItem("mediaPhotoWorkbench.clientUserName", userName.trim());
       localStorage.setItem("mediaPhotoWorkbench.clientRole", role);
-      localStorage.setItem("mediaPhotoWorkbench.clientDevice", deviceName.trim());
+      const savedClientName = setClientName(normalizedDeviceName);
+      setDeviceNameState(savedClientName);
+      registerClientPresence();
       setHealth(result.data);
       setMessage({ tone: "success", title: "连接测试通过", body: `已连接到 ${savedBase}。` });
     } catch (err: any) {
@@ -139,7 +144,7 @@ export function ClientConnectPage() {
 
               {!canConnect && (
                 <Notice className="mt-4" tone="warning" title="连接信息不完整">
-                  请输入主机地址、姓名和设备名后再发起连接测试。主机地址需要使用完整格式，例如 http://192.168.137.1:3030。
+                  请输入主机地址和姓名后再发起连接测试。主机地址需要使用完整格式，例如 http://192.168.137.1:3030。
                 </Notice>
               )}
               {message && (
@@ -159,7 +164,16 @@ export function ClientConnectPage() {
                     {roles.map((item) => <option key={item}>{item}</option>)}
                   </select>
                 </label>
-                <Field label="设备名" onChange={setDeviceName} value={deviceName} />
+                <Field
+                  helper="用于主机端识别你的上传和操作记录，例如：修图电脑A、摄影组1号。"
+                  label="设备名称"
+                  onChange={(value) => {
+                    setDeviceNameState(value);
+                    if (value.trim()) setClientName(value);
+                  }}
+                  onBlur={() => setDeviceNameState(setClientName(deviceName))}
+                  value={deviceName}
+                />
               </div>
             </div>
 
@@ -315,15 +329,29 @@ function TroubleshootingList({ intro, items }: { intro: string; items: string[] 
   );
 }
 
-function Field({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+function Field({
+  label,
+  value,
+  onChange,
+  helper,
+  onBlur
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  helper?: string;
+  onBlur?: () => void;
+}) {
   return (
     <label>
       <span className="mb-1.5 block text-xs font-medium text-slate-500">{label}</span>
       <input
         className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 outline-none focus:border-blue-500"
+        onBlur={onBlur}
         onChange={(event) => onChange(event.target.value)}
         value={value}
       />
+      {helper && <span className="mt-1.5 block text-xs leading-5 text-slate-400">{helper}</span>}
     </label>
   );
 }

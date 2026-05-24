@@ -4,7 +4,10 @@ import { TaskCenter } from "../components/tasks/TaskCenter";
 import { BrandLogo } from "../components/common/BrandLogo";
 import { Notice } from "../components/ui/States";
 import { getClientApiBase } from "../lib/api";
+import { getClientName } from "../lib/clientIdentity";
 import { cn } from "../lib/cn";
+import { registerClientPresence, unregisterClientPresence } from "../lib/socket";
+import { useEffect, useState } from "react";
 
 const navItems = [
   { icon: UploadCloud, label: "上传图片", to: "/client/upload" },
@@ -15,6 +18,16 @@ const navItems = [
 export function ClientLayout() {
   const navigate = useNavigate();
   const hostAddress = getClientApiBase();
+  const [clientName] = useState(() => getClientName());
+
+  useEffect(() => {
+    if (hostAddress) {
+      registerClientPresence();
+    }
+    return () => {
+      unregisterClientPresence();
+    };
+  }, [hostAddress]);
 
   if (!hostAddress) {
     return (
@@ -49,6 +62,7 @@ export function ClientLayout() {
             当前主机
           </p>
           <p className="truncate text-xs text-slate-600">{hostAddress || "未连接"}</p>
+          <p className="mt-2 truncate text-xs font-medium text-slate-700">设备：{clientName}</p>
         </div>
 
         <div className="flex flex-1 flex-col gap-1 overflow-y-auto px-3 py-4">

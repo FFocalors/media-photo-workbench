@@ -4,6 +4,7 @@ import path from "path";
 import fs from "fs-extra";
 import { getConfig } from "../config/config";
 import { getDatabase } from "../db/database";
+import { actorToLogColumns, HOST_ACTOR, normalizeActor, type ActorInfo } from "../utils/actor";
 import { safeLog } from "../utils/logger";
 import { getEventById } from "./events";
 import { ensureEventWorkingDirs, getEventWorkspacePaths } from "./eventWorkspace";
@@ -281,19 +282,30 @@ function writeImportLog(input: {
   device: string;
   originalFilename: string;
   storedFilename: string;
+  actor: ActorInfo;
 }): void {
+  const actorColumns = actorToLogColumns(input.actor);
   getDatabase().prepare(`
-    INSERT INTO operation_logs (type, target_type, target_id, operator, device, detail, created_at)
-    VALUES ('image_imported', 'image', ?, ?, ?, ?, ?)
+    INSERT INTO operation_logs (
+      type, target_type, target_id, operator, device,
+      actor_type, actor_id, actor_name, detail, created_at
+    )
+    VALUES ('image_imported', 'image', ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     input.imageId,
-    input.photographer,
-    input.device,
+    actorColumns.operator || input.photographer,
+    input.device || actorColumns.device,
+    actorColumns.actor_type,
+    actorColumns.actor_id,
+    actorColumns.actor_name,
     JSON.stringify({
       event_id: input.eventId,
       source_type: input.sourceType,
       original_filename: input.originalFilename,
-      stored_filename: input.storedFilename
+      stored_filename: input.storedFilename,
+      actor_type: actorColumns.actor_type,
+      actor_id: actorColumns.actor_id,
+      actor_name: actorColumns.actor_name
     }),
     nowTimestamp()
   );
@@ -412,6 +424,7 @@ export async function importImageFiles(input: {
   photographer?: string;
   device?: string;
   remark?: string;
+  actor?: ActorInfo;
   options?: ImportImageFilesOptions;
 }): Promise<ImportStartResult> {
   const sourceType = input.sourceType;
@@ -425,6 +438,9 @@ export async function importImageFiles(input: {
   const photographer = input.photographer?.trim() ?? "";
   const device = input.device?.trim() ?? "";
   const remark = input.remark?.trim() ?? "";
+  const actor = sourceType === "client_upload"
+    ? normalizeActor(input.actor, { type: "client", id: "", name: "客户端" })
+    : normalizeActor(input.actor, HOST_ACTOR);
   const maxErrors = input.options?.maxErrors ?? 100;
   const concurrency = Math.min(
     Math.max(1, input.options?.concurrency ?? getDefaultImportConcurrency()),
@@ -457,10 +473,12 @@ export async function importImageFiles(input: {
     INSERT INTO images (
       id, event_id, original_filename, stored_filename, thumb_path, preview_path,
       original_path, edited_path, photographer, camera_model, lens_model, shot_at,
-      rating, status, category, remark, source, file_size, file_hash, exif_shot_at,
+      rating, status, category, remark, source,
+      uploaded_by_client_id, uploaded_by_name, uploaded_by_role, uploaded_at,
+      file_size, file_hash, exif_shot_at,
       width, height, created_at, updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, 0, 'unselected', '', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, 0, 'unselected', '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const updateEventStmt = db.prepare(`
     UPDATE events
@@ -559,6 +577,10 @@ export async function importImageFiles(input: {
         exif.shotAt,
         remark,
         sourceType,
+        actor.type === "client" ? actor.id : "host",
+        sourceType === "host_import" ? "主机" : actor.name || device || "客户端",
+        actor.type,
+        now,
         file.size,
         fileHash,
         exif.shotAt,
@@ -574,7 +596,8 @@ export async function importImageFiles(input: {
         photographer,
         device,
         originalFilename: file.filename,
-        storedFilename
+        storedFilename,
+        actor
       });
 
       const imported: ImportedImageSummary = {

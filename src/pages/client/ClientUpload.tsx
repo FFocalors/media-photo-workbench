@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Notice } from "../../components/ui/States";
 import { ClientUploadData, ClientUploadTaskData, EventData, fetchEvents, fetchTask, getClientApiBase, uploadClientImages, type TaskData } from "../../lib/api";
+import { getClientName, setClientName } from "../../lib/clientIdentity";
 import { cn } from "../../lib/cn";
 import { subscribeRealtimeTaskEvent } from "../../lib/socket";
 import { formatTaskDuration, getTaskStats, taskStatusLabel } from "../../lib/taskStats";
@@ -15,7 +16,7 @@ export function ClientUploadPage() {
   const [selectedEventId, setSelectedEventId] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [photographer, setPhotographer] = useState(localStorage.getItem("mediaPhotoWorkbench.clientUserName") || "");
-  const [device, setDevice] = useState(localStorage.getItem("mediaPhotoWorkbench.clientDevice") || "");
+  const [device, setDeviceState] = useState(getClientName());
   const [remark, setRemark] = useState("");
   const [loadingEvents, setLoadingEvents] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -181,7 +182,7 @@ export function ClientUploadPage() {
       const res = await uploadClientImages(selectedEventId, {
         files,
         photographer,
-        device,
+        device: setClientName(device),
         remark
       });
       if (res.ok && res.data) {
@@ -241,7 +242,14 @@ export function ClientUploadPage() {
                   </select>
                 </label>
                 <Field label="摄影师" onChange={setPhotographer} value={photographer} />
-                <Field label="设备名" onChange={setDevice} value={device} />
+                <Field
+                  label="设备名"
+                  onChange={(value) => {
+                    setDeviceState(value);
+                    if (value.trim()) setClientName(value);
+                  }}
+                  value={device}
+                />
                 <Field label="备注" onChange={setRemark} value={remark} />
               </div>
             </div>

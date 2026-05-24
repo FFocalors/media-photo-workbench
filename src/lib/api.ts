@@ -5,6 +5,8 @@
  */
 
 // 声明全局类型已在 src/global.d.ts 中定义
+import { getActorHeaders, getClientIdentity, getCurrentActor } from "./clientIdentity";
+
 const CLIENT_API_BASE_KEY = "mediaPhotoWorkbench.clientApiBaseUrl";
 const CLIENT_RECENT_HOSTS_KEY = "mediaPhotoWorkbench.clientRecentHosts";
 
@@ -130,6 +132,10 @@ async function parseApiResponse<T>(res: Response): Promise<ApiResponse<T>> {
   };
 }
 
+function getActorHeadersToBody() {
+  return getCurrentActor();
+}
+
 // ---------- Health ----------
 
 export interface HealthData {
@@ -171,7 +177,29 @@ export async function fetchHealthFrom(baseUrl: string, options?: RequestInit): P
   return requestFromBase<HealthData>(baseUrl, "/api/health", options);
 }
 
+// ---------- Online Clients ----------
+
+export interface ClientPresenceData {
+  clientId: string;
+  clientName: string;
+  role: "client";
+  connectedAt: string;
+  lastSeenAt: string;
+  userAgent?: string;
+  address?: string;
+}
+
+export interface OnlineClientsData {
+  clients: ClientPresenceData[];
+}
+
+export async function fetchOnlineClients(): Promise<ApiResponse<OnlineClientsData>> {
+  return request<OnlineClientsData>("/api/clients/online");
+}
+
 // ---------- Settings ----------
+
+export type BatchSelectionBehavior = "clear" | "keep";
 
 export interface SettingsData {
   server: { port: number };
@@ -184,10 +212,23 @@ export interface SettingsData {
     lastAutoBackupAt: string;
     autoBackupRetention: number;
   };
+  gallery: {
+    batchSelectionBehavior: BatchSelectionBehavior;
+  };
 }
 
 export async function fetchSettings(): Promise<ApiResponse<SettingsData>> {
   return request<SettingsData>("/api/settings");
+}
+
+export async function updateGallerySettings(input: {
+  batchSelectionBehavior?: BatchSelectionBehavior;
+}): Promise<ApiResponse<SettingsData["gallery"]>> {
+  return request<SettingsData["gallery"]>("/api/settings/gallery", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
 }
 
 export interface DatabaseBackupData {
@@ -473,6 +514,9 @@ export interface ClientUploadTaskData {
   photographer: string;
   device: string;
   remark: string;
+  clientId?: string;
+  clientName?: string;
+  clientRole?: string;
 }
 
 export async function uploadClientImages(
@@ -491,6 +535,10 @@ export async function uploadClientImages(
   formData.append("photographer", input.photographer ?? "");
   formData.append("device", input.device ?? "");
   formData.append("remark", input.remark ?? "");
+  const identity = getClientIdentity();
+  formData.append("clientId", identity.clientId);
+  formData.append("clientName", input.device?.trim() || identity.clientName || "客户端");
+  formData.append("clientRole", "client");
 
   return request<ClientUploadData | ClientUploadTaskData>(`/api/events/${eventId}/upload`, {
     method: "POST",
@@ -534,6 +582,10 @@ export interface EventImageData {
   camera_model: string;
   lens_model: string;
   source_type: string;
+  uploaded_by_client_id: string;
+  uploaded_by_name: string;
+  uploaded_by_role: string;
+  uploaded_at: string;
   edited_available: boolean;
   original_exists: boolean;
   thumb_exists: boolean;
@@ -554,6 +606,7 @@ export interface EventImagesParams {
   ratingMode?: "eq" | "gte";
   status?: ImageStatus | "all";
   source_type?: string;
+  uploadedByClientId?: string;
   keyword?: string;
 }
 
@@ -578,7 +631,11 @@ function normalizeImageData(image: EventImageData): EventImageData {
     preview_exists: previewExists,
     edited_exists: editedExists,
     is_deleted: typeof image.is_deleted === "boolean" ? image.is_deleted : false,
-    deleted_at: image.deleted_at ?? ""
+    deleted_at: image.deleted_at ?? "",
+    uploaded_by_client_id: image.uploaded_by_client_id ?? (image.source_type === "host_import" ? "host" : ""),
+    uploaded_by_name: image.uploaded_by_name ?? "",
+    uploaded_by_role: image.uploaded_by_role ?? "",
+    uploaded_at: image.uploaded_at ?? image.imported_at ?? ""
   };
 }
 
@@ -637,11 +694,22 @@ export async function fetchEventTrashedImages(eventId: string, params: EventImag
   };
 }
 
+export interface EventUploaderData {
+  clientId: string;
+  clientName: string;
+  sourceType: string;
+  count: number;
+}
+
+export async function fetchEventUploaders(eventId: string): Promise<ApiResponse<EventUploaderData[]>> {
+  return request<EventUploaderData[]>(`/api/events/${eventId}/uploaders`);
+}
+
 export async function updateImageRating(id: string, rating: number): Promise<ApiResponse<EventImageData>> {
   const response = await request<EventImageData>(`/api/images/${id}/rating`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ rating })
+    headers: { "Content-Type": "application/json", ...getActorHeaders() },
+    body: JSON.stringify({ rating, actor: getActorHeadersToBody() })
   });
   return normalizeImageResponse(response);
 }
@@ -649,8 +717,8 @@ export async function updateImageRating(id: string, rating: number): Promise<Api
 export async function updateImageStatus(id: string, status: ImageStatus): Promise<ApiResponse<EventImageData>> {
   const response = await request<EventImageData>(`/api/images/${id}/status`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ status })
+    headers: { "Content-Type": "application/json", ...getActorHeaders() },
+    body: JSON.stringify({ status, actor: getActorHeadersToBody() })
   });
   return normalizeImageResponse(response);
 }
@@ -658,8 +726,8 @@ export async function updateImageStatus(id: string, status: ImageStatus): Promis
 export async function updateImageCategory(id: string, category: string): Promise<ApiResponse<EventImageData>> {
   const response = await request<EventImageData>(`/api/images/${id}/category`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ category })
+    headers: { "Content-Type": "application/json", ...getActorHeaders() },
+    body: JSON.stringify({ category, actor: getActorHeadersToBody() })
   });
   return normalizeImageResponse(response);
 }
@@ -667,22 +735,24 @@ export async function updateImageCategory(id: string, category: string): Promise
 export async function updateImageRemark(id: string, remark: string): Promise<ApiResponse<EventImageData>> {
   const response = await request<EventImageData>(`/api/images/${id}/remark`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ remark })
+    headers: { "Content-Type": "application/json", ...getActorHeaders() },
+    body: JSON.stringify({ remark, actor: getActorHeadersToBody() })
   });
   return normalizeImageResponse(response);
 }
 
 export async function deleteImage(id: string): Promise<ApiResponse<EventImageData>> {
   const response = await request<EventImageData>(`/api/images/${id}`, {
-    method: "DELETE"
+    method: "DELETE",
+    headers: getActorHeaders()
   });
   return normalizeImageResponse(response);
 }
 
 export async function restoreImage(id: string): Promise<ApiResponse<EventImageData>> {
   const response = await request<EventImageData>(`/api/images/${id}/restore`, {
-    method: "PATCH"
+    method: "PATCH",
+    headers: getActorHeaders()
   });
   return normalizeImageResponse(response);
 }

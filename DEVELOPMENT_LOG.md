@@ -28,6 +28,94 @@
 
 ## 开发记录
 
+### v0.17.0 开发阶段：17.2 图片墙效率增强
+- **日期**：2026-05-22
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - 图片墙顶部和预览弹窗新增快捷键提示面板，文案与当前预览快捷键一致。
+  - 图片墙“更多操作”新增批量分类弹窗，可批量写入或清空分类，并复用现有单图分类接口和 actor 操作归属。
+  - 设置页常规设置新增批量操作后选择行为配置：`clear` / `keep`，默认 `clear`；批量状态、批量分类、删除、恢复、永久删除按配置处理选择，部分失败时清空模式保留失败项。
+  - 根据现场使用反馈，移除筛选预设和快捷筛选入口，保留现有状态、星级、上传来源 / 上传者和搜索筛选。
+- **修改文件**：
+  - `src-server/config/config.ts`
+  - `src-server/routes/settings.ts`
+  - `src-server/routes/events.ts`
+  - `src-server/services/images.ts`
+  - `src/lib/api.ts`
+  - `src/pages/host/PhotoWall.tsx`
+  - `src/pages/host/Settings.tsx`
+  - `src/components/gallery/FilterSidebar.tsx`
+  - `src/components/gallery/GalleryToolbar.tsx`
+  - `src/components/gallery/PreviewModal.tsx`
+  - `README.md`
+  - `CHANGELOG.md`
+  - `DEVELOPMENT_LOG.md`
+  - `ROADMAP.md`
+  - `API_SPEC.md`
+  - `DATABASE_SCHEMA.md`
+  - `TESTING_NOTES.md`
+- **验证方式**：
+  - 执行 `pnpm build` 通过。
+- **遇到的问题**：
+  - 筛选预设和快捷筛选现场实用性不足，增加了筛选栏复杂度。
+- **解决方案**：
+  - 删除相关前端组件、后端 API、查询参数和配置字段，只保留批量选择行为配置。
+- **未完成事项**：
+  - 不做账号、登录、权限、远程传输、RAW / HEIC / 视频、NSIS、Git tag、Release 或自动提交；完成 17.2 后暂停。
+
+### v0.17.0 开发阶段：17.1 现场协作感知与来源追踪
+- **日期**：2026-05-22
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - 服务端 Socket.IO 新增客户端 presence：客户端通过 `client-register` / `client-hello` 上报 `clientId`、设备名称和角色，服务端内存维护在线客户端列表并广播 `clients-updated`。
+  - 新增 `GET /api/clients/online`，主机首页和图片墙可读取当前在线客户端数量；主机首页显示在线客户端列表。
+  - 客户端连接页新增“设备名称”输入说明，`clientId` 和 `clientName` 持久保存到 localStorage；客户端布局显示当前设备名，客户端页面进入后自动上报。
+  - `images` 表新增上传者追踪字段，客户端上传写入上传客户端 ID、设备名、角色和上传时间；主机导入写入主机来源兜底。
+  - 图片 DTO、图片元数据面板和预览弹窗展示来源、上传者和上传时间，旧数据按 `source` 兜底显示。
+  - 图片墙新增“上传来源 / 上传者”筛选，后端 `GET /api/events/:eventId/images` 支持 `uploadedByClientId` 查询参数，分页 total 由数据库筛选结果计算。
+  - 新增 `GET /api/events/:eventId/uploaders` 返回活动内出现过的上传来源 / 上传者统计。
+  - `operation_logs` 新增 `actor_type`、`actor_id`、`actor_name`，星级、状态、分类、备注、逻辑删除和恢复会记录操作者；批量状态沿用逐图更新并记录同一个 actor。
+  - 主机首页新增“现场动态”卡片，内存保留最近 20 条图片上传、修改、删除 / 恢复和任务完成动态。
+- **修改文件**：
+  - `src-server/realtime/socket.ts`
+  - `src-server/routes/clients.ts`
+  - `src-server/routes/events.ts`
+  - `src-server/routes/images.ts`
+  - `src-server/services/imageImport.ts`
+  - `src-server/services/images.ts`
+  - `src-server/db/schema.ts`
+  - `src-server/db/database.ts`
+  - `src-server/services/archive.ts`
+  - `src-server/utils/actor.ts`
+  - `src-server/app.ts`
+  - `src/lib/api.ts`
+  - `src/lib/socket.ts`
+  - `src/lib/clientIdentity.ts`
+  - `src/pages/client/ClientConnect.tsx`
+  - `src/layouts/ClientLayout.tsx`
+  - `src/pages/client/ClientUpload.tsx`
+  - `src/pages/host/Overview.tsx`
+  - `src/pages/host/PhotoWall.tsx`
+  - `src/components/gallery/FilterSidebar.tsx`
+  - `src/components/gallery/GalleryToolbar.tsx`
+  - `src/components/gallery/MetadataPanel.tsx`
+  - `src/components/gallery/PreviewModal.tsx`
+  - `README.md`
+  - `CHANGELOG.md`
+  - `DEVELOPMENT_LOG.md`
+  - `ROADMAP.md`
+  - `API_SPEC.md`
+  - `DATABASE_SCHEMA.md`
+  - `TESTING_NOTES.md`
+- **验证方式**：
+  - 执行 `pnpm build` 通过。
+- **兼容策略**：
+  - 数据库迁移通过 `PRAGMA table_info` 判断字段是否存在，缺失时才执行 `ALTER TABLE`，字段已存在会跳过。
+  - 旧图片缺少上传者字段时，前端按 `source` 显示“主机导入 / 客户端上传 / 未知来源”。
+  - 旧操作日志缺少 actor 字段时不影响读取；新日志同时保留旧 `operator/device` 字段。
+- **未完成事项**：
+  - 本轮不做筛选预设、快捷键提示面板、远程传输、RAW / HEIC / 视频、NSIS、账号 / 登录 / 权限系统、Git tag、Release 或自动提交；这些留到后续 17.2 或更后版本。
+
 ### v0.16.0 开发阶段：16.5 数据库备份与数据库位置迁移
 - **日期**：2026-05-21
 - **开发者 / 工具**：Codex

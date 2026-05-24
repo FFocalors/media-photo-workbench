@@ -15,6 +15,7 @@ import {
 } from "../services/images";
 import { getLogger } from "../utils/logger";
 import { emitImageDeletedLogical, emitImageUpdated } from "../realtime/socket";
+import { actorFromRequest } from "../utils/actor";
 
 const router = Router();
 
@@ -91,12 +92,14 @@ router.get("/:id/download/edited", (req, res) => {
 
 router.delete("/:id", (req, res) => {
   try {
-    const image = deleteImage(req.params.id, getBaseUrl(req));
+    const actor = actorFromRequest(req);
+    const image = deleteImage(req.params.id, getBaseUrl(req), actor);
     emitImageDeletedLogical({
       eventId: image.event_id,
       imageId: image.id,
       image,
       action: "image_deleted_logical",
+      actor,
       updatedAt: nowIso()
     });
     sendSuccess(res, image);
@@ -107,12 +110,14 @@ router.delete("/:id", (req, res) => {
 
 router.patch("/:id/restore", (req, res) => {
   try {
-    const image = restoreImage(req.params.id, getBaseUrl(req));
+    const actor = actorFromRequest(req);
+    const image = restoreImage(req.params.id, getBaseUrl(req), actor);
     emitImageUpdated({
       eventId: image.event_id,
       imageId: image.id,
       image,
       action: "image_restored",
+      actor,
       updatedAt: nowIso()
     });
     sendSuccess(res, image);
@@ -132,12 +137,14 @@ router.delete("/:id/purge", async (req, res) => {
 
 router.patch("/:id/rating", (req, res) => {
   try {
-    const image = updateImageRating(req.params.id, Number(req.body.rating), getBaseUrl(req));
+    const actor = actorFromRequest(req);
+    const image = updateImageRating(req.params.id, Number(req.body.rating), getBaseUrl(req), actor);
     emitImageUpdated({
       eventId: image.event_id,
       imageId: image.id,
       image,
       action: "rating_changed",
+      actor,
       updatedAt: nowIso()
     });
     sendSuccess(res, image);
@@ -148,12 +155,14 @@ router.patch("/:id/rating", (req, res) => {
 
 router.patch("/:id/status", (req, res) => {
   try {
-    const image = updateImageStatus(req.params.id, req.body.status, getBaseUrl(req));
+    const actor = actorFromRequest(req);
+    const image = updateImageStatus(req.params.id, req.body.status, getBaseUrl(req), actor);
     emitImageUpdated({
       eventId: image.event_id,
       imageId: image.id,
       image,
       action: "status_changed",
+      actor,
       updatedAt: nowIso()
     });
     sendSuccess(res, image);
@@ -164,12 +173,14 @@ router.patch("/:id/status", (req, res) => {
 
 router.patch("/:id/category", (req, res) => {
   try {
-    const image = updateImageCategory(req.params.id, req.body.category, getBaseUrl(req));
+    const actor = actorFromRequest(req);
+    const image = updateImageCategory(req.params.id, req.body.category, getBaseUrl(req), actor);
     emitImageUpdated({
       eventId: image.event_id,
       imageId: image.id,
       image,
       action: "category_changed",
+      actor,
       updatedAt: nowIso()
     });
     sendSuccess(res, image);
@@ -180,12 +191,14 @@ router.patch("/:id/category", (req, res) => {
 
 router.patch("/:id/remark", (req, res) => {
   try {
-    const image = updateImageRemark(req.params.id, req.body.remark, getBaseUrl(req));
+    const actor = actorFromRequest(req);
+    const image = updateImageRemark(req.params.id, req.body.remark, getBaseUrl(req), actor);
     emitImageUpdated({
       eventId: image.event_id,
       imageId: image.id,
       image,
       action: "remark_changed",
+      actor,
       updatedAt: nowIso()
     });
     sendSuccess(res, image);

@@ -2,6 +2,7 @@ import {
   ChevronDown,
   Download,
   Info,
+  Keyboard,
   LayoutGrid,
   List,
   MoreHorizontal,
@@ -22,6 +23,7 @@ export function GalleryToolbar({
   onClearSelection,
   onDeleteSelected,
   onBatchStatus,
+  onOpenBatchCategory,
   search,
   onSearchChange,
   realtimeStatus,
@@ -36,7 +38,9 @@ export function GalleryToolbar({
   onToggleMetadata,
   metadataOpen = true,
   hasMetadata = false,
-  batchBusy = false
+  onOpenShortcuts,
+  batchBusy = false,
+  onlineClientCount
 }: {
   selectedCount: number;
   filteredCount: number;
@@ -44,6 +48,7 @@ export function GalleryToolbar({
   onClearSelection: () => void;
   onDeleteSelected: () => void;
   onBatchStatus: (status: ImageStatus) => void | Promise<void>;
+  onOpenBatchCategory?: () => void;
   search: string;
   onSearchChange: (value: string) => void;
   realtimeStatus: RealtimeConnectionState;
@@ -58,7 +63,9 @@ export function GalleryToolbar({
   onToggleMetadata?: () => void;
   metadataOpen?: boolean;
   hasMetadata?: boolean;
+  onOpenShortcuts?: () => void;
   batchBusy?: boolean;
+  onlineClientCount?: number;
 }) {
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const actionMenuRef = useRef<HTMLDivElement | null>(null);
@@ -118,10 +125,25 @@ export function GalleryToolbar({
 
       <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
         <div className="whitespace-nowrap text-xs text-slate-500">筛选结果 {filteredCount} 张</div>
+        {typeof onlineClientCount === "number" && (
+          <div className="whitespace-nowrap rounded-full border border-blue-100 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-600">
+            在线客户端 {onlineClientCount}
+          </div>
+        )}
         <div className="flex items-center gap-1.5 whitespace-nowrap rounded-full border border-slate-200 px-2.5 py-1 text-xs text-slate-500">
           <span className={`h-2 w-2 rounded-full ${realtimeStatusClass(realtimeStatus)}`} />
           {realtimeStatusLabel(realtimeStatus)}
         </div>
+        {onOpenShortcuts && (
+          <button
+            className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            onClick={onOpenShortcuts}
+            type="button"
+          >
+            <Keyboard size={15} />
+            快捷键
+          </button>
+        )}
         <div className="flex shrink-0 rounded-lg border border-slate-200 bg-slate-100 p-0.5">
           <button className="rounded-md bg-white p-1.5 text-slate-700 shadow-sm" title="网格视图" type="button"><LayoutGrid size={16} /></button>
           <button className="rounded-md p-1.5 text-slate-500 hover:text-slate-700" title="列表视图" type="button"><List size={16} /></button>
@@ -201,6 +223,11 @@ export function GalleryToolbar({
                       标记为{imageStatusLabels[status]}
                     </ActionMenuButton>
                   ))}
+                  {onOpenBatchCategory && (
+                    <ActionMenuButton disabled={selectedCount === 0 || batchBusy} onClick={() => runAction(onOpenBatchCategory)}>
+                      设置分类...
+                    </ActionMenuButton>
+                  )}
                 </>
               )}
             </div>

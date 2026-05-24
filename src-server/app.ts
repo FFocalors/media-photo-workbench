@@ -12,6 +12,7 @@ import exportsRouter from "./routes/exports";
 import archivedEventsRouter from "./routes/archivedEvents";
 import tasksRouter from "./routes/tasks";
 import downloadPackagesRouter from "./routes/downloadPackages";
+import clientsRouter from "./routes/clients";
 
 export interface CreateAppOptions {
   frontendDistPath?: string;
@@ -39,6 +40,7 @@ export function createApp(options: CreateAppOptions = {}): express.Application {
   app.use("/api/archived-events", archivedEventsRouter);
   app.use("/api/tasks", tasksRouter);
   app.use("/api/download-packages", downloadPackagesRouter);
+  app.use("/api/clients", clientsRouter);
 
   const frontendDistPath = options.serveFrontend === false
     ? null

@@ -19,10 +19,11 @@ import {
   importSelectedImageFiles,
   scanImportFolder
 } from "../services/imageImport";
-import { getImageDtoById, listEventImages, listEventTrashedImages } from "../services/images";
+import { getImageDtoById, listEventImages, listEventTrashedImages, listEventUploaders } from "../services/images";
 import { getLogger } from "../utils/logger";
 import { emitImageCreated } from "../realtime/socket";
 import { parseMultipartForm } from "../utils/multipart";
+import { normalizeActor } from "../utils/actor";
 import { createEditPackage, EditedUploadProgressSnapshot, listEditPackages, uploadEditedImages } from "../services/editWorkflow";
 import { createPublishExport } from "../services/publishExport";
 import { cleanupEventArchive, prepareEventArchive, verifyEventArchive } from "../services/archive";
@@ -407,6 +408,7 @@ router.get("/:id/images/trash", (req, res) => {
       ratingMode: typeof req.query.ratingMode === "string" ? req.query.ratingMode : undefined,
       status: typeof req.query.status === "string" ? req.query.status : undefined,
       sourceType: typeof req.query.source_type === "string" ? req.query.source_type : undefined,
+      uploadedByClientId: typeof req.query.uploadedByClientId === "string" ? req.query.uploadedByClientId : undefined,
       keyword: typeof req.query.keyword === "string" ? req.query.keyword : undefined
     }, `${req.protocol}://${req.get("host")}`);
     sendSuccess(res, result);
@@ -433,6 +435,7 @@ router.get("/:id/images", (req, res) => {
       ratingMode: typeof req.query.ratingMode === "string" ? req.query.ratingMode : undefined,
       status: typeof req.query.status === "string" ? req.query.status : undefined,
       sourceType: typeof req.query.source_type === "string" ? req.query.source_type : undefined,
+      uploadedByClientId: typeof req.query.uploadedByClientId === "string" ? req.query.uploadedByClientId : undefined,
       keyword: typeof req.query.keyword === "string" ? req.query.keyword : undefined
     }, `${req.protocol}://${req.get("host")}`);
     sendSuccess(res, result);
@@ -443,6 +446,19 @@ router.get("/:id/images", (req, res) => {
       getLogger().error({ err }, "查询活动图片失败");
       sendError(res, "LIST_IMAGES_FAILED", "查询活动图片失败", 500);
     }
+  }
+});
+
+/**
+ * GET /api/events/:id/uploaders
+ * 获取当前活动中出现过的上传来源 / 上传者。
+ */
+router.get("/:id/uploaders", (req, res) => {
+  try {
+    sendSuccess(res, listEventUploaders(req.params.id));
+  } catch (err) {
+    getLogger().error({ err }, "获取活动上传者列表失败");
+    sendError(res, "LIST_EVENT_UPLOADERS_FAILED", "获取活动上传者列表失败", 500);
   }
 });
 
@@ -573,6 +589,14 @@ router.post("/:id/upload", async (req, res) => {
     const photographer = form.fields.photographer ?? "";
     const device = form.fields.device ?? "";
     const remark = form.fields.remark ?? "";
+    const clientId = form.fields.clientId ?? "";
+    const clientName = form.fields.clientName ?? device ?? "客户端";
+    const clientRole = form.fields.clientRole ?? "client";
+    const actor = normalizeActor({
+      type: "client",
+      id: clientId,
+      name: clientName
+    }, { type: "client", id: clientId, name: clientName || "客户端" });
     const formForTask = form;
     form = null;
 
@@ -594,6 +618,7 @@ router.post("/:id/upload", async (req, res) => {
         photographer,
         device,
         remark,
+        actor,
         options
       }),
       cleanup: () => formForTask.cleanup()
@@ -604,7 +629,10 @@ router.post("/:id/upload", async (req, res) => {
       total: files.length,
       photographer,
       device,
-      remark
+      remark,
+      clientId,
+      clientName,
+      clientRole
     }, 202);
   } catch (err: any) {
     if (err?.code) {

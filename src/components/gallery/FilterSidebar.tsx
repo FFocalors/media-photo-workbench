@@ -1,5 +1,5 @@
 import { X } from "lucide-react";
-import { EventData, ImageStatus, imageStatusLabels, imageStatusOptions } from "../../lib/api";
+import { EventData, EventUploaderData, ImageStatus, imageStatusLabels, imageStatusOptions } from "../../lib/api";
 import { cn } from "../../lib/cn";
 
 export function FilterSidebar({
@@ -10,13 +10,15 @@ export function FilterSidebar({
   ratingMode,
   statusFilter,
   sourceType,
+  uploadedByClientId,
+  uploaders,
   statusCounts,
   onEventChange,
   onSearchChange,
   onRatingValueChange,
   onRatingModeChange,
   onStatusChange,
-  onSourceTypeChange,
+  onUploadSourceChange,
   onReset,
   className,
   showClose = false,
@@ -29,19 +31,28 @@ export function FilterSidebar({
   ratingMode: "eq" | "gte";
   statusFilter: ImageStatus | "all";
   sourceType: string;
+  uploadedByClientId: string;
+  uploaders: EventUploaderData[];
   statusCounts: Record<ImageStatus, number>;
   onEventChange: (eventId: string) => void;
   onSearchChange: (value: string) => void;
   onRatingValueChange: (value: number | "all") => void;
   onRatingModeChange: (value: "eq" | "gte") => void;
   onStatusChange: (status: ImageStatus | "all") => void;
-  onSourceTypeChange: (value: string) => void;
+  onUploadSourceChange: (sourceType: string, uploadedByClientId: string) => void;
   onReset: () => void;
   className?: string;
   showClose?: boolean;
   onClose?: () => void;
 }) {
   const total = Object.values(statusCounts).reduce((sum, count) => sum + count, 0);
+  const uploadSourceValue = uploadedByClientId !== "all"
+    ? `client:${uploadedByClientId}`
+    : sourceType !== "all"
+      ? `source:${sourceType}`
+      : "all";
+  const clientUploaders = uploaders.filter((item) => item.clientId !== "host" && item.sourceType === "client_upload");
+  const hasHostImports = uploaders.some((item) => item.clientId === "host" || item.sourceType === "host_import");
 
   return (
     <div className={cn("flex w-64 shrink-0 flex-col overflow-y-auto border-r border-slate-100 bg-white", className)}>
@@ -78,18 +89,47 @@ export function FilterSidebar({
           />
         </FilterSection>
 
-        <FilterSection title="来源">
+        <FilterSection title="上传来源 / 上传者">
           <select
             className="w-full rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm text-slate-700"
-            onChange={(event) => onSourceTypeChange(event.target.value)}
-            value={sourceType}
+            onChange={(event) => {
+              const value = event.target.value;
+              if (value === "all") {
+                onUploadSourceChange("all", "all");
+                return;
+              }
+              if (value === "client:host") {
+                onUploadSourceChange("host_import", "host");
+                return;
+              }
+              if (value.startsWith("client:")) {
+                onUploadSourceChange("client_upload", value.slice("client:".length));
+                return;
+              }
+              if (value.startsWith("source:")) {
+                onUploadSourceChange(value.slice("source:".length), "all");
+              }
+            }}
+            value={uploadSourceValue}
           >
             <option value="all">全部来源</option>
-            <option value="host_import">主机导入</option>
-            <option value="client_upload">客户端上传</option>
-            <option value="remote_import">远程导入</option>
-            <option value="manual_import">手动导入</option>
+            <option value="client:host">主机导入{hasHostImports ? "" : "（暂无）"}</option>
+            <option value="source:client_upload">全部客户端上传</option>
+            {clientUploaders.map((item) => (
+              <option key={`${item.clientId}-${item.clientName}`} value={`client:${item.clientId}`}>
+                上传者：{item.clientName}（{item.count}）
+              </option>
+            ))}
+            <option value="source:remote_import">远程导入</option>
+            <option value="source:manual_import">手动导入</option>
           </select>
+          {uploadedByClientId !== "all" && (
+            <p className="mt-2 text-xs leading-5 text-blue-600">
+              {uploadedByClientId === "host"
+                ? "上传来源：主机导入"
+                : `上传者：${clientUploaders.find((item) => item.clientId === uploadedByClientId)?.clientName || uploadedByClientId}`}
+            </p>
+          )}
         </FilterSection>
 
         <FilterSection title="星级">

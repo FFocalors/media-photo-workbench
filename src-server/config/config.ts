@@ -15,7 +15,12 @@ export interface AppConfig {
     lastAutoBackupAt: string;
     autoBackupRetention: number;
   };
+  gallery: {
+    batchSelectionBehavior: BatchSelectionBehavior;
+  };
 }
+
+export type BatchSelectionBehavior = "clear" | "keep";
 
 const DEFAULT_CONFIG: AppConfig = {
   server: {
@@ -29,6 +34,9 @@ const DEFAULT_CONFIG: AppConfig = {
     autoBackupEnabled: true,
     lastAutoBackupAt: "",
     autoBackupRetention: 10
+  },
+  gallery: {
+    batchSelectionBehavior: "clear"
   }
 };
 
@@ -39,7 +47,10 @@ function createDefaultConfig(): AppConfig {
   return {
     server: { ...DEFAULT_CONFIG.server },
     repository: { ...DEFAULT_CONFIG.repository },
-    database: { ...DEFAULT_CONFIG.database }
+    database: { ...DEFAULT_CONFIG.database },
+    gallery: {
+      batchSelectionBehavior: DEFAULT_CONFIG.gallery.batchSelectionBehavior
+    }
   };
 }
 
@@ -61,6 +72,10 @@ function normalizeAutoBackupRetention(value: unknown): number {
   return Math.max(1, Math.min(100, Math.trunc(parsed)));
 }
 
+function normalizeBatchSelectionBehavior(value: unknown): BatchSelectionBehavior {
+  return value === "keep" ? "keep" : "clear";
+}
+
 function normalizeConfig(raw: any): AppConfig {
   return {
     server: {
@@ -78,6 +93,9 @@ function normalizeConfig(raw: any): AppConfig {
         ? raw.database.lastAutoBackupAt
         : DEFAULT_CONFIG.database.lastAutoBackupAt,
       autoBackupRetention: normalizeAutoBackupRetention(raw?.database?.autoBackupRetention)
+    },
+    gallery: {
+      batchSelectionBehavior: normalizeBatchSelectionBehavior(raw?.gallery?.batchSelectionBehavior)
     }
   };
 }
@@ -97,7 +115,9 @@ export function loadConfig(configDir: string): AppConfig {
       const normalizedNeedsWrite =
         raw?.server?.port !== _config.server.port ||
         !raw?.database ||
-        raw?.database?.autoBackupRetention !== _config.database.autoBackupRetention;
+        raw?.database?.autoBackupRetention !== _config.database.autoBackupRetention ||
+        !raw?.gallery ||
+        raw?.gallery?.batchSelectionBehavior !== _config.gallery.batchSelectionBehavior;
       if (normalizedNeedsWrite) {
         fs.writeJsonSync(configPath, _config, { spaces: 2 });
         logger.info({ configPath, preferredPort: _config.server.port }, "已重置主机服务默认端口配置");
@@ -144,6 +164,13 @@ export function saveConfig(patch: Partial<AppConfig>): AppConfig {
       ...patch.database,
       autoBackupRetention: normalizeAutoBackupRetention(
         patch.database.autoBackupRetention ?? _config.database.autoBackupRetention
+      )
+    };
+  }
+  if (patch.gallery) {
+    _config.gallery = {
+      batchSelectionBehavior: normalizeBatchSelectionBehavior(
+        patch.gallery.batchSelectionBehavior ?? _config.gallery.batchSelectionBehavior
       )
     };
   }

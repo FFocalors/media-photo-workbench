@@ -1,5 +1,6 @@
 import { io, type Socket } from "socket.io-client";
 import { getApiBase, type EventImageData, type TaskData } from "./api";
+import { getClientIdentity } from "./clientIdentity";
 
 export type RealtimeConnectionState = "connected" | "reconnecting" | "disconnected";
 
@@ -8,6 +9,11 @@ export interface RealtimeImagePayload {
   imageId: string;
   image?: EventImageData;
   action: string;
+  actor?: {
+    type: "host" | "client" | "unknown";
+    id?: string;
+    name: string;
+  };
   updatedAt: string;
 }
 
@@ -16,9 +22,23 @@ export type RealtimeTaskPayload = TaskData & {
   taskId?: string;
   action?: string;
 };
+export interface ClientPresence {
+  clientId: string;
+  clientName: string;
+  role: "client";
+  connectedAt: string;
+  lastSeenAt: string;
+  userAgent?: string;
+  address?: string;
+}
+
+export interface ClientsUpdatedPayload {
+  clients: ClientPresence[];
+}
 
 let socket: Socket | null = null;
 let socketBaseUrl = "";
+let pendingClientRegistration: { clientId: string; clientName: string; role: "client" } | null = null;
 
 function getSocket(): Socket {
   const apiBaseUrl = getApiBase();
@@ -34,6 +54,11 @@ function getSocket(): Socket {
       reconnectionDelayMax: 5000,
       transports: ["websocket", "polling"]
     });
+    socket.on("connect", () => {
+      if (pendingClientRegistration) {
+        socket?.emit("client-register", pendingClientRegistration);
+      }
+    });
   }
 
   if (!socket.connected) {
@@ -41,6 +66,24 @@ function getSocket(): Socket {
   }
 
   return socket;
+}
+
+export function registerClientPresence(): void {
+  const identity = getClientIdentity();
+  pendingClientRegistration = {
+    clientId: identity.clientId,
+    clientName: identity.clientName,
+    role: "client"
+  };
+  const activeSocket = getSocket();
+  activeSocket.emit("client-register", pendingClientRegistration);
+}
+
+export function unregisterClientPresence(): void {
+  pendingClientRegistration = null;
+  if (socket) {
+    socket.emit("client-unregister");
+  }
 }
 
 export function subscribeRealtimeConnection(
@@ -84,4 +127,12 @@ export function subscribeRealtimeTaskEvent(
   const activeSocket = getSocket();
   activeSocket.on("task-updated", listener);
   return () => activeSocket.off("task-updated", listener);
+}
+
+export function subscribeClientsUpdated(
+  listener: (payload: ClientsUpdatedPayload) => void
+): () => void {
+  const activeSocket = getSocket();
+  activeSocket.on("clients-updated", listener);
+  return () => activeSocket.off("clients-updated", listener);
 }

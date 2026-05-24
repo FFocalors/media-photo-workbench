@@ -13,10 +13,12 @@ import {
   fetchSettings,
   getApiBase,
   migrateDatabaseLocation,
+  updateGallerySettings,
   type DatabaseBackupData,
   type DatabaseBackupListItem,
   type EventData,
   type HealthData,
+  type BatchSelectionBehavior,
   type RepositoryCheckData,
   type SettingsData
 } from "../../lib/api";
@@ -57,6 +59,9 @@ export function SettingsPage() {
   const [diagnosticMessage, setDiagnosticMessage] = useState<{ tone: "success" | "warning" | "danger"; title: string; body: string } | null>(null);
   const [diagnosticPreview, setDiagnosticPreview] = useState<string>("");
   const [copyingDiagnostics, setCopyingDiagnostics] = useState(false);
+  const [batchSelectionBehavior, setBatchSelectionBehavior] = useState<BatchSelectionBehavior>("clear");
+  const [gallerySettingsSaving, setGallerySettingsSaving] = useState(false);
+  const [generalMessage, setGeneralMessage] = useState<{ tone: "success" | "warning" | "danger"; title: string; body: string } | null>(null);
 
   const title = useMemo(() => tabs.find((tab) => tab.id === activeTab)?.label ?? "系统设置", [activeTab]);
   const trimmedRepositoryPath = repositoryPath.trim();
@@ -79,6 +84,7 @@ export function SettingsPage() {
           setPort(String(res.data.server.port));
           setDatabasePath(res.data.database.path);
           setDatabaseLastAutoBackupAt(res.data.database.lastAutoBackupAt || "");
+          setBatchSelectionBehavior(res.data.gallery?.batchSelectionBehavior || "clear");
           setRepositoryMessage(null);
           void refreshDatabaseBackups();
         } else {
@@ -322,6 +328,28 @@ export function SettingsPage() {
     }
   };
 
+  const handleBatchSelectionBehaviorChange = async (behavior: BatchSelectionBehavior) => {
+    setGallerySettingsSaving(true);
+    setGeneralMessage(null);
+    try {
+      const res = await updateGallerySettings({ batchSelectionBehavior: behavior });
+      if (res.ok && res.data) {
+        setBatchSelectionBehavior(res.data.batchSelectionBehavior);
+        setGeneralMessage({
+          tone: "success",
+          title: "图片墙偏好已保存",
+          body: res.data.batchSelectionBehavior === "keep" ? "批量操作完成后会保留当前选择。" : "批量操作完成后会清空选择；部分失败时保留失败项。"
+        });
+      } else {
+        setGeneralMessage({ tone: "danger", title: "保存失败", body: res.error?.message || "无法保存图片墙偏好。" });
+      }
+    } catch {
+      setGeneralMessage({ tone: "danger", title: "保存失败", body: "请求失败，请确认后端服务已启动。" });
+    } finally {
+      setGallerySettingsSaving(false);
+    }
+  };
+
   return (
     <div className="flex flex-1 gap-8 overflow-y-auto bg-[#F8F9FA] p-8">
       <aside className="w-48 shrink-0">
@@ -358,7 +386,7 @@ export function SettingsPage() {
                 {saving ? "保存中..." : "保存"}
               </button>
             )}
-            {activeTab !== "about" && activeTab !== "repository" && activeTab !== "diagnostics" && (
+            {activeTab !== "about" && activeTab !== "repository" && activeTab !== "diagnostics" && activeTab !== "general" && (
               <button className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700" type="button">
                 <Save size={16} />
                 保存 mock
@@ -368,9 +396,44 @@ export function SettingsPage() {
 
           {activeTab === "general" && (
             <div className="space-y-6">
+              {generalMessage && (
+                <Notice tone={generalMessage.tone} title={generalMessage.title}>
+                  {generalMessage.body}
+                </Notice>
+              )}
               <SettingSwitch checked label="启动后显示最近使用" note="保留主机/客户端入口和最近连接记录。" />
               <SettingSwitch checked label="浅色界面" note="第一版固定浅色界面，后续可扩展深色模式。" />
               <SettingSwitch label="启动后自动进入上次模式" note="当前保持手动选择主机或客户端。" />
+              <Divider />
+              <div>
+                <h4 className="mb-3 text-sm font-medium text-slate-900">图片墙批量操作</h4>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <button
+                    className={cn(
+                      "rounded-xl border px-4 py-3 text-left transition-colors",
+                      batchSelectionBehavior === "clear" ? "border-blue-200 bg-blue-50" : "border-slate-100 bg-slate-50 hover:bg-white"
+                    )}
+                    disabled={gallerySettingsSaving}
+                    onClick={() => handleBatchSelectionBehaviorChange("clear")}
+                    type="button"
+                  >
+                    <span className="block text-sm font-medium text-slate-800">批量操作后清空选择</span>
+                    <span className="mt-1 block text-xs leading-5 text-slate-500">默认行为；部分失败时保留失败项，便于重试。</span>
+                  </button>
+                  <button
+                    className={cn(
+                      "rounded-xl border px-4 py-3 text-left transition-colors",
+                      batchSelectionBehavior === "keep" ? "border-blue-200 bg-blue-50" : "border-slate-100 bg-slate-50 hover:bg-white"
+                    )}
+                    disabled={gallerySettingsSaving}
+                    onClick={() => handleBatchSelectionBehaviorChange("keep")}
+                    type="button"
+                  >
+                    <span className="block text-sm font-medium text-slate-800">批量操作后保留选择</span>
+                    <span className="mt-1 block text-xs leading-5 text-slate-500">适合连续批量修改状态、星级或分类。</span>
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 

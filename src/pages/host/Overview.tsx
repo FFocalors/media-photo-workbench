@@ -1,21 +1,32 @@
-import { Archive, Clipboard, Database, FolderKanban, HardDrive, ImagePlus, LayoutGrid, Settings, UploadCloud, WifiOff } from "lucide-react";
+import { Activity, Archive, Clipboard, Database, FolderKanban, HardDrive, ImagePlus, LayoutGrid, Settings, UploadCloud, Users, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { QRCodeCard } from "../../components/common/QRCodeCard";
 import {
   checkRepository,
+  ClientPresenceData,
   EventData,
   eventStatusLabels,
   fetchEvents,
   fetchHealth,
+  fetchOnlineClients,
   fetchSettings,
   getApiBase,
   HealthData,
+  imageStatusLabels,
   RepositoryCheckData,
   SettingsData
 } from "../../lib/api";
 import { cn } from "../../lib/cn";
 import { Notice, StatusPill } from "../../components/ui/States";
+import { subscribeClientsUpdated, subscribeRealtimeImageEvent, subscribeRealtimeTaskEvent, type RealtimeImagePayload } from "../../lib/socket";
+
+type LiveActivity = {
+  id: string;
+  text: string;
+  at: string;
+  tone: "upload" | "update" | "delete" | "task";
+};
 
 export function OverviewPage() {
   const [health, setHealth] = useState<HealthData | null>(null);
@@ -25,6 +36,8 @@ export function OverviewPage() {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<{ tone: "success" | "warning" | "danger" | "info"; title: string; body: string } | null>(null);
   const [copied, setCopied] = useState("");
+  const [onlineClients, setOnlineClients] = useState<ClientPresenceData[]>([]);
+  const [activities, setActivities] = useState<LiveActivity[]>([]);
 
   const loadOverview = useCallback(async () => {
     setLoading(true);
@@ -71,6 +84,50 @@ export function OverviewPage() {
   useEffect(() => {
     void loadOverview();
   }, [loadOverview]);
+
+  useEffect(() => {
+    const pushActivity = (activity: LiveActivity) => {
+      setActivities((current) => [activity, ...current].slice(0, 20));
+    };
+
+    fetchOnlineClients()
+      .then((res) => {
+        if (res.ok && res.data) setOnlineClients(res.data.clients);
+      })
+      .catch(() => {
+        // Socket.IO presence updates will still arrive after connection.
+      });
+
+    const unsubscribeClients = subscribeClientsUpdated((payload) => {
+      setOnlineClients(payload.clients);
+    });
+    const unsubscribeCreated = subscribeRealtimeImageEvent("image-created", (payload) => {
+      pushActivity(buildImageActivity("created", payload));
+    });
+    const unsubscribeUpdated = subscribeRealtimeImageEvent("image-updated", (payload) => {
+      pushActivity(buildImageActivity("updated", payload));
+    });
+    const unsubscribeDeleted = subscribeRealtimeImageEvent("image-deleted-logical", (payload) => {
+      pushActivity(buildImageActivity("deleted", payload));
+    });
+    const unsubscribeTask = subscribeRealtimeTaskEvent((payload) => {
+      if (payload.status !== "success") return;
+      pushActivity({
+        id: `task-${payload.id || payload.taskId}-${payload.updatedAt || Date.now()}`,
+        text: `${payload.title || payload.type || "任务"} 已完成`,
+        at: payload.updatedAt || new Date().toISOString(),
+        tone: "task"
+      });
+    });
+
+    return () => {
+      unsubscribeClients();
+      unsubscribeCreated();
+      unsubscribeUpdated();
+      unsubscribeDeleted();
+      unsubscribeTask();
+    };
+  }, []);
 
   const runtimeInfo = (window as any).mediaPhotoWorkbench?.getRuntimeInfo?.();
   const serverPort = health?.server.port ?? runtimeInfo?.serverPort ?? parsePortFromApiBase() ?? settings?.server.port ?? 3030;
@@ -358,6 +415,57 @@ export function OverviewPage() {
             </div>
           </div>
 
+          <div className="mb-8 grid gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
+            <InfoCard label="在线客户端">
+              <div className="mb-4 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
+                    <Users size={22} />
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold text-slate-900">{onlineClients.length}</p>
+                    <p className="text-xs text-slate-400">主机自身不计入</p>
+                  </div>
+                </div>
+              </div>
+              {onlineClients.length > 0 ? (
+                <div className="space-y-2">
+                  {onlineClients.map((client) => (
+                    <div className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2" key={client.clientId}>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-slate-800" title={client.clientName}>{client.clientName}</p>
+                        <p className="mt-0.5 truncate text-xs text-slate-400">{client.address || "局域网客户端"}</p>
+                      </div>
+                      <span className="ml-3 h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="rounded-xl bg-slate-50 px-3 py-3 text-sm leading-6 text-slate-400">暂无客户端在线。</p>
+              )}
+            </InfoCard>
+
+            <InfoCard label="现场动态">
+              {activities.length > 0 ? (
+                <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+                  {activities.map((activity) => (
+                    <div className="flex items-start gap-3 rounded-xl bg-slate-50 px-3 py-2" key={activity.id}>
+                      <div className={cn("mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg", activityToneClass(activity.tone))}>
+                        <Activity size={15} />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="break-words text-sm text-slate-700">{activity.text}</p>
+                        <p className="mt-1 text-xs text-slate-400">{formatActivityTime(activity.at)}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="rounded-xl bg-slate-50 px-3 py-3 text-sm leading-6 text-slate-400">等待客户端上传、选片或任务完成后显示最近动态。</p>
+              )}
+            </InfoCard>
+          </div>
+
           <div>
             <h3 className="mb-4 text-sm font-medium text-slate-900">快捷操作</h3>
             <div className="flex flex-wrap gap-4">
@@ -379,6 +487,85 @@ function parsePortFromApiBase(): number | null {
   } catch {
     return null;
   }
+}
+
+function buildImageActivity(kind: "created" | "updated" | "deleted", payload: RealtimeImagePayload): LiveActivity {
+  const photo = payload.image;
+  const filename = photo?.original_filename || payload.imageId;
+  const actorName = payload.actor?.name || "未知操作者";
+  const uploaderName = photo?.uploaded_by_name || (photo?.source_type === "host_import" ? "主机" : "客户端");
+  const at = payload.updatedAt || new Date().toISOString();
+
+  if (kind === "created") {
+    return {
+      id: `created-${payload.imageId}-${at}`,
+      text: photo?.source_type === "host_import"
+        ? `主机导入了 ${filename}`
+        : `${uploaderName} 上传了 ${filename}`,
+      at,
+      tone: "upload"
+    };
+  }
+
+  if (kind === "deleted") {
+    return {
+      id: `deleted-${payload.imageId}-${at}`,
+      text: `${actorName} 删除了 ${filename}`,
+      at,
+      tone: "delete"
+    };
+  }
+
+  return {
+    id: `updated-${payload.action}-${payload.imageId}-${at}`,
+    text: describeImageUpdate(payload.action, filename, actorName, photo),
+    at,
+    tone: "update"
+  };
+}
+
+function describeImageUpdate(
+  action: string,
+  filename: string,
+  actorName: string,
+  photo?: RealtimeImagePayload["image"]
+): string {
+  if (action === "rating_changed") {
+    return `${actorName} 将 ${filename} 评为 ${photo?.rating ?? 0} 星`;
+  }
+  if (action === "status_changed") {
+    const label = photo?.status ? imageStatusLabels[photo.status] : "新状态";
+    return `${actorName} 将 ${filename} 标记为 ${label}`;
+  }
+  if (action === "category_changed") {
+    return `${actorName} 修改了 ${filename} 的分类`;
+  }
+  if (action === "remark_changed") {
+    return `${actorName} 修改了 ${filename} 的备注`;
+  }
+  if (action === "image_restored") {
+    return `${actorName} 恢复了 ${filename}`;
+  }
+  return `${actorName} 修改了 ${filename}`;
+}
+
+function formatActivityTime(value: string): string {
+  if (!value) return "刚刚";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+function activityToneClass(tone: LiveActivity["tone"]): string {
+  if (tone === "upload") return "bg-blue-50 text-blue-600";
+  if (tone === "delete") return "bg-red-50 text-red-600";
+  if (tone === "task") return "bg-emerald-50 text-emerald-600";
+  return "bg-slate-100 text-slate-600";
 }
 
 function formatBytes(value: number | null | undefined): string {

@@ -2,7 +2,7 @@
 
 ## 当前阶段说明
 
-当前开发阶段为 **v0.16.0**。v0.15.0 已发布，v0.16.0 内部批次已包含 16.1-16.5：图片墙实战问题修复、任务中心覆盖补齐、拖拽导入 / 上传、数据库备份与数据库位置迁移。
+当前开发阶段为 **v0.17.0**。v0.16.0 已发布，v0.17.0 目标是现场协作与选片效率增强。17.1 聚焦在线客户端感知、设备名持久化、上传来源追踪、上传者筛选、操作日志操作者和主机现场动态；17.2 聚焦图片墙快捷键提示和批量操作后选择行为配置。17.1 / 17.2 是内部开发编号，不作为正式版本号、Git tag 或 Release 名称。
 
 本阶段延续生产模式访问方式：打包后 Express 托管前端 `dist/`，前端页面、`/api` 接口和 Socket.IO 复用同一个后端端口。开发模式仍使用 Vite `5173` 访问前端、`3030-3040` 访问后端 API。当前推荐交付物为 ZIP 便携包 `MediaPhotoWorkbench-v0.15.0-rc.0-x64.zip`，解压后运行 `Media Photo Workbench.exe`；单文件 self-extract portable EXE 暂不作为推荐交付物，NSIS 安装包暂不推荐。
 
@@ -110,6 +110,37 @@ Socket.IO：http://主机局域网IP:{serverPort}
 
 ---
 
+## 一点五、Clients 在线客户端
+
+### [已实现] 获取在线客户端列表
+- **用途**：主机端显示当前在线客户端数量和设备列表。主机自身不计入在线客户端。
+- **请求方法**：`GET`
+- **路径**：`/api/clients/online`
+- **请求参数示例**：无
+- **响应示例**：
+  ```json
+  {
+    "ok": true,
+    "data": {
+      "clients": [
+        {
+          "clientId": "7f0f0a52-1111-4a2a-8888-123456789abc",
+          "clientName": "修图电脑A",
+          "role": "client",
+          "connectedAt": "2026-05-22T08:20:00.000Z",
+          "lastSeenAt": "2026-05-22T08:21:00.000Z",
+          "userAgent": "Mozilla/5.0 ...",
+          "address": "::ffff:192.168.1.24"
+        }
+      ]
+    },
+    "error": null
+  }
+  ```
+- **备注**：在线列表仅在服务端内存维护，客户端断开后会更新；不做账号、登录或权限系统。
+
+---
+
 ## 二、Settings 设置
 
 ### [已实现] 获取当前设置
@@ -131,12 +162,28 @@ Socket.IO：http://主机局域网IP:{serverPort}
         "autoBackupEnabled": true,
         "lastAutoBackupAt": "2026-05-21T08:00:00.000Z",
         "autoBackupRetention": 10
+      },
+      "gallery": {
+        "batchSelectionBehavior": "clear"
       }
     },
     "error": null
   }
   ```
-- **备注**：`database.path` 是当前进程实际使用的数据库路径；`configuredPath` 是配置文件中的自定义数据库路径，未设置时为空；`defaultPath` 是未配置自定义路径时的默认位置。开发模式默认使用项目 `data/app.db`，打包模式默认使用 Electron userData 下的 `data/app.db`。
+- **备注**：`database.path` 是当前进程实际使用的数据库路径；`configuredPath` 是配置文件中的自定义数据库路径，未设置时为空；`defaultPath` 是未配置自定义路径时的默认位置。`gallery.batchSelectionBehavior` 取值为 `clear | keep`。开发模式默认使用项目 `data/app.db`，打包模式默认使用 Electron userData 下的 `data/app.db`。
+
+### [已实现] 更新图片墙偏好设置
+- **用途**：设置批量操作后保留或清空选择。
+- **请求方法**：`PATCH`
+- **路径**：`/api/settings/gallery`
+- **请求体示例**：
+  ```json
+  {
+    "batchSelectionBehavior": "clear"
+  }
+  ```
+- **响应示例**：返回更新后的 `gallery` 配置。
+- **备注**：`batchSelectionBehavior=clear` 为默认值；批量操作部分失败时前端保留失败项以便重试。`keep` 表示批量操作后保留原选择。
 
 ### [已实现] 检查仓库路径
 - **用途**：验证当前已保存仓库路径的可行性（是否存在、可读写）。
@@ -582,8 +629,9 @@ working/{event_slug}/清单
   - `ratingMode`：星级匹配方式，支持 `gte | eq`。不传时默认 `gte`，保持旧版“几星及以上”行为；`eq` 表示精确匹配某个星级，例如 `rating=3&ratingMode=eq` 只返回 3 星图片。
   - `status`：图片状态，支持 `unselected | rejected | archive | edit | edited | publish | published`。
   - `source_type`：图片来源，常用 `host_import` 或 `client_upload`。
+  - `uploadedByClientId`：上传者筛选；传具体客户端 `clientId` 时只返回该客户端上传图片，传 `host` 时返回主机导入图片。
   - `keyword`：关键字，匹配文件名、分类、备注、摄影师、相机和镜头字段。
-- **请求参数示例**：`?page=1&pageSize=80&rating=4&ratingMode=gte&status=publish&source_type=host_import&keyword=现场`
+- **请求参数示例**：`?page=1&pageSize=80&rating=4&ratingMode=gte&source_type=client_upload&uploadedByClientId=client_xxx&keyword=现场`
 - **响应示例**：
   ```json
   {
@@ -610,6 +658,10 @@ working/{event_slug}/清单
           "camera_model": "NIKON Z 6_3",
           "lens_model": "",
           "source_type": "host_import",
+          "uploaded_by_client_id": "host",
+          "uploaded_by_name": "主机导入",
+          "uploaded_by_role": "host",
+          "uploaded_at": "2026-05-13 20:00:00",
           "edited_available": false,
           "original_exists": true,
           "thumb_exists": true,
@@ -628,7 +680,35 @@ working/{event_slug}/清单
   ```
 - **错误码**：
   - `INVALID_STATUS`：传入的状态不在允许范围内。
-- **备注**：当前未实现标签筛选；默认只返回 `is_deleted = 0` 的图片。缩略图和预览图使用 `thumb_url` / `preview_url` 访问，原图、预览图下载和已修图下载使用 Download 下载接口。
+- **备注**：当前未实现标签筛选；默认只返回 `is_deleted = 0` 的图片。`uploadedByClientId` 可与星级、状态、来源和关键字组合，分页 `total` 按数据库筛选结果计算。缩略图和预览图使用 `thumb_url` / `preview_url` 访问，原图、预览图下载和已修图下载使用 Download 下载接口。
+
+### [已实现] 获取活动上传来源 / 上传者统计
+- **用途**：图片墙筛选区生成“上传来源 / 上传者”选项。
+- **请求方法**：`GET`
+- **路径**：`/api/events/:eventId/uploaders`
+- **请求参数示例**：无
+- **响应示例**：
+  ```json
+  {
+    "ok": true,
+    "data": [
+      {
+        "clientId": "host",
+        "clientName": "主机导入",
+        "sourceType": "host_import",
+        "count": 456
+      },
+      {
+        "clientId": "7f0f0a52-1111-4a2a-8888-123456789abc",
+        "clientName": "修图电脑A",
+        "sourceType": "client_upload",
+        "count": 123
+      }
+    ],
+    "error": null
+  }
+  ```
+- **备注**：该接口基于当前活动 `images` 记录统计，不要求客户端在线；设备名可能重复，筛选应优先使用 `clientId`。
 
 ### [已实现] 获取缩略图
 - **用途**：按图片 ID 获取长边 400px 的 WebP 缩略图。
@@ -658,13 +738,16 @@ working/{event_slug}/清单
 - **路径**：`/api/images/:id/rating`
 - **请求参数示例**：
   ```json
-  { "rating": 5 }
+  {
+    "rating": 5,
+    "actor": { "type": "client", "id": "client_xxx", "name": "修图电脑A" }
+  }
   ```
 - **响应示例**：返回更新后的图片对象。
 - **错误码**：
   - `IMAGE_NOT_FOUND`：图片不存在。
   - `INVALID_RATING`：`rating` 不是 0-5 的整数。
-- **备注**：更新 `images.updated_at`，并写入 `operation_logs`。
+- **备注**：更新 `images.updated_at`，并写入 `operation_logs`。前端也可通过 `X-Actor-Type`、`X-Actor-Id`、`X-Actor-Name` 请求头传递操作者；主机端默认 `actor_type = host`、`actor_name = 主机`。
 
 ### [已实现] 修改图片状态
 - **用途**：修改图片流转状态 (unselected, rejected, edit, publish 等)。
@@ -672,13 +755,16 @@ working/{event_slug}/清单
 - **路径**：`/api/images/:id/status`
 - **请求参数示例**：
   ```json
-  { "status": "publish" }
+  {
+    "status": "publish",
+    "actor": { "type": "host", "id": "host", "name": "主机" }
+  }
   ```
 - **响应示例**：返回更新后的图片对象。
 - **错误码**：
   - `IMAGE_NOT_FOUND`：图片不存在。
   - `INVALID_STATUS`：状态不在允许范围内。
-- **备注**：允许状态为 `unselected | rejected | archive | edit | edited | publish | published`。更新 `images.updated_at`，并写入 `operation_logs`。
+- **备注**：允许状态为 `unselected | rejected | archive | edit | edited | publish | published`。更新 `images.updated_at`，并写入 `operation_logs.actor_type / actor_id / actor_name`；旧 `operator/device` 字段继续保留兼容。
 
 ### [已实现] 修改图片分类
 - **用途**：更改图片的主分类。
@@ -686,12 +772,15 @@ working/{event_slug}/清单
 - **路径**：`/api/images/:id/category`
 - **请求参数示例**：
   ```json
-  { "category": "现场特写" }
+  {
+    "category": "现场特写",
+    "actor": { "type": "client", "id": "client_xxx", "name": "摄影组1号" }
+  }
   ```
 - **响应示例**：返回更新后的图片对象。
 - **错误码**：
   - `IMAGE_NOT_FOUND`：图片不存在。
-- **备注**：分类会 trim 后保存；允许保存为空字符串。更新 `images.updated_at`，并写入 `operation_logs`。
+- **备注**：分类会 trim 后保存；允许保存为空字符串。更新 `images.updated_at`，并写入带 actor 字段的 `operation_logs`。
 
 ### [计划中] 修改图片标签
 - **用途**：为图片增减多维度标签。
@@ -710,22 +799,25 @@ working/{event_slug}/清单
 - **路径**：`/api/images/:id/remark`
 - **请求参数示例**：
   ```json
-  { "remark": "注意提亮暗部" }
+  {
+    "remark": "注意提亮暗部",
+    "actor": { "type": "host", "id": "host", "name": "主机" }
+  }
   ```
 - **响应示例**：返回更新后的图片对象。
 - **错误码**：
   - `IMAGE_NOT_FOUND`：图片不存在。
-- **备注**：备注会 trim 后保存；允许保存为空字符串。更新 `images.updated_at`，并写入 `operation_logs`。
+- **备注**：备注会 trim 后保存；允许保存为空字符串。更新 `images.updated_at`，并写入带 actor 字段的 `operation_logs`。
 
 ### [已实现] 逻辑删除图片
 - **用途**：将图片从图片墙移除，但不删除仓库中的任何物理文件。
 - **请求方法**：`DELETE`
 - **路径**：`/api/images/:id`
-- **请求参数示例**：无
+- **请求参数示例**：无；可选 actor 请求头 `X-Actor-Type`、`X-Actor-Id`、`X-Actor-Name`。
 - **响应示例**：返回 `is_deleted = true` 的图片对象。
 - **错误码**：
   - `IMAGE_NOT_FOUND`：图片不存在。
-- **备注**：该接口只写入 `images.is_deleted = 1` 和 `deleted_at`，并写入 `operation_logs.type = image_deleted_logical`。默认图片查询不会再返回已逻辑删除图片。
+- **备注**：该接口只写入 `images.is_deleted = 1` 和 `deleted_at`，并写入 `operation_logs.type = image_deleted_logical` 和 actor 字段。默认图片查询不会再返回已逻辑删除图片。
 
 ### [已实现] 查询图片回收站
 - **用途**：查看某个活动下已逻辑删除的图片。
@@ -742,12 +834,12 @@ working/{event_slug}/清单
 - **用途**：把回收站图片恢复到图片墙。
 - **请求方法**：`PATCH`
 - **路径**：`/api/images/:id/restore`
-- **请求参数示例**：无
+- **请求参数示例**：无；可选 actor 请求头 `X-Actor-Type`、`X-Actor-Id`、`X-Actor-Name`。
 - **响应示例**：返回恢复后的图片对象。
 - **错误码**：
   - `IMAGE_NOT_FOUND`：图片不存在。
   - `IMAGE_NOT_DELETED`：图片不在回收站中。
-- **备注**：恢复会写入 `operation_logs.type = image_restored`，并广播 `image-updated`。
+- **备注**：恢复会写入 `operation_logs.type = image_restored` 和 actor 字段，并广播 `image-updated`。
 
 ### [已实现] 永久删除图片
 - **用途**：永久删除回收站图片记录及其关联文件。
@@ -966,6 +1058,9 @@ working/{event_slug}/清单
   - `photographer`：摄影师，可选。
   - `device`：设备名，可选。
   - `remark`：备注，可选。
+  - `clientId`：客户端持久 ID，可选；由客户端 localStorage 生成并保存。
+  - `clientName`：客户端设备名称，可选；为空时后端按“客户端”兜底。
+  - `clientRole`：轻量来源角色，当前固定为 `client`。
 - **响应示例**：
   ```json
   {
@@ -974,8 +1069,11 @@ working/{event_slug}/清单
       "taskId": "task_xxx",
       "total": 3,
       "photographer": "张三",
-      "device": "Client-A",
-      "remark": "外拍上传"
+      "device": "修图电脑A",
+      "remark": "外拍上传",
+      "clientId": "7f0f0a52-1111-4a2a-8888-123456789abc",
+      "clientName": "修图电脑A",
+      "clientRole": "client"
     },
     "error": null
   }
@@ -994,6 +1092,7 @@ working/{event_slug}/清单
   - 原图复制到 `working/{event_slug}/原图/客户端上传`，不移动、不删除客户端源文件。
   - 缩略图和预览图仍写入活动的 `缩略图`、`预览图` 目录。
   - 使用 sha256 `file_hash` 在同一活动内去重，当前活动已有相同图片时计入 `skipped`。
+  - v0.17.0 开发阶段 17.1 起，客户端上传成功入库的图片会写入 `images.uploaded_by_client_id`、`uploaded_by_name`、`uploaded_by_role`、`uploaded_at`，用于主机端来源展示和上传者筛选。
   - v0.16.0 开发阶段 16.4 起，客户端上传页支持拖拽单张或多张 JPG/JPEG/PNG 图片，拖拽入口仍使用本 multipart 接口；客户端拖拽文件夹暂不支持。
   - 每张图片成功入库后广播 `image-created`；整体进度通过 `GET /api/tasks/:taskId` 和 `task-updated` 查看。
 
@@ -1542,8 +1641,37 @@ working/{event_slug}/清单
 - `image-created`：主机本地导入或客户端上传成功后广播。
 - `image-updated`：图片星级、状态、分类或备注更新后广播。
 - `image-deleted-logical`：图片逻辑删除后广播。
+- `clients-updated`：在线客户端列表更新后广播，主机自身不计入列表。
 - `task-updated`：任务状态变化后广播，当前已接入主机导入、客户端上传处理、批量 ZIP 下载、待修包生成、已修图回传、发布导出、活动归档 prepare 和归档 cleanup；主机导入页、客户端上传页、已修图回传页和任务中心共用该事件更新进度与最终统计。
 - `export-created`：发布导出完成后广播，当前前端暂未消费该事件。
+
+客户端可通过 `client-register` 或 `client-hello` 上报在线身份：
+
+```json
+{
+  "clientId": "7f0f0a52-1111-4a2a-8888-123456789abc",
+  "clientName": "修图电脑A",
+  "role": "client"
+}
+```
+
+`clients-updated` payload 示例：
+
+```json
+{
+  "clients": [
+    {
+      "clientId": "7f0f0a52-1111-4a2a-8888-123456789abc",
+      "clientName": "修图电脑A",
+      "role": "client",
+      "connectedAt": "2026-05-22T08:20:00.000Z",
+      "lastSeenAt": "2026-05-22T08:21:00.000Z",
+      "userAgent": "Mozilla/5.0 ...",
+      "address": "::ffff:192.168.1.24"
+    }
+  ]
+}
+```
 
 图片事件 payload 示例：
 
@@ -1552,6 +1680,11 @@ working/{event_slug}/清单
   "eventId": "evt_xxx",
   "imageId": "img_xxx",
   "action": "rating_changed",
+  "actor": {
+    "type": "client",
+    "id": "7f0f0a52-1111-4a2a-8888-123456789abc",
+    "name": "修图电脑A"
+  },
   "updatedAt": "2026-05-14T01:20:00.000Z",
   "image": {
     "id": "img_xxx",

@@ -1,6 +1,7 @@
 import path from "path";
 import fs from "fs-extra";
 import { getDatabase } from "../db/database";
+import { actorToLogColumns, HOST_ACTOR, type ActorInfo } from "../utils/actor";
 
 export const IMAGE_STATUSES = ["unselected", "rejected", "archive", "edit", "edited", "publish", "published"] as const;
 export type ImageStatus = typeof IMAGE_STATUSES[number];
@@ -23,6 +24,10 @@ export interface ImageRow {
   category: string;
   remark: string;
   source: string;
+  uploaded_by_client_id: string;
+  uploaded_by_name: string;
+  uploaded_by_role: string;
+  uploaded_at: string;
   file_size: number;
   file_hash: string;
   exif_shot_at: string;
@@ -54,6 +59,10 @@ export interface ImageDto {
   camera_model: string;
   lens_model: string;
   source_type: string;
+  uploaded_by_client_id: string;
+  uploaded_by_name: string;
+  uploaded_by_role: string;
+  uploaded_at: string;
   edited_available: boolean;
   original_exists: boolean;
   thumb_exists: boolean;
@@ -74,6 +83,7 @@ export interface ImageListParams {
   ratingMode?: string;
   status?: string;
   sourceType?: string;
+  uploadedByClientId?: string;
   keyword?: string;
   deleted?: boolean;
 }
@@ -83,6 +93,13 @@ export interface ImageListResult {
   total: number;
   page: number;
   pageSize: number;
+}
+
+export interface EventUploaderSummary {
+  clientId: string;
+  clientName: string;
+  sourceType: string;
+  count: number;
 }
 
 export type ImageDownloadType = "original" | "preview" | "edited";
@@ -137,6 +154,10 @@ function toImageDto(row: ImageRow, baseUrl: string, includePaths = false): Image
     camera_model: row.camera_model,
     lens_model: row.lens_model,
     source_type: row.source,
+    uploaded_by_client_id: row.uploaded_by_client_id || (row.source === "host_import" ? "host" : ""),
+    uploaded_by_name: row.uploaded_by_name || (row.source === "host_import" ? "主机导入" : row.source === "client_upload" ? "客户端上传" : ""),
+    uploaded_by_role: row.uploaded_by_role || (row.source === "host_import" ? "host" : ""),
+    uploaded_at: row.uploaded_at || row.created_at,
     edited_available: editedExists,
     original_exists: originalExists,
     thumb_exists: thumbExists,
@@ -201,6 +222,19 @@ export function listEventImages(eventId: string, params: ImageListParams, baseUr
     values.push(params.sourceType);
   }
 
+  if (params.uploadedByClientId && params.uploadedByClientId !== "all") {
+    if (params.uploadedByClientId === "host") {
+      where.push("source = ?");
+      values.push("host_import");
+    } else if (params.uploadedByClientId === "client_unknown") {
+      where.push("source = ? AND uploaded_by_client_id = ''");
+      values.push("client_upload");
+    } else {
+      where.push("uploaded_by_client_id = ?");
+      values.push(params.uploadedByClientId);
+    }
+  }
+
   const keyword = params.keyword?.trim();
   if (keyword) {
     where.push("(original_filename LIKE ? OR stored_filename LIKE ? OR category LIKE ? OR remark LIKE ? OR photographer LIKE ? OR camera_model LIKE ? OR lens_model LIKE ?)");
@@ -226,16 +260,72 @@ export function listEventImages(eventId: string, params: ImageListParams, baseUr
   };
 }
 
+export function listEventUploaders(eventId: string): EventUploaderSummary[] {
+  const rows = getDatabase().prepare(`
+    SELECT
+      CASE
+        WHEN source = 'host_import' THEN 'host'
+        WHEN uploaded_by_client_id != '' THEN uploaded_by_client_id
+        ELSE 'client_unknown'
+      END AS clientId,
+      CASE
+        WHEN source = 'host_import' THEN '主机导入'
+        WHEN uploaded_by_name != '' THEN uploaded_by_name
+        ELSE '客户端上传'
+      END AS clientName,
+      source AS sourceType,
+      COUNT(*) AS count
+    FROM images
+    WHERE event_id = ? AND is_deleted = 0
+    GROUP BY clientId, clientName, source
+    ORDER BY
+      CASE WHEN clientId = 'host' THEN 0 ELSE 1 END,
+      clientName COLLATE NOCASE ASC
+  `).all(eventId) as Array<{
+    clientId: string;
+    clientName: string;
+    sourceType: string;
+    count: number;
+  }>;
+
+  return rows.map((row) => ({
+    clientId: row.clientId,
+    clientName: row.clientName,
+    sourceType: row.sourceType,
+    count: row.count
+  }));
+}
+
 export function listEventTrashedImages(eventId: string, params: ImageListParams, baseUrl: string): ImageListResult {
   return listEventImages(eventId, { ...params, deleted: true }, baseUrl);
 }
 
-function writeOperationLog(imageId: string, eventId: string, type: string, detail: Record<string, unknown>): void {
+function writeOperationLog(imageId: string, eventId: string, type: string, detail: Record<string, unknown>, actor: ActorInfo = HOST_ACTOR): void {
   const db = getDatabase();
+  const actorColumns = actorToLogColumns(actor);
   db.prepare(`
-    INSERT INTO operation_logs (type, target_type, target_id, operator, device, detail, created_at)
-    VALUES (?, 'image', ?, '', '', ?, ?)
-  `).run(type, imageId, JSON.stringify({ event_id: eventId, ...detail }), nowTimestamp());
+    INSERT INTO operation_logs (
+      type, target_type, target_id, operator, device,
+      actor_type, actor_id, actor_name, detail, created_at
+    )
+    VALUES (?, 'image', ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    type,
+    imageId,
+    actorColumns.operator,
+    actorColumns.device,
+    actorColumns.actor_type,
+    actorColumns.actor_id,
+    actorColumns.actor_name,
+    JSON.stringify({
+      event_id: eventId,
+      actor_type: actorColumns.actor_type,
+      actor_id: actorColumns.actor_id,
+      actor_name: actorColumns.actor_name,
+      ...detail
+    }),
+    nowTimestamp()
+  );
 }
 
 function refreshEventImageCount(eventId: string): void {
@@ -260,7 +350,7 @@ export function getImageDtoById(id: string, baseUrl: string): ImageDto {
   return toImageDto(image, baseUrl);
 }
 
-export function updateImageRating(id: string, rating: number, baseUrl: string): ImageDto {
+export function updateImageRating(id: string, rating: number, baseUrl: string, actor: ActorInfo = HOST_ACTOR): ImageDto {
   if (!Number.isInteger(rating) || rating < 0 || rating > 5) {
     throw { code: "INVALID_RATING", message: "rating 只能是 0-5 的整数" };
   }
@@ -272,11 +362,11 @@ export function updateImageRating(id: string, rating: number, baseUrl: string): 
 
   const now = nowTimestamp();
   getDatabase().prepare("UPDATE images SET rating = ?, updated_at = ? WHERE id = ?").run(rating, now, id);
-  writeOperationLog(id, existing.event_id, "image_rating_changed", { from: existing.rating, to: rating });
+  writeOperationLog(id, existing.event_id, "image_rating_changed", { from: existing.rating, to: rating }, actor);
   return getImageDtoById(id, baseUrl);
 }
 
-export function updateImageStatus(id: string, status: string, baseUrl: string): ImageDto {
+export function updateImageStatus(id: string, status: string, baseUrl: string, actor: ActorInfo = HOST_ACTOR): ImageDto {
   if (!IMAGE_STATUSES.includes(status as ImageStatus)) {
     throw { code: "INVALID_STATUS", message: `无效的状态值：${status}` };
   }
@@ -288,11 +378,11 @@ export function updateImageStatus(id: string, status: string, baseUrl: string): 
 
   const now = nowTimestamp();
   getDatabase().prepare("UPDATE images SET status = ?, updated_at = ? WHERE id = ?").run(status, now, id);
-  writeOperationLog(id, existing.event_id, "image_status_changed", { from: existing.status, to: status });
+  writeOperationLog(id, existing.event_id, "image_status_changed", { from: existing.status, to: status }, actor);
   return getImageDtoById(id, baseUrl);
 }
 
-export function updateImageCategory(id: string, category: string, baseUrl: string): ImageDto {
+export function updateImageCategory(id: string, category: string, baseUrl: string, actor: ActorInfo = HOST_ACTOR): ImageDto {
   const existing = getImageById(id);
   if (!existing) {
     throw { code: "IMAGE_NOT_FOUND", message: "图片不存在" };
@@ -301,11 +391,11 @@ export function updateImageCategory(id: string, category: string, baseUrl: strin
   const normalized = typeof category === "string" ? category.trim() : "";
   const now = nowTimestamp();
   getDatabase().prepare("UPDATE images SET category = ?, updated_at = ? WHERE id = ?").run(normalized, now, id);
-  writeOperationLog(id, existing.event_id, "image_category_changed", { from: existing.category, to: normalized });
+  writeOperationLog(id, existing.event_id, "image_category_changed", { from: existing.category, to: normalized }, actor);
   return getImageDtoById(id, baseUrl);
 }
 
-export function updateImageRemark(id: string, remark: string, baseUrl: string): ImageDto {
+export function updateImageRemark(id: string, remark: string, baseUrl: string, actor: ActorInfo = HOST_ACTOR): ImageDto {
   const existing = getImageById(id);
   if (!existing) {
     throw { code: "IMAGE_NOT_FOUND", message: "图片不存在" };
@@ -314,11 +404,11 @@ export function updateImageRemark(id: string, remark: string, baseUrl: string): 
   const normalized = typeof remark === "string" ? remark.trim() : "";
   const now = nowTimestamp();
   getDatabase().prepare("UPDATE images SET remark = ?, updated_at = ? WHERE id = ?").run(normalized, now, id);
-  writeOperationLog(id, existing.event_id, "image_remark_changed", { from: existing.remark, to: normalized });
+  writeOperationLog(id, existing.event_id, "image_remark_changed", { from: existing.remark, to: normalized }, actor);
   return getImageDtoById(id, baseUrl);
 }
 
-export function deleteImage(id: string, baseUrl: string): ImageDto {
+export function deleteImage(id: string, baseUrl: string, actor: ActorInfo = HOST_ACTOR): ImageDto {
   const existing = getImageById(id);
   if (!existing) {
     throw { code: "IMAGE_NOT_FOUND", message: "图片不存在" };
@@ -331,12 +421,12 @@ export function deleteImage(id: string, baseUrl: string): ImageDto {
     original_path: existing.original_path,
     thumb_path: existing.thumb_path,
     preview_path: existing.preview_path
-  });
+  }, actor);
   refreshEventImageCount(existing.event_id);
   return getImageDtoById(id, baseUrl);
 }
 
-export function restoreImage(id: string, baseUrl: string): ImageDto {
+export function restoreImage(id: string, baseUrl: string, actor: ActorInfo = HOST_ACTOR): ImageDto {
   const existing = getImageById(id);
   if (!existing) {
     throw { code: "IMAGE_NOT_FOUND", message: "图片不存在" };
@@ -350,7 +440,7 @@ export function restoreImage(id: string, baseUrl: string): ImageDto {
   writeOperationLog(id, existing.event_id, "image_restored", {
     original_filename: existing.original_filename,
     deleted_at: existing.deleted_at
-  });
+  }, actor);
   refreshEventImageCount(existing.event_id);
   return getImageDtoById(id, baseUrl);
 }

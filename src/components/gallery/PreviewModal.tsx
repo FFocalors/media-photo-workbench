@@ -1,4 +1,4 @@
-import { Download, X } from "lucide-react";
+import { Download, Keyboard, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { EventImageData, ImageDownloadType, ImageStatus, imageStatusLabels, imageStatusOptions } from "../../lib/api";
 import { cn } from "../../lib/cn";
@@ -16,7 +16,8 @@ export function PreviewModal({
   onRatingChange,
   onStatusChange,
   onCategoryChange,
-  onRemarkChange
+  onRemarkChange,
+  onOpenShortcuts
 }: {
   photo: EventImageData;
   photos: EventImageData[];
@@ -29,6 +30,7 @@ export function PreviewModal({
   onStatusChange: (id: string, status: ImageStatus) => void;
   onCategoryChange: (id: string, category: string) => void;
   onRemarkChange: (id: string, remark: string) => void;
+  onOpenShortcuts?: () => void;
 }) {
   const [categoryDraft, setCategoryDraft] = useState(photo.category);
   const [remarkDraft, setRemarkDraft] = useState(photo.remark);
@@ -87,7 +89,19 @@ export function PreviewModal({
       </div>
 
       <aside className="w-80 shrink-0 overflow-y-auto border-l border-white/10 bg-slate-900 p-5">
-        <h2 className="mb-5 text-base font-semibold">图片操作</h2>
+        <div className="mb-5 flex items-center justify-between gap-3">
+          <h2 className="text-base font-semibold">图片操作</h2>
+          {onOpenShortcuts && (
+            <button
+              className="flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 text-xs text-white/70 hover:bg-white/10 hover:text-white"
+              onClick={onOpenShortcuts}
+              type="button"
+            >
+              <Keyboard size={14} />
+              快捷键
+            </button>
+          )}
+        </div>
         <div className="space-y-5">
           {downloadError && (
             <div className="rounded-lg border border-red-400/30 bg-red-500/10 px-3 py-2 text-xs leading-5 text-red-100">
@@ -128,6 +142,9 @@ export function PreviewModal({
           </div>
 
           <InfoRow label="拍摄时间" value={photo.shot_at || "未知"} />
+          <InfoRow label="来源" value={formatSource(photo)} />
+          <InfoRow label="上传者" value={formatUploader(photo)} />
+          <InfoRow label="上传时间" value={photo.uploaded_at || photo.imported_at || "未知"} />
           <InfoRow label="相机" value={photo.camera_model || "未知"} />
           <InfoRow label="镜头" value={photo.lens_model || "未知"} />
           <InfoRow label="尺寸" value={photo.width && photo.height ? `${photo.width} x ${photo.height}` : "未知"} />
@@ -192,4 +209,19 @@ function InfoRow({ label, value, tone = "normal" }: { label: string; value: stri
       <p className={tone === "danger" ? "text-sm font-medium text-red-200" : "text-sm text-white/80"}>{value}</p>
     </div>
   );
+}
+
+function formatSource(photo: EventImageData): string {
+  if (photo.source_type === "host_import") return "主机导入";
+  if (photo.source_type === "client_upload") return "客户端上传";
+  if (photo.source_type === "remote_import") return "远程导入";
+  if (photo.source_type === "manual_import") return "手动导入";
+  return "未知";
+}
+
+function formatUploader(photo: EventImageData): string {
+  if (photo.uploaded_by_name) return photo.uploaded_by_name;
+  if (photo.source_type === "host_import") return "主机";
+  if (photo.source_type === "client_upload") return "客户端上传";
+  return "未知来源";
 }

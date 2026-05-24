@@ -55,6 +55,9 @@ export function MetadataPanel({
           <Meta label="文件大小" value={formatBytes(photo.file_size)} />
           <Meta label="拍摄时间" value={photo.shot_at || "未知"} />
           <Meta label="导入时间" value={photo.imported_at || "未知"} />
+          <Meta label="来源" value={formatSource(photo)} />
+          <Meta label="上传者" value={formatUploader(photo)} />
+          <Meta label="上传时间" value={photo.uploaded_at || photo.imported_at || "未知"} />
           <Meta label="摄影师" value={photo.photographer || "未填写"} />
           <Meta label="相机型号" value={photo.camera_model || "未知"} />
           <Meta label="镜头" value={photo.lens_model || "未知"} />
@@ -115,6 +118,21 @@ function Meta({ label, value, strong = false, valueClassName = "" }: { label: st
       <p className={`break-all text-sm ${valueClassName || (strong ? "font-medium text-slate-900" : "text-slate-700")}`}>{value}</p>
     </div>
   );
+}
+
+function formatSource(photo: EventImageData): string {
+  if (photo.source_type === "host_import") return "主机导入";
+  if (photo.source_type === "client_upload") return "客户端上传";
+  if (photo.source_type === "remote_import") return "远程导入";
+  if (photo.source_type === "manual_import") return "手动导入";
+  return "未知";
+}
+
+function formatUploader(photo: EventImageData): string {
+  if (photo.uploaded_by_name) return photo.uploaded_by_name;
+  if (photo.source_type === "host_import") return "主机";
+  if (photo.source_type === "client_upload") return "客户端上传";
+  return "未知来源";
 }
 
 function formatBytes(bytes: number): string {
