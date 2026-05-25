@@ -28,6 +28,36 @@
 
 ## 开发记录
 
+### v1.0.0-rc.1：正式版候选准备
+- **日期**：2026-05-25
+- **开发者 / 工具**：Codex
+- **完成内容**：
+  - 将项目从 v0.x 开发阶段切换到 `v1.0.0-rc.1` 正式版候选阶段。
+  - 将 `package.json` 版本号更新为 `1.0.0-rc.1`。
+  - 明确 `v1.0.0-rc.1` 功能冻结：不再新增远程传输、RAW / HEIC / 视频、账号系统、权限系统、NSIS、Web Installer、云同步或大 UI 重构。
+  - 整理 README，使其偏向普通使用者阅读，覆盖下载方式、主机快速开始、客户端快速开始、网络建议、数据安全、常见问题和已知限制。
+  - 整理 CHANGELOG、ROADMAP、API_SPEC、DATABASE_SCHEMA 和 TESTING_NOTES，准备发布候选说明和完整回归测试清单。
+  - 继续确认 Windows ZIP 便携包是推荐交付物，安装器暂不纳入 1.0.0 阻塞项。
+- **修改文件**：
+  - `package.json`
+  - `README.md`
+  - `ROADMAP.md`
+  - `CHANGELOG.md`
+  - `DEVELOPMENT_LOG.md`
+  - `API_SPEC.md`
+  - `DATABASE_SCHEMA.md`
+  - `TESTING_NOTES.md`
+- **验证方式**：
+  - 执行 `pnpm build`。
+- **冻结规则**：
+  - 只允许修复阻塞性 bug、文档问题、打包问题和发布前回归发现的问题。
+  - 本轮不打 tag、不创建 GitHub Release、不打包 ZIP、不自动提交。
+- **发布准备信息**：
+  - 未来 ZIP 文件名：`MediaPhotoWorkbench-v1.0.0-rc.1-x64.zip`
+  - 未来 Git tag：`v1.0.0-rc.1`
+  - 未来 Release 标题：`v1.0.0-rc.1 - Windows ZIP Portable Release Candidate`
+  - Release 类型：Pre-release
+
 ### v0.17.0 开发阶段：17.2 图片墙效率增强
 - **日期**：2026-05-22
 - **开发者 / 工具**：Codex

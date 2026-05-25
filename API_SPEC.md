@@ -2,9 +2,11 @@
 
 ## 当前阶段说明
 
-当前开发阶段为 **v0.17.0**。v0.16.0 已发布，v0.17.0 目标是现场协作与选片效率增强。17.1 聚焦在线客户端感知、设备名持久化、上传来源追踪、上传者筛选、操作日志操作者和主机现场动态；17.2 聚焦图片墙快捷键提示和批量操作后选择行为配置。17.1 / 17.2 是内部开发编号，不作为正式版本号、Git tag 或 Release 名称。
+当前阶段为 **v1.0.0-rc.1** 正式版候选。v0.16.0 已发布，v0.17.0 已完成并打 tag；当前功能冻结，只整理发布候选文档、回归测试和发布准备信息，不新增业务 API、不改数据库结构。
 
-本阶段延续生产模式访问方式：打包后 Express 托管前端 `dist/`，前端页面、`/api` 接口和 Socket.IO 复用同一个后端端口。开发模式仍使用 Vite `5173` 访问前端、`3030-3040` 访问后端 API。当前推荐交付物为 ZIP 便携包 `MediaPhotoWorkbench-v0.15.0-rc.0-x64.zip`，解压后运行 `Media Photo Workbench.exe`；单文件 self-extract portable EXE 暂不作为推荐交付物，NSIS 安装包暂不推荐。
+本阶段延续生产模式访问方式：打包后 Express 托管前端 `dist/`，前端页面、`/api` 接口和 Socket.IO 复用同一个后端端口。开发模式仍使用 Vite `5173` 访问前端、`3030-3040` 访问后端 API。当前推荐交付物为 ZIP 便携包 `MediaPhotoWorkbench-v1.0.0-rc.1-x64.zip`，解压后运行 `Media Photo Workbench.exe`；单文件 self-extract portable EXE 暂不作为推荐交付物，NSIS 安装包和 Web Installer 暂不纳入 1.0.0。
+
+未来 Release tag 为 `v1.0.0-rc.1`，Release 标题为 `v1.0.0-rc.1 - Windows ZIP Portable Release Candidate`，Release 类型为 Pre-release。本轮不打 tag、不创建 GitHub Release、不打包 ZIP。
 
 ## 统一规范
 
