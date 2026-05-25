@@ -65,7 +65,7 @@
         "zip",
         "nsis"
       ],
-      "artifactName": "MediaPhotoWorkbench-${version}-${arch}.${ext}"
+      "artifactName": "MediaPhotoWorkbench-v${version}-${arch}.${ext}"
     },
     "nsis": {
       "artifactName": "MediaPhotoWorkbench-${version}-setup-${arch}.${ext}",
