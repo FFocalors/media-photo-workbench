@@ -4,5 +4,28 @@
   },
   "repository": {
     "path": ""
+  },
+  "database": {
+    "path": "",
+    "autoBackupEnabled": true,
+    "lastAutoBackupAt": "",
+    "autoBackupRetention": 10
+  },
+  "gallery": {
+    "batchSelectionBehavior": "clear"
+  },
+  "cameraFtp": {
+    "provider": "iis",
+    "siteName": "MediaPhotoWorkbenchFTP",
+    "managedSiteId": 0,
+    "username": "camera",
+    "accountManaged": false,
+    "activeEventId": "",
+    "controlPort": 21,
+    "passivePortStart": 50000,
+    "passivePortEnd": 50100,
+    "firewallControlRuleName": "Media Photo Workbench - FTP Control",
+    "firewallPassiveRuleName": "Media Photo Workbench - FTP Passive",
+    "passwordResetRequired": false
   }
 }

@@ -88,7 +88,30 @@ function getSameOriginApiBase(): string | null {
 export interface ApiResponse<T> {
   ok: boolean;
   data: T;
-  error: { code: string; message: string } | null;
+  error: { code: string; message: string; details?: ApiErrorDetails } | null;
+}
+
+export interface ApiErrorDetails {
+  operationId?: string;
+  operation?: string;
+  scriptName?: string;
+  stage?: string;
+  technicalMessage?: string;
+  exceptionType?: string;
+  command?: string;
+  siteName?: string;
+  rollbackAttempted?: boolean;
+  rollbackSucceeded?: boolean | null;
+  exitCode?: number;
+  timestamp?: string;
+  warnings?: string[];
+  conflict?: Record<string, unknown>;
+  diagnostics?: Record<string, unknown>;
+  completedSteps?: Array<Record<string, unknown>>;
+  failedStep?: Record<string, unknown>;
+  rollback?: Record<string, unknown>;
+  preflight?: Record<string, unknown>;
+  provisioningPlan?: Record<string, unknown>;
 }
 
 /**
@@ -215,6 +238,7 @@ export interface SettingsData {
   gallery: {
     batchSelectionBehavior: BatchSelectionBehavior;
   };
+  cameraFtp?: CameraFtpConfigData;
 }
 
 export async function fetchSettings(): Promise<ApiResponse<SettingsData>> {
@@ -229,6 +253,476 @@ export async function updateGallerySettings(input: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input)
   });
+}
+
+// ---------- Camera FTP ----------
+
+export interface CameraFtpConfigData {
+  provider: "iis";
+  siteName: string;
+  managedSiteId: number;
+  username: string;
+  accountManaged: boolean;
+  activeEventId: string;
+  controlPort: number;
+  passivePortStart: number;
+  passivePortEnd: number;
+  firewallControlRuleName: string;
+  firewallPassiveRuleName: string;
+  passwordResetRequired: boolean;
+}
+
+export type CameraFtpRecordStatus = "receiving" | "waiting" | "importing" | "imported" | "skipped" | "failed";
+
+export type CameraFtpCheckState =
+  | "ready"
+  | "ok"
+  | "running"
+  | "installed"
+  | "configured"
+  | "missing"
+  | "not_installed"
+  | "not_configured"
+  | "stopped"
+  | "conflict"
+  | "repair_required"
+  | "failed"
+  | "unknown";
+
+export interface CameraFtpNetworkAddressData {
+  id: string;
+  label: string;
+  address: string;
+  interfaceName: string;
+  kind: "hotspot" | "wlan" | "ethernet" | "lan";
+  detected?: boolean;
+  recommended?: boolean;
+}
+
+export interface CameraFtpRecentRecordData {
+  id: string;
+  filename: string;
+  path?: string;
+  eventId: string;
+  eventName: string;
+  status: CameraFtpRecordStatus;
+  size: number;
+  receivedAt: string;
+  importedAt: string;
+  detectedAt?: string;
+  updatedAt: string;
+  taskId?: string;
+  reason?: string;
+  error?: string;
+}
+
+export interface CameraFtpPlatformData {
+  isWindows: boolean;
+  isWindows11: boolean;
+  supported: boolean;
+  name?: string;
+  version?: string;
+  reason?: string;
+}
+
+export interface CameraFtpFeatureData {
+  featureName: string;
+  installed: boolean | null;
+  state: CameraFtpCheckState | string;
+  error?: string;
+}
+
+export interface CameraFtpWindowsFeaturesData {
+  ftpService: CameraFtpFeatureData;
+  ftpExtensibility: CameraFtpFeatureData;
+  managementTools: CameraFtpFeatureData;
+}
+
+export interface CameraFtpServiceData {
+  exists: boolean | null;
+  name: string;
+  status: string;
+  startType: string;
+  running: boolean | null;
+  message?: string;
+}
+
+export interface CameraFtpSiteData {
+  id: number | null;
+  exists: boolean | null;
+  name: string;
+  status: string;
+  started: boolean | null;
+  physicalPath: string;
+  binding: string;
+  controlPort: number;
+  sslEnabled: boolean | null;
+  adoptable: boolean | null;
+  managed: boolean | null;
+}
+
+export interface CameraFtpBindingData {
+  value: string;
+  host: string;
+  port: number;
+  allUnassigned: boolean | null;
+  correct: boolean | null;
+}
+
+export interface CameraFtpAuthenticationData {
+  basicEnabled: boolean | null;
+  anonymousEnabled: boolean | null;
+  correct: boolean | null;
+}
+
+export interface CameraFtpAuthorizationData {
+  configured: boolean | null;
+  username: string;
+  read: boolean | null;
+  write: boolean | null;
+  correct: boolean | null;
+}
+
+export interface CameraFtpAccountData {
+  username: string;
+  exists: boolean | null;
+  enabled: boolean | null;
+  managed: boolean | null;
+  description?: string;
+  conflict?: boolean | null;
+}
+
+export interface CameraFtpActiveEventData {
+  id: string;
+  name: string;
+  date: string;
+  status: string;
+  slug: string;
+  valid: boolean;
+}
+
+export interface CameraFtpAclData {
+  path: string;
+  exists: boolean | null;
+  read: boolean | null;
+  write: boolean | null;
+  correct: boolean | null;
+  broadInheritedAccess: boolean | null;
+}
+
+export interface CameraFtpWatcherData {
+  running: boolean;
+  directory: string;
+  eventId: string;
+  eventName: string;
+  pendingCount: number;
+  queuedCount: number;
+  importingCount: number;
+  unstableCount: number;
+  lastReceivedAt: string;
+  lastError: string;
+  recentRecords: CameraFtpRecentRecordData[];
+}
+
+export interface CameraFtpPassivePortsData {
+  start: number;
+  end: number;
+  configured: boolean | null;
+  correct: boolean | null;
+}
+
+export interface CameraFtpFirewallRuleData {
+  name: string;
+  exists: boolean | null;
+  enabled: boolean | null;
+  profile: string;
+  remoteAddress: string;
+  correct: boolean | null;
+}
+
+export interface CameraFtpFirewallData {
+  controlRule: CameraFtpFirewallRuleData;
+  passiveRule: CameraFtpFirewallRuleData;
+  correct: boolean | null;
+}
+
+export interface CameraFtpNetworkAddressesData {
+  hotspot: CameraFtpNetworkAddressData | null;
+  wlan: CameraFtpNetworkAddressData[];
+  ethernet: CameraFtpNetworkAddressData[];
+  lan: CameraFtpNetworkAddressData[];
+  recommendedAddress: string;
+  hotspotCandidate: string;
+  warnings: string[];
+}
+
+export interface CameraFtpPortData {
+  configuredPort: number;
+  listening: boolean | null;
+  pid?: number | null;
+  processName?: string;
+  ownedByMicrosoftFtp: boolean | null;
+  conflict: boolean | null;
+  reserved: boolean | null;
+  reservedRange?: string;
+  iisSiteName?: string;
+  iisSiteNames: string[];
+  ownedByManagedSite: boolean | null;
+  adoptable: boolean | null;
+  canChangePort: boolean;
+  availablePorts: number[];
+  recommendation?: string;
+}
+
+export interface CameraFtpConflictItemData {
+  type: "port" | "site" | "user" | "path" | string;
+  code: string;
+  message: string;
+  siteId?: number;
+  siteName?: string;
+  physicalPath?: string;
+  binding?: string;
+  port?: number;
+  status?: string;
+  adoptable?: boolean;
+  verifiedWithNikon?: boolean;
+  pid?: number;
+  processName?: string;
+  source?: string;
+  recommendation?: string;
+  availablePorts?: number[];
+  canChangePort?: boolean;
+}
+
+export interface CameraFtpConflictsData {
+  portConflict: boolean | null;
+  siteConflict: boolean | null;
+  userConflict: boolean | null;
+  pathConflict: boolean | null;
+  items: CameraFtpConflictItemData[];
+}
+
+export interface CameraFtpStatusData {
+  provider: "iis";
+  inspectionLevel: "full" | "partial";
+  requiresAdminForFullInspection: boolean;
+  requiresAdminForSystemChanges: boolean;
+  platform: CameraFtpPlatformData;
+  windowsFeatures: CameraFtpWindowsFeaturesData;
+  service: CameraFtpServiceData;
+  site: CameraFtpSiteData;
+  binding: CameraFtpBindingData;
+  authentication: CameraFtpAuthenticationData;
+  authorization: CameraFtpAuthorizationData;
+  account: CameraFtpAccountData;
+  activeEvent: CameraFtpActiveEventData | null;
+  ftpPath: string;
+  acl: CameraFtpAclData;
+  watcher: CameraFtpWatcherData;
+  controlPort: number;
+  passivePorts: CameraFtpPassivePortsData;
+  firewall: CameraFtpFirewallData;
+  port: CameraFtpPortData;
+  networkAddresses: CameraFtpNetworkAddressesData;
+  conflicts: CameraFtpConflictsData;
+  warnings: string[];
+  initialized: boolean;
+  passwordConfigured: boolean;
+  passwordResetRequired?: boolean;
+  requiresAdmin: boolean;
+  repairable: boolean;
+  missingItems: string[];
+  lastError: { code: string; message: string } | null;
+}
+
+export interface CameraFtpOperationData {
+  action: "setup" | "adopt-site" | "start" | "stop" | "restart" | "repair" | "credentials" | "active-event" | "open-folder";
+  status: "pending" | "running" | "success" | "failed";
+  message: string;
+  steps?: Array<{ id?: string; label: string; status: "pending" | "running" | "success" | "failed"; message?: string }>;
+  requiresAdmin?: boolean;
+}
+
+export type CameraFtpProvisioningGoal = "setup" | "repair" | "start" | "restart" | "adopt-site";
+
+export type CameraFtpProvisioningPlanItemStatus =
+  | "already_ok"
+  | "create"
+  | "update"
+  | "repair"
+  | "user_confirmation_required"
+  | "blocked";
+
+export type CameraFtpIssueLevel = "info" | "auto_repair" | "user_confirmation" | "blocked";
+
+export interface CameraFtpProvisioningPlanItemData {
+  id: string;
+  category: string;
+  label: string;
+  summary: string;
+  status: CameraFtpProvisioningPlanItemStatus;
+  managedResource: boolean;
+  confirmationKey?: string;
+  risk: "normal" | "high" | string;
+}
+
+export interface CameraFtpProvisioningConfirmationData {
+  key: string;
+  title: string;
+  message: string;
+  risk: "normal" | "high" | string;
+}
+
+export interface CameraFtpIssueData {
+  id: string;
+  code: string;
+  level: CameraFtpIssueLevel;
+  title: string;
+  message: string;
+  planItemId?: string;
+}
+
+export interface CameraFtpProvisioningPlanData {
+  planId: string;
+  target: CameraFtpProvisioningGoal;
+  summary: string;
+  items: CameraFtpProvisioningPlanItemData[];
+  requiresAdmin: boolean;
+  canApply: boolean;
+  generatedAt: string;
+  confirmations: CameraFtpProvisioningConfirmationData[];
+  issues: CameraFtpIssueData[];
+}
+
+export interface CameraFtpActionData {
+  operation: CameraFtpOperationData;
+  status: CameraFtpStatusData;
+  path?: string;
+}
+
+export interface CameraFtpSiteDiscoveryData {
+  sites: CameraFtpConflictItemData[];
+  status: CameraFtpStatusData;
+}
+
+export async function fetchCameraFtpStatus(forceSystemRefresh = false): Promise<ApiResponse<CameraFtpStatusData>> {
+  return request<CameraFtpStatusData>(`/api/camera-ftp/status${forceSystemRefresh ? "?refresh=1" : ""}`);
+}
+
+function postCameraFtpAction<T = CameraFtpActionData>(path: string, body?: unknown): Promise<ApiResponse<T>> {
+  return request<T>(`/api/camera-ftp/${path}`, {
+    method: "POST",
+    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+}
+
+export function prepareCameraFtpProvisioning(input: {
+  goal: CameraFtpProvisioningGoal;
+  eventId?: string;
+  username?: string;
+  controlPort: number;
+  passivePortStart: number;
+  passivePortEnd: number;
+  targetSiteName?: string;
+  targetSiteId?: number;
+}): Promise<ApiResponse<CameraFtpProvisioningPlanData>> {
+  return postCameraFtpAction<CameraFtpProvisioningPlanData>("provisioning-plan", input);
+}
+
+export function setupCameraFtp(input: {
+  eventId: string;
+  username: string;
+  password: string;
+  confirmPassword: string;
+  controlPort: number;
+  passivePortStart: number;
+  passivePortEnd: number;
+  allowLegacyFirewallRuleUpdate?: boolean;
+  allowAclTightening?: boolean;
+}): Promise<ApiResponse<CameraFtpActionData>> {
+  return postCameraFtpAction("setup", { ...input, confirm: true });
+}
+
+export function adoptCameraFtpSite(siteName: string, input?: {
+  eventId?: string;
+  username?: string;
+  password?: string;
+  confirmPassword?: string;
+  controlPort?: number;
+  passivePortStart?: number;
+  passivePortEnd?: number;
+  allowLegacyFirewallRuleUpdate?: boolean;
+  allowAclTightening?: boolean;
+}): Promise<ApiResponse<CameraFtpActionData>> {
+  return postCameraFtpAction("adopt-site", { siteName, ...input, confirm: true });
+}
+
+export function discoverCameraFtpSites(input: {
+  eventId?: string;
+  controlPort: number;
+  passivePortStart: number;
+  passivePortEnd: number;
+}): Promise<ApiResponse<CameraFtpSiteDiscoveryData>> {
+  return postCameraFtpAction<CameraFtpSiteDiscoveryData>("discover-sites", input);
+}
+
+export function startCameraFtp(input?: { allowAclTightening?: boolean }): Promise<ApiResponse<CameraFtpActionData>> {
+  return postCameraFtpAction("start", input);
+}
+
+export function stopCameraFtp(): Promise<ApiResponse<CameraFtpActionData>> {
+  return postCameraFtpAction("stop");
+}
+
+export function restartCameraFtp(input?: { allowAclTightening?: boolean }): Promise<ApiResponse<CameraFtpActionData>> {
+  return postCameraFtpAction("restart", input);
+}
+
+export function repairCameraFtp(input: { password?: string; controlPort: number; passivePortStart: number; passivePortEnd: number; allowLegacyFirewallRuleUpdate?: boolean; allowAclTightening?: boolean }): Promise<ApiResponse<CameraFtpActionData>> {
+  return postCameraFtpAction("repair", { ...input, confirm: true });
+}
+
+export interface CameraFtpPortCheckData {
+  controlPort: number;
+  passivePortStart: number;
+  passivePortEnd: number;
+  inspectionLevel: "partial" | "full";
+  requiresAdminForFullInspection: boolean;
+  port: CameraFtpPortData;
+  conflicts: CameraFtpConflictsData;
+}
+
+export function checkCameraFtpPort(input: { controlPort: number; passivePortStart: number; passivePortEnd: number; fullInspection?: boolean }): Promise<ApiResponse<CameraFtpPortCheckData>> {
+  return postCameraFtpAction<CameraFtpPortCheckData>("check-port", input);
+}
+
+export function updateCameraFtpCredentials(input: { username: string; password: string }): Promise<ApiResponse<CameraFtpActionData>> {
+  return request<CameraFtpActionData>("/api/camera-ftp/credentials", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+}
+
+export function updateCameraFtpActiveEvent(eventId: string): Promise<ApiResponse<CameraFtpActionData>> {
+  return request<CameraFtpActionData>("/api/camera-ftp/active-event", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ eventId })
+  });
+}
+
+export function clearCameraFtpActiveEvent(): Promise<ApiResponse<CameraFtpActionData>> {
+  return request<CameraFtpActionData>("/api/camera-ftp/active-event", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ eventId: "", unlink: true, confirm: true })
+  });
+}
+
+export function openCameraFtpFolder(): Promise<ApiResponse<CameraFtpActionData>> {
+  return postCameraFtpAction("open-folder");
 }
 
 export interface DatabaseBackupData {
@@ -465,7 +959,7 @@ export interface ImportedImageSummary {
 export interface ImportStartData {
   eventId: string;
   folderPath: string;
-  sourceType: "host_import" | "client_upload";
+  sourceType: "host_import" | "client_upload" | "camera_ftp";
   total: number;
   success: number;
   failed: number;
@@ -632,9 +1126,9 @@ function normalizeImageData(image: EventImageData): EventImageData {
     edited_exists: editedExists,
     is_deleted: typeof image.is_deleted === "boolean" ? image.is_deleted : false,
     deleted_at: image.deleted_at ?? "",
-    uploaded_by_client_id: image.uploaded_by_client_id ?? (image.source_type === "host_import" ? "host" : ""),
-    uploaded_by_name: image.uploaded_by_name ?? "",
-    uploaded_by_role: image.uploaded_by_role ?? "",
+    uploaded_by_client_id: image.uploaded_by_client_id ?? (image.source_type === "host_import" ? "host" : image.source_type === "camera_ftp" ? "camera_ftp" : ""),
+    uploaded_by_name: image.uploaded_by_name ?? (image.source_type === "camera_ftp" ? "相机 FTP" : ""),
+    uploaded_by_role: image.uploaded_by_role ?? (image.source_type === "camera_ftp" ? "camera" : ""),
     uploaded_at: image.uploaded_at ?? image.imported_at ?? ""
   };
 }

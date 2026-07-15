@@ -19,11 +19,12 @@ export function sendError(
   res: Response,
   code: string,
   message: string,
-  statusCode = 400
+  statusCode = 400,
+  details?: Record<string, unknown>
 ): void {
   res.status(statusCode).json({
     ok: false,
     data: null,
-    error: { code, message }
+    error: { code, message, ...(details ? { details } : {}) }
   });
 }

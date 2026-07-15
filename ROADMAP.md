@@ -2,21 +2,22 @@
 
 ## 当前阶段状态
 
-当前进入 `v1.0.0-rc.1` 正式版候选阶段。v0.16.0 已发布，v0.17.0 已完成并打 tag；当前不再继续新增功能，而是冻结功能范围，进入完整回归测试、文档整理和发布准备。
+当前进入 `v1.1.0-alpha.3` 架构重构阶段。v1.0.0-rc.1 已作为预发布验证版本发布；正式稳定版暂缓，v1.1.0 相机 FTP 已确定全面迁移到 Windows IIS FTP。
 
-`v1.0.0-rc.1` 的交付目标是 Windows ZIP 便携发布候选版。未来 ZIP 文件名为：
+`v1.1.0-alpha.3` 只做开发验证，不打包、不打 tag、不创建 Release。后续如需打包，ZIP 文件名将随 `package.json` 版本生成，例如：
 
 ```text
-MediaPhotoWorkbench-v1.0.0-rc.1-x64.zip
+MediaPhotoWorkbench-v1.1.0-alpha.3-x64.zip
 ```
 
-未来 Release tag 为 `v1.0.0-rc.1`，Release 标题为 `v1.0.0-rc.1 - Windows ZIP Portable Release Candidate`，Release 类型为 Pre-release。本阶段只准备发布信息，不打 tag、不创建 GitHub Release、不打包 ZIP。
+稳定版 Release tag、标题和发布时间后续再定，本阶段不承诺。
 
 ### 功能冻结范围
 
-`v1.0.0-rc.1` 起功能冻结，只允许修复阻塞性 bug、文档问题、打包问题和发布前回归发现的问题。本阶段不再新增：
+`v1.1.0-alpha.3` 当前只纳入“导入图片页面内的 Windows IIS FTP 管理、接收目录 watcher 与自动导入”，仍不纳入以下大范围能力：
 
-- 远程传输。
+- 公网远程 FTP、FTPS / SFTP。
+- 相机品牌 SDK 或相机自动配置。
 - RAW / HEIC / 视频支持。
 - 账号系统。
 - 权限系统。
@@ -25,10 +26,20 @@ MediaPhotoWorkbench-v1.0.0-rc.1-x64.zip
 - 云同步。
 - 大 UI 重构。
 
+当前相机 FTP 架构边界：
+
+- 只保留 Windows IIS FTP 单一 provider；旧 Node.js `ftp-srv` 内置 Server 已废弃，不保留 fallback 或双 provider。
+- IIS 控制端口固定为 `21`，被动端口范围固定为 `50000-50100`，站点绑定全部适用本地接口，不把热点 IP 写死进 binding。
+- 配置使用独立的 `activeEventId` 表示唯一 FTP 接收活动；IIS 上传、原图最终存放和 watcher 目录统一为 `working/{event_slug}/原图/相机FTP/`，与前端当前查看活动相互独立。
+- 同时支持相机和主机连接同一 Wi-Fi，以及相机连接 Windows 移动热点两种局域网方式；热点常见地址为 `192.168.137.1`，但以实时检测结果为准。
+- Electron 普通启动不要求管理员权限；只有启用 Windows 功能、管理 IIS / 服务 / 防火墙 / 本地账户和 ACL 时才通过 UAC 提权。
+- FTP 密码不明文写入 `config.json`、SQLite、日志或 API 响应，页面也不回显或复制密码。
+- 继续复用 `camera_ftp` 文件稳定检测和图片导入管线，保留去重、缩略图 / 预览图、EXIF、SQLite、任务与 Socket.IO 行为。
+
 当前 GitHub Release：
 
 ```text
-https://github.com/FFocalors/media-photo-workbench/releases/tag/v0.13.2-dev
+https://github.com/FFocalors/media-photo-workbench/releases/tag/v1.0.0-rc.1
 ```
 
 ## 已完成
@@ -247,18 +258,11 @@ https://github.com/FFocalors/media-photo-workbench/releases/tag/v0.13.2-dev
 
 ## 后续路线
 
-- **v1.0.0-rc.1**：正式版候选，功能冻结，进入完整回归测试和发布准备。
-- **v1.0.0**：正式稳定版。
-- **v1.0.0 之后**：再考虑远程传输、安装器、RAW / HEIC / 视频、权限系统和更复杂的统计复盘。
-
-### v1.0.0 发布条件
-
-1. `v1.0.0-rc.1` 完整回归测试通过。
-2. ZIP 便携包解压运行正常。
-3. 主机 / 客户端协作流程正常。
-4. 大批量导入、任务中心、导出、归档、数据库备份等核心链路无阻塞问题。
-5. README 和故障排查说明完整。
-6. 没有阻塞正式使用的已知 bug。
+- **v1.1.0-alpha.1**：相机 FTP 接收目录监听核心，自动导入 JPG / JPEG / PNG，并作为“导入图片”页面中的相机 FTP tab。
+- **v1.1.0-alpha.2**：聚焦稳定性优化、半文件和权限异常现场测试；FileZilla / IIS FTP 基础配置指引已在 alpha.1 收口中前移补充。
+- **v1.1.0-alpha.3**：全面迁移到 Windows IIS FTP 单一 provider；固定控制端口 `21` 和被动端口 `50000-50100`，通过 `activeEventId` 将 IIS 物理路径、watcher 和原图最终目录切换到 `working/{event_slug}/原图/相机FTP/`，支持同一 Wi-Fi、Windows 热点与原地自动入库。
+- **v1.1.0 后续版本**：继续验证真实相机兼容性、防火墙指引和现场稳定性；安装器、RAW / HEIC / 视频和权限系统仍不承诺具体时间。
+- **更后续**：再考虑安装器、RAW / HEIC / 视频、权限系统和更复杂的统计复盘。
 
 ### 后续任务系统增强
 - 继续评估大批量永久删除、更多文件级导出细节是否需要更细粒度任务进度。

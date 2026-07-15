@@ -10,7 +10,7 @@ export interface RealtimeImagePayload {
   image?: EventImageData;
   action: string;
   actor?: {
-    type: "host" | "client" | "unknown";
+    type: "host" | "client" | "camera" | "unknown";
     id?: string;
     name: string;
   };

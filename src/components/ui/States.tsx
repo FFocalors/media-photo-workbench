@@ -44,5 +44,5 @@ export function EmptyState({ icon, title, body, action }: { icon?: ReactNode; ti
 }
 
 export function StatusPill({ tone = "neutral", children }: { tone?: Tone; children: ReactNode }) {
-  return <span className={cn("rounded-md border px-2 py-1 text-xs font-medium", toneStyle[tone].box)}>{children}</span>;
+  return <span className={cn("shrink-0 whitespace-nowrap rounded-md border px-2 py-1 text-center text-xs font-medium", toneStyle[tone].box)}>{children}</span>;
 }

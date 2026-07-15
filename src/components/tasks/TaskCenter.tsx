@@ -26,6 +26,7 @@ function taskTypeLabel(task: TaskData): string {
   const labels: Record<string, string> = {
     host_import: "导入图片",
     client_upload_import: "客户端上传处理",
+    camera_ftp_import: "相机 FTP 导入",
     download_zip: "批量 ZIP 下载",
     publish_export: "导出发布",
     edit_package: "生成待修包",

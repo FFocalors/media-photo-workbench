@@ -123,6 +123,7 @@ function Meta({ label, value, strong = false, valueClassName = "" }: { label: st
 function formatSource(photo: EventImageData): string {
   if (photo.source_type === "host_import") return "主机导入";
   if (photo.source_type === "client_upload") return "客户端上传";
+  if (photo.source_type === "camera_ftp") return "相机 FTP 传输";
   if (photo.source_type === "remote_import") return "远程导入";
   if (photo.source_type === "manual_import") return "手动导入";
   return "未知";
@@ -132,6 +133,7 @@ function formatUploader(photo: EventImageData): string {
   if (photo.uploaded_by_name) return photo.uploaded_by_name;
   if (photo.source_type === "host_import") return "主机";
   if (photo.source_type === "client_upload") return "客户端上传";
+  if (photo.source_type === "camera_ftp") return "相机 FTP";
   return "未知来源";
 }
 

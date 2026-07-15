@@ -13,6 +13,7 @@ import archivedEventsRouter from "./routes/archivedEvents";
 import tasksRouter from "./routes/tasks";
 import downloadPackagesRouter from "./routes/downloadPackages";
 import clientsRouter from "./routes/clients";
+import cameraFtpRouter from "./routes/cameraFtp";
 
 export interface CreateAppOptions {
   frontendDistPath?: string;
@@ -41,6 +42,7 @@ export function createApp(options: CreateAppOptions = {}): express.Application {
   app.use("/api/tasks", tasksRouter);
   app.use("/api/download-packages", downloadPackagesRouter);
   app.use("/api/clients", clientsRouter);
+  app.use("/api/camera-ftp", cameraFtpRouter);
 
   const frontendDistPath = options.serveFrontend === false
     ? null

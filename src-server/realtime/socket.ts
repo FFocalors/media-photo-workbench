@@ -12,7 +12,7 @@ export interface RealtimeImagePayload {
 }
 
 export interface RealtimeActor {
-  type: "host" | "client" | "unknown";
+  type: "host" | "client" | "camera" | "unknown";
   id?: string;
   name: string;
 }

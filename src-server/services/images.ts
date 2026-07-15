@@ -154,9 +154,9 @@ function toImageDto(row: ImageRow, baseUrl: string, includePaths = false): Image
     camera_model: row.camera_model,
     lens_model: row.lens_model,
     source_type: row.source,
-    uploaded_by_client_id: row.uploaded_by_client_id || (row.source === "host_import" ? "host" : ""),
-    uploaded_by_name: row.uploaded_by_name || (row.source === "host_import" ? "主机导入" : row.source === "client_upload" ? "客户端上传" : ""),
-    uploaded_by_role: row.uploaded_by_role || (row.source === "host_import" ? "host" : ""),
+    uploaded_by_client_id: row.uploaded_by_client_id || defaultUploadedByClientId(row.source),
+    uploaded_by_name: row.uploaded_by_name || defaultUploadedByName(row.source),
+    uploaded_by_role: row.uploaded_by_role || defaultUploadedByRole(row.source),
     uploaded_at: row.uploaded_at || row.created_at,
     edited_available: editedExists,
     original_exists: originalExists,
@@ -175,6 +175,25 @@ function toImageDto(row: ImageRow, baseUrl: string, includePaths = false): Image
   }
 
   return dto;
+}
+
+function defaultUploadedByClientId(source: string): string {
+  if (source === "host_import") return "host";
+  if (source === "camera_ftp") return "camera_ftp";
+  return "";
+}
+
+function defaultUploadedByName(source: string): string {
+  if (source === "host_import") return "主机导入";
+  if (source === "client_upload") return "客户端上传";
+  if (source === "camera_ftp") return "相机 FTP";
+  return "";
+}
+
+function defaultUploadedByRole(source: string): string {
+  if (source === "host_import") return "host";
+  if (source === "camera_ftp") return "camera";
+  return "";
 }
 
 export function getImageById(id: string): ImageRow | undefined {
@@ -226,6 +245,9 @@ export function listEventImages(eventId: string, params: ImageListParams, baseUr
     if (params.uploadedByClientId === "host") {
       where.push("source = ?");
       values.push("host_import");
+    } else if (params.uploadedByClientId === "camera_ftp") {
+      where.push("source = ?");
+      values.push("camera_ftp");
     } else if (params.uploadedByClientId === "client_unknown") {
       where.push("source = ? AND uploaded_by_client_id = ''");
       values.push("client_upload");
@@ -265,11 +287,14 @@ export function listEventUploaders(eventId: string): EventUploaderSummary[] {
     SELECT
       CASE
         WHEN source = 'host_import' THEN 'host'
+        WHEN source = 'camera_ftp' THEN 'camera_ftp'
         WHEN uploaded_by_client_id != '' THEN uploaded_by_client_id
         ELSE 'client_unknown'
       END AS clientId,
       CASE
         WHEN source = 'host_import' THEN '主机导入'
+        WHEN source = 'camera_ftp' AND uploaded_by_name != '' THEN uploaded_by_name
+        WHEN source = 'camera_ftp' THEN '相机 FTP'
         WHEN uploaded_by_name != '' THEN uploaded_by_name
         ELSE '客户端上传'
       END AS clientName,
@@ -279,7 +304,7 @@ export function listEventUploaders(eventId: string): EventUploaderSummary[] {
     WHERE event_id = ? AND is_deleted = 0
     GROUP BY clientId, clientName, source
     ORDER BY
-      CASE WHEN clientId = 'host' THEN 0 ELSE 1 END,
+      CASE WHEN clientId = 'host' THEN 0 WHEN clientId = 'camera_ftp' THEN 1 ELSE 2 END,
       clientName COLLATE NOCASE ASC
   `).all(eventId) as Array<{
     clientId: string;

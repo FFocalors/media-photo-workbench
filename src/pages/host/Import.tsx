@@ -6,6 +6,7 @@ import { EventData, fetchEvents, fetchTask, ImportScanData, ImportStartData, Imp
 import { cn } from "../../lib/cn";
 import { subscribeRealtimeTaskEvent } from "../../lib/socket";
 import { formatTaskDuration, getTaskStats, taskStatusLabel } from "../../lib/taskStats";
+import { CameraFtpImportPanel } from "../../components/import/CameraFtpImportPanel";
 
 type MessageState = {
   tone: "success" | "warning" | "danger" | "info";
@@ -14,6 +15,7 @@ type MessageState = {
 };
 
 type ImportSourceMode = "folder" | "files";
+type ImportTab = "local" | "client" | "cameraFtp" | "remote";
 
 const SUPPORTED_IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png"]);
 
@@ -23,6 +25,7 @@ export function ImportPage() {
   const [sourceMode, setSourceMode] = useState<ImportSourceMode>("folder");
   const [sourceFolder, setSourceFolder] = useState("");
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
+  const [activeTab, setActiveTab] = useState<ImportTab>("local");
   const [eventsLoading, setEventsLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -396,28 +399,28 @@ export function ImportPage() {
       <div className="mb-8 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">图片导入</h1>
-          <p className="mt-1 text-sm text-slate-500">主机本地 JPG/JPEG/PNG 文件夹或指定图片导入</p>
+          <p className="mt-1 text-sm text-slate-500">集中管理主机本地、客户端上传和相机 FTP 等图片来源</p>
         </div>
       </div>
 
-      <div className="mx-auto mb-10 flex w-full max-w-2xl items-center justify-center">
-        <Step number={1} label="选择来源" active={step >= 1} completed={step > 1} />
-        <div className="mx-4 h-px flex-1 bg-slate-200" />
-        <Step number={2} label="扫描 / 确认" active={step >= 2} completed={step > 2} />
-        <div className="mx-4 h-px flex-1 bg-slate-200" />
-        <Step number={3} label="导入处理" active={step >= 3} completed={step > 3} />
-        <div className="mx-4 h-px flex-1 bg-slate-200" />
-        <Step number={4} label="完成" active={step >= 4} completed={step > 4} />
+      <div className="mx-auto mb-6 w-full max-w-6xl">
+        <ImportTabs activeTab={activeTab} onChange={setActiveTab} />
       </div>
 
-      <div className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col gap-6 xl:flex-row">
-        <div className="flex flex-1 flex-col rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
-          <div className="mb-6 flex border-b border-slate-100">
-            <button className="mr-6 border-b-2 border-blue-600 px-1 pb-3 text-sm font-medium text-blue-600" type="button">本地导入</button>
-            <button className="mr-6 border-b-2 border-transparent px-1 pb-3 text-sm font-medium text-slate-400" disabled type="button">客户端上传</button>
-            <button className="border-b-2 border-transparent px-1 pb-3 text-sm font-medium text-slate-400" disabled type="button">远程传输 (预留)</button>
+      {activeTab === "local" && (
+        <>
+          <div className="mx-auto mb-10 flex w-full max-w-2xl items-center justify-center">
+            <Step number={1} label="选择来源" active={step >= 1} completed={step > 1} />
+            <div className="mx-4 h-px flex-1 bg-slate-200" />
+            <Step number={2} label="扫描 / 确认" active={step >= 2} completed={step > 2} />
+            <div className="mx-4 h-px flex-1 bg-slate-200" />
+            <Step number={3} label="导入处理" active={step >= 3} completed={step > 3} />
+            <div className="mx-4 h-px flex-1 bg-slate-200" />
+            <Step number={4} label="完成" active={step >= 4} completed={step > 4} />
           </div>
 
+          <div className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col gap-6 xl:flex-row">
+        <div className="flex flex-1 flex-col rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
           <h3 className="mb-5 font-medium text-slate-900">导入设置</h3>
 
           <div className="flex-1 space-y-5 overflow-y-auto pr-2">
@@ -669,6 +672,88 @@ export function ImportPage() {
             <p>预览图保存到：工作区 / 预览图</p>
           </div>
         </div>
+      </div>
+        </>
+      )}
+
+      {activeTab === "client" && (
+        <ImportPlaceholder
+          badge="client_upload"
+          title="客户端上传"
+          body="客户端上传仍由连接到主机的客户端页面发起。主机端在这里保留入口说明，不新增新的上传流程。"
+          items={[
+            "客户端连接主机后选择活动、摄影师和设备名。",
+            "客户端上传 JPG / JPEG / PNG 后，主机入库并生成缩略图和预览图。",
+            "图片墙、任务中心和最近动态继续显示客户端上传结果。"
+          ]}
+        />
+      )}
+
+      {activeTab === "cameraFtp" && (
+        <div className="mx-auto w-full max-w-6xl">
+          <CameraFtpImportPanel />
+        </div>
+      )}
+
+      {activeTab === "remote" && (
+        <ImportPlaceholder
+          badge="remote_import"
+          title="远程传输（预留）"
+          body="远程传输仍是后续预留能力，本阶段不启用公网 FTP、SFTP、隧道或远程图片墙。"
+          items={[
+            "不会启动真实远程传输监听。",
+            "不会内置 ngrok、云中继或公网服务。",
+            "当前只保留远程导入目录和后续扩展说明。"
+          ]}
+        />
+      )}
+    </div>
+  );
+}
+
+function ImportTabs({ activeTab, onChange }: { activeTab: ImportTab; onChange: (tab: ImportTab) => void }) {
+  const tabs: Array<{ key: ImportTab; label: string }> = [
+    { key: "local", label: "本地导入" },
+    { key: "client", label: "客户端上传" },
+    { key: "cameraFtp", label: "相机 FTP" },
+    { key: "remote", label: "远程传输（预留）" }
+  ];
+
+  return (
+    <div className="flex flex-wrap gap-2 border-b border-slate-200">
+      {tabs.map((tab) => (
+        <button
+          className={cn(
+            "border-b-2 px-2 pb-3 text-sm font-medium transition-colors",
+            activeTab === tab.key
+              ? "border-blue-600 text-blue-600"
+              : "border-transparent text-slate-500 hover:text-slate-800"
+          )}
+          key={tab.key}
+          onClick={() => onChange(tab.key)}
+          type="button"
+        >
+          {tab.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ImportPlaceholder({ badge, title, body, items }: { badge: string; title: string; body: string; items: string[] }) {
+  return (
+    <div className="mx-auto w-full max-w-6xl rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
+          <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-500">{body}</p>
+        </div>
+        <span className="rounded-md bg-slate-50 px-2 py-1 text-xs font-medium text-slate-500">{badge}</span>
+      </div>
+      <div className="grid gap-3 md:grid-cols-3">
+        {items.map((item) => (
+          <div className="rounded-xl bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600" key={item}>{item}</div>
+        ))}
       </div>
     </div>
   );

@@ -10,6 +10,10 @@ import { setAppDataRoot } from "./routes/settings";
 import { setRuntimeServerPort } from "./runtime";
 import { cancelRunningTasks } from "./services/tasks";
 import { runStartupAutoBackup } from "./services/databaseMaintenance";
+import {
+  restoreCameraFtpWatcher,
+  shutdownCameraFtpOrchestrator
+} from "./services/cameraFtpOrchestrator";
 
 export interface ServerHandle {
   port: number;
@@ -113,6 +117,16 @@ export async function startServer(
 
   logger.info({ port: actualPort }, `后端服务已启动：http://localhost:${actualPort}`);
 
+  // 只恢复当前 FTP 活动的文件 watcher；不自动初始化、接管或启动 IIS/FTPSVC。
+  try {
+    await restoreCameraFtpWatcher({ baseUrl: `http://localhost:${actualPort}` });
+  } catch (err: any) {
+    safeLog("warn", {
+      code: err?.code || "CAMERA_FTP_WATCHER_RESTORE_FAILED",
+      message: err?.message || "未能恢复相机 FTP watcher"
+    }, "相机 FTP watcher 启动恢复已跳过");
+  }
+
   setTimeout(() => {
     void runStartupAutoBackup();
   }, 1500);
@@ -121,6 +135,8 @@ export async function startServer(
     port: actualPort,
     close: () => {
       safeLog("info", "正在关闭后端服务...");
+      // 应用退出只关闭 watcher，不停止 IIS FTP 站点或 FTPSVC。
+      shutdownCameraFtpOrchestrator();
       cancelRunningTasks("server_closing");
       setLoggerShuttingDown(true);
       try {

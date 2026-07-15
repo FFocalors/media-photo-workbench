@@ -3,6 +3,7 @@ import { promises as nativeFs } from "fs";
 import path from "path";
 import fs from "fs-extra";
 import { getConfig } from "../config/config";
+import { getPendingCameraFtpEventId, reserveCameraFtpEventLifecycle } from "./cameraFtpRuntimeState";
 import { getDatabase } from "../db/database";
 import { getLogger } from "../utils/logger";
 import { ensureEventWorkingDirs, getEventWorkspacePaths } from "./eventWorkspace";
@@ -158,6 +159,19 @@ function deleteByIds(table: string, column: string, ids: string[]): number {
 }
 
 /**
+ * 当前 FTP 接收活动的工作目录由 IIS 与 watcher 共同持有。
+ * 在解除关联或切换到其他活动前，禁止归档、删除或永久清理该活动。
+ */
+export function assertEventNotActiveCameraFtp(eventId: string): void {
+  if (eventId && (getConfig().cameraFtp.activeEventId === eventId || getPendingCameraFtpEventId() === eventId)) {
+    throw {
+      code: "FTP_EVENT_NOT_ALLOWED",
+      message: "该活动当前正在接收相机 FTP 文件。请先在“图片导入 > 相机 FTP”中切换或解除 FTP 接收活动。"
+    };
+  }
+}
+
+/**
  * 获取活动列表
  */
 export function listEvents(statusFilter?: string): EventRow[] {
@@ -249,6 +263,10 @@ export function updateEventStatus(id: string, status: string): EventRow | undefi
   const existing = getEventById(id);
   if (!existing) return undefined;
 
+  if (status === "archived" || status === "deleted") {
+    assertEventNotActiveCameraFtp(id);
+  }
+
   db.prepare("UPDATE events SET status = ?, updated_at = ? WHERE id = ?").run(status, now, id);
 
   logger.info({ id, from: existing.status, to: status }, "活动状态已更新");
@@ -286,6 +304,17 @@ export function restoreEvent(id: string, status = "active"): EventRow | undefine
 }
 
 export async function purgeEvent(id: string, input: { includeArchive?: boolean } = {}): Promise<EventPurgeResult> {
+  assertEventNotActiveCameraFtp(id);
+  const releaseReservation = reserveCameraFtpEventLifecycle(id, "活动永久删除");
+  try {
+    assertEventNotActiveCameraFtp(id);
+    return await purgeEventInternal(id, input);
+  } finally {
+    releaseReservation();
+  }
+}
+
+async function purgeEventInternal(id: string, input: { includeArchive?: boolean } = {}): Promise<EventPurgeResult> {
   const existing = getEventById(id);
   if (!existing) {
     throw { code: "EVENT_NOT_FOUND", message: "活动不存在" };
@@ -293,6 +322,7 @@ export async function purgeEvent(id: string, input: { includeArchive?: boolean }
   if (existing.status !== "deleted") {
     throw { code: "EVENT_NOT_DELETED", message: "只能永久删除回收站中的活动" };
   }
+  assertEventNotActiveCameraFtp(id);
 
   const repoPath = getConfig().repository.path;
   const repositoryStatus = checkRepository(repoPath);

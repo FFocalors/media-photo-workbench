@@ -2,11 +2,19 @@
 
 ## 当前阶段说明
 
-当前阶段为 **v1.0.0-rc.1** 正式版候选。v0.16.0 已发布，v0.17.0 已完成并打 tag；当前功能冻结，只整理发布候选文档、回归测试和发布准备信息，不新增业务 API、不改数据库结构。
+当前阶段为 **v1.1.0-alpha.4** IIS FTP 首次配置与 UAC 诊断修复阶段。v0.16.0 已发布，v0.17.0 已完成并打 tag，v1.0.0-rc.1 已作为预发布验证版本发布；当前局域网相机 FTP 使用“Windows IIS FTP + 当前 FTP 活动 watcher + 自动导入”单一架构。
 
-本阶段延续生产模式访问方式：打包后 Express 托管前端 `dist/`，前端页面、`/api` 接口和 Socket.IO 复用同一个后端端口。开发模式仍使用 Vite `5173` 访问前端、`3030-3040` 访问后端 API。当前推荐交付物为 ZIP 便携包 `MediaPhotoWorkbench-v1.0.0-rc.1-x64.zip`，解压后运行 `Media Photo Workbench.exe`；单文件 self-extract portable EXE 暂不作为推荐交付物，NSIS 安装包和 Web Installer 暂不纳入 1.0.0。
+本阶段延续生产模式访问方式：打包后 Express 托管前端 `dist/`，前端页面、`/api` 接口和 Socket.IO 复用同一个后端端口。开发模式仍使用 Vite `5173` 访问前端、`3030-3040` 访问后端 API。本轮不打包、不打 tag、不创建 GitHub Release。
 
-未来 Release tag 为 `v1.0.0-rc.1`，Release 标题为 `v1.0.0-rc.1 - Windows ZIP Portable Release Candidate`，Release 类型为 Pre-release。本轮不打 tag、不创建 GitHub Release、不打包 ZIP。
+前端入口仍位于“导入图片 > 相机 FTP”tab，`/api/camera-ftp/*` 命名空间保持不变。IIS binding 为 `*:{controlPort}:`，控制端口默认 `21` 且可配置，PASV 默认 `50000-50100`，当前 FTP 活动根目录为 `working/{event_slug}/原图/相机FTP/`。该目录同时是 IIS 上传目录、相机原图最终目录、watcher 目录和 `images.original_path` 所在目录；稳定后原地导入，不复制第二份原图。
+
+接收目录允许位于 OneDrive Files On-Demand 仓库。Windows 为云占位目录设置的 `ReparsePoint` 属性本身不代表路径重定向；只有带 `LinkType/Target` 的真实 SymbolicLink 或 Junction 会以 `FTP_PATH_INVALID` 拒绝。
+
+IIS 内部实现中，站点 binding、Authentication、SSL 和站点级 firewallSupport 从 `system.applicationHost/sites` 的 FTP 站点元素读取；FTP Authorization Rules 则通过站点作用域的 `system.ftpServer/security/authorization` 配置节读取和提交。setup、adopt-site、credentials、status 和失败回滚必须使用同一站点作用域，避免自定义控制端口已通过预检后在授权阶段失败。该修正不改变 `/api/camera-ftp/*` 请求或响应结构。
+
+FTP 站点运行时与通用 Web 站点运行时分开：状态读取 `ftpServer.state`，自动启动写入 `ftpServer.serverAutoStart`，启停调用 `ftpServer.Start/Stop`；共享 Windows 服务只通过 `FTPSVC` 管理。管理员操作使用 `start_ftp_service / start_ftp_site / verify_ftp_listener` 独立阶段，避免 FTPSVC 已运行时把目标 FTP 站点启动失败误报为服务故障。
+
+Microsoft.Web.Administration 在 Windows PowerShell 5.1 下可能把 FTP SSL、Authorization accessType 和 permissions flags 返回为数值字符串。服务层按本机 IIS schema 将 `0 -> SslAllow`、`0 -> Allow`、`3 -> Read, Write` 归一化，并在结构化诊断中保留 raw 值。最终验证逐项返回 `id / code / passed / expected / actual`；失败详情同时包含 `failedChecks / failedCodes / verificationChecks`。
 
 ## 统一规范
 
@@ -108,7 +116,7 @@ Socket.IO：http://主机局域网IP:{serverPort}
     "error": null
   }
   ```
-- **备注**：前端启动、客户端连接和主机系统概览页会调用该接口。`server.port` 是本次真实监听端口，`server.configuredPort` 是配置中的首选端口。`network.lanAddresses` 来自当前主机 Wi-Fi / WLAN / 以太网 IPv4 网卡，已过滤 VMware、Docker、WSL、Hyper-V 等虚拟网卡。容量读取失败时 `freeSpace` / `totalSpace` 可能为 `null`，前端应显示“暂不可用”而不是假容量。
+- **备注**：前端启动、客户端连接、主机系统概览页和相机 FTP 地址提示会调用该接口。`server.port` 是本次真实监听端口，`server.configuredPort` 是配置中的首选端口。`network.lanAddresses` 来自当前主机 Wi-Fi / WLAN / 以太网 IPv4 网卡，已过滤 VMware、Docker、WSL、Hyper-V 等虚拟网卡；`network.hotspotAddress` 是 Windows 热点地址或候选地址，`192.168.137.1` 只是常见候选值，不是唯一固定值。容量读取失败时 `freeSpace` / `totalSpace` 可能为 `null`，前端应显示“暂不可用”而不是假容量。
 
 ---
 
@@ -145,6 +153,8 @@ Socket.IO：http://主机局域网IP:{serverPort}
 
 ## 二、Settings 设置
 
+`/api/settings/*` 与 `/api/repository/*` 包含本机数据库、仓库和 IIS 元数据，只允许主机本机调用；局域网客户端不得读取或修改这些路径。
+
 ### [已实现] 获取当前设置
 - **用途**：获取系统的全量配置信息。
 - **请求方法**：`GET`
@@ -167,12 +177,29 @@ Socket.IO：http://主机局域网IP:{serverPort}
       },
       "gallery": {
         "batchSelectionBehavior": "clear"
+      },
+      "cameraFtp": {
+        "provider": "iis",
+        "siteName": "MediaPhotoWorkbenchFTP",
+        "managedSiteId": 0,
+        "username": "camera",
+        "accountManaged": false,
+        "activeEventId": "evt_xxx",
+        "controlPort": 21,
+        "passivePortStart": 50000,
+        "passivePortEnd": 50100,
+        "firewallControlRuleName": "Media Photo Workbench - FTP Control",
+        "firewallPassiveRuleName": "Media Photo Workbench - FTP Passive",
+        "passwordResetRequired": false
       }
     },
     "error": null
   }
   ```
 - **备注**：`database.path` 是当前进程实际使用的数据库路径；`configuredPath` 是配置文件中的自定义数据库路径，未设置时为空；`defaultPath` 是未配置自定义路径时的默认位置。`gallery.batchSelectionBehavior` 取值为 `clear | keep`。开发模式默认使用项目 `data/app.db`，打包模式默认使用 Electron userData 下的 `data/app.db`。
+
+- **v1.1.0-alpha.3 补充**：`cameraFtp` 只保存非敏感的 IIS 管理元数据和 `activeEventId`。FTP 密码不写入配置、SQLite、API 响应或日志；旧配置中的明文密码在加载迁移时被清理并转为 `passwordResetRequired` 状态。
+- `managedSiteId` 是工作台成功创建或显式接管后保存的 IIS Site ID。后续系统修改必须同时匹配站点名、Site ID、至少一个 FTP binding 和托管账户标记；`0` 表示尚未建立可信绑定，不能据同名站点推断所有权。授权规则属于可修复配置：缺失或错误时 `site.managed=false`，但在上述所有权证据完整时允许“一键修复”恢复授权。
 
 ### [已实现] 更新图片墙偏好设置
 - **用途**：设置批量操作后保留或清空选择。
@@ -337,6 +364,8 @@ Socket.IO：http://主机局域网IP:{serverPort}
 
 ## 三、Events 活动管理
 
+活动列表和协作读取保持局域网可用；活动状态管理、归档 prepare/verify/cleanup、恢复、逻辑删除、永久删除以及归档目录删除属于主机操作，服务端要求请求来自主机本机。
+
 ### [已实现] 获取活动列表
 - **用途**：获取所有活动的列表。
 - **请求方法**：`GET`
@@ -450,7 +479,8 @@ working/{event_slug}/清单
   - `MISSING_STATUS`：`status` 为空。
   - `INVALID_STATUS`：状态不在 `draft | active | reviewing | archived | deleted` 中。
   - `EVENT_NOT_FOUND`：活动不存在。
-- **备注**：该接口只修改活动状态，不移动或删除工作区文件。
+  - `FTP_EVENT_NOT_ALLOWED`：该活动是当前 FTP 接收活动，不能变为 `archived | deleted`。
+- **备注**：该接口只修改活动状态，不移动或删除工作区文件。当前 FTP 活动必须先切换或解除关联。
 
 ### [已实现] 逻辑删除活动
 - **用途**：把活动标记为已删除，使其不再出现在默认活动列表中。
@@ -460,6 +490,7 @@ working/{event_slug}/清单
 - **响应示例**：返回状态为 `deleted` 的活动对象。
 - **错误码**：
   - `EVENT_NOT_FOUND`：活动不存在。
+  - `FTP_EVENT_NOT_ALLOWED`：该活动仍是当前 FTP 接收活动。
   - `DELETE_EVENT_FAILED`：删除失败。
 - **备注**：这是逻辑删除，只写入 `status = deleted`，不删除 SQLite 记录、不删除原图、不删除缩略图/预览图、不清理活动工作区。
 
@@ -484,7 +515,7 @@ working/{event_slug}/清单
   - `EVENT_NOT_FOUND`：活动不存在。
   - `EVENT_NOT_DELETED`：活动不在回收站中。
   - `INVALID_RESTORE_STATUS`：恢复目标不是 `active | draft`。
-- **备注**：图片仍通过 `event_id` 归属该活动，恢复时不移动图片文件。
+- **备注**：图片仍通过 `event_id` 归属该活动，恢复时不移动图片文件，也不自动将其设为 FTP 接收活动。
 
 ### [已实现] 永久删除活动及工作区
 - **用途**：彻底删除活动记录、图片记录和对应工作区文件。
@@ -523,6 +554,7 @@ working/{event_slug}/清单
   - `EVENT_NOT_DELETED`：活动不在回收站中。
   - `REPOSITORY_NOT_READY`：仓库路径不可用。
   - `EVENT_PURGE_FILE_FAILED`：工作区文件删除失败。
+  - `FTP_EVENT_NOT_ALLOWED`：该活动仍是当前 FTP 接收活动。
 - **备注**：仅允许对 `status = deleted` 的活动执行。前端必须二次确认并建议输入活动名称。默认删除 `working/{event_slug}` 和对应 `archive/{event_slug}` / `archive/{event_slug}_*` 归档目录；如明确传 `includeArchive = false` 才保留归档目录。数据库会清理该活动的 `images`、`image_tags`、`download_logs`、`export_jobs`、`operation_logs`、`archived_events` 和 `events` 相关记录。
 
 ### [已实现] 准备活动归档
@@ -531,7 +563,7 @@ working/{event_slug}/清单
 - **路径**：`/api/events/:eventId/archive/prepare`
 - **请求参数示例**：无
 - **响应示例**：返回归档目录、缩略图复制数量、缺失文件、`manifestPath` 和 `eventDbPath`。
-- **备注**：生成轻量归档 `archive/{event_slug}`，只复制缩略图到 `缩略图/`，并生成 `metadata/manifest.json`、`images.csv`、`operation_logs.csv` 和独立 `event.db`；原图、已修图、发布图和压缩包只记录历史路径，不复制进归档。
+- **备注**：生成轻量归档 `archive/{event_slug}`，只复制缩略图到 `缩略图/`，并生成 `metadata/manifest.json`、`images.csv`、`operation_logs.csv` 和独立 `event.db`；原图、已修图、发布图和压缩包只记录历史路径，不复制进归档。当前 FTP 接收活动返回 `FTP_EVENT_NOT_ALLOWED`。
 
 ### [已实现] 获取已归档活动列表
 - **用途**：获取历史已归档的只读活动列表摘要。
@@ -615,6 +647,7 @@ working/{event_slug}/清单
 - **请求参数示例**：无
 - **响应示例**：返回 `archivePath`、是否删除目录、缺失文件和删除的归档摘要记录数。
 - **备注**：只删除 archive 归档目录和归档摘要，不删除原活动 `events/images` 记录；前端必须二次确认。
+- **错误码补充**：`FTP_EVENT_NOT_ALLOWED` 表示该归档对应的活动仍是当前 FTP 接收活动，必须切换活动，或先停止 FTP 后独立解除关联。
 
 ---
 
@@ -870,6 +903,51 @@ working/{event_slug}/清单
 
 ---
 
+## 四点五、Camera FTP 相机 FTP 传输
+
+前端入口位于“导入图片 > 相机 FTP”。alpha.4 由 Windows IIS 提供 FTP 服务。普通状态读取不弹 UAC；只有 discover-sites、setup、adopt-site、start、stop、restart、repair、credentials 和需要改变 IIS physicalPath 的 active-event 操作才可能请求提权。其中 discover-sites 只读，不修改 IIS。
+
+该命名空间仅允许主机本机调用。普通 FTP 是明文协议，只面向可信局域网或 Windows 热点；账户应使用不复用的专用密码。PASV `50000-50100` 是 IIS 服务器级配置，setup、repair 和 adopt-site 的确认界面必须提示它可能影响本机其他 IIS FTP 站点。
+
+当前实现的 API：
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| `GET` | `/api/camera-ftp/status` | 只读检测 Windows 功能、FTPSVC、IIS 站点、账户、ACL、防火墙、当前控制端口、网络地址、当前活动和 watcher |
+| `POST` | `/api/camera-ftp/provisioning-plan` | 只读生成 setup / repair / start / restart / adopt-site 的结构化配置计划；不传密码、不创建目录、不请求 UAC |
+| `POST` | `/api/camera-ftp/check-port` | 校验控制/被动端口并返回监听 PID、进程、IIS 站点归属、保留端口状态和候选可用端口；`fullInspection: true` 会按需请求 UAC 做只读 IIS binding 检测，不修改系统 |
+| `POST` | `/api/camera-ftp/discover-sites` | 普通检测不完整时按需请求 UAC，只读列出可明确选择接管的 IIS FTP 站点 |
+| `POST` | `/api/camera-ftp/setup` | 接收活动、账户、控制端口和被动端口，用户确认后自动请求 UAC；冲突预检通过后完成配置与启动 |
+| `POST` | `/api/camera-ftp/adopt-site` | 在用户明确确认后接管指定现有 IIS FTP 站点；不删除旧目录 |
+| `POST` | `/api/camera-ftp/start` | 使用统一 reconciliation 检查并自动修复工作台配置，再启动 FTPSVC/目标站点；watcher 在验证成功后衔接 |
+| `POST` | `/api/camera-ftp/stop` | 停止目标 IIS FTP 站点，不停止 watcher |
+| `POST` | `/api/camera-ftp/restart` | 使用统一 reconciliation 校正工作台配置并重启目标站点 |
+| `POST` | `/api/camera-ftp/repair` | 用户确认 UAC 后按检测结果修复项目管理配置 |
+| `PATCH` | `/api/camera-ftp/credentials` | 设置用户名和新密码；密码不进入响应或持久化配置 |
+| `PATCH` | `/api/camera-ftp/active-event` | 事务化切换当前 FTP 活动、IIS physicalPath 和 watcher；解除关联必须先停止 FTP，接口本身不停止站点且保留目录和文件 |
+| `POST` | `/api/camera-ftp/open-folder` | 打开当前活动 `working/{event_slug}/原图/相机FTP/` |
+
+`GET /status` 的 `data` 至少包含 `inspectionLevel / requiresAdminForFullInspection / requiresAdminForSystemChanges / provider / platform / windowsFeatures / service / site / account / activeEvent / ftpPath / watcher / conflicts / warnings / initialized / passwordConfigured`。普通权限不能读取 IIS `applicationHost.config` 时仍返回 `ok=true`、`inspectionLevel=partial`、`site.status=unknown`，不会把 `ADMIN_REQUIRED` 当成全局失败；系统修改按钮可继续触发按需 UAC。
+
+`PATCH /active-event` 请求体为 `{ "eventId": "evt_target" }`。服务端以一个父 `operationId` 记录 `validate_target_event / check_pending_uploads / snapshot_current_state / prepare_target_directory / update_iis_physical_path / switch_watcher / verify_switched_state / commit_active_event`；IIS 子事务继续记录 `update_target_acl / stop_ftp_site / restart_ftp_site` 或 `preserve_stopped_site`。原站点为停止状态时，切换后必须保持停止，且不要求控制端口监听。`activeEventId` 只能在最终验证后提交；失败响应的 rollback items 明确列出 `rollback_physical_path / rollback_site_state / rollback_watcher / rollback_active_event`。前端不得把请求中的 eventId 当作已生效状态，刷新后必须以 `GET /status` 的真实 `activeEvent.id` 为准。
+
+提权脚本失败时，统一错误响应的 `error.details` 可包含：`operationId / operation / scriptName / stage / technicalMessage / exceptionType / command / siteName / rollbackAttempted / rollbackSucceeded / warnings / timestamp / exitCode / conflict / diagnostics / completedSteps / failedStep / rollback / preflight / provisioningPlan`。`conflict` 保留端口、PID、进程、IIS 站点、来源、建议、候选端口等兼容字段；`diagnostics` 在最终验证失败时包含 `failedChecks / failedCodes / verificationChecks`，每个检查项保留脱敏的 expected/actual。其余字段保留管理员级检测、实际执行计划、已完成步骤、真实失败步骤和逐项回滚验证。ACL 诊断只包含路径、owner、protected/canonical、规则数量、孤立 SID 数量、属性、HRESULT 与异常类型，不包含密码。这些字段也不得包含 SecureString、输入 JSON 内容或完整敏感命令行。前端应根据具体检查码显示中文原因，不能直接把原始英文 PowerShell 文本作为主错误。
+
+`POST /provisioning-plan` 请求示例：`{ "goal": "setup", "eventId": "evt_xxx", "username": "camera", "controlPort": 21, "passivePortStart": 50000, "passivePortEnd": 50100 }`。响应包含 `planId / target / targetState / summary / items / issues / confirmations / requiresAdmin / canApply / preflight`。每个 item 的状态为 `already_ok / create / update / repair / user_confirmation_required / blocked`；计划阶段只计算并读取状态，不创建 `原图/相机FTP` 目录、不保存配置、不启动 watcher。管理员脚本会在 Apply 前重复 authoritative Preflight，防止普通权限计划过期后误改外部资源。
+
+setup 请求体为 `{ "eventId": "evt_xxx", "username": "camera", "password": "...", "confirmPassword": "...", "controlPort": 21, "passivePortStart": 50000, "passivePortEnd": 50100, "confirm": true, "allowAclTightening": false }`。repair 在托管账户缺失、密码未配置或需要重置时可附带本次一次性的 `password`；后端只用于本轮管理员脚本。密码至少 8 位，不得回显或持久化。`allowAclTightening` 只在计划已经展示宽泛写权限且用户确认后为 `true`，不持久化；工作台只收紧目标目录上的宽泛写入规则，保留 SYSTEM、Administrators、当前用户、FTP 账户和其他合法 ACL。setup/repair/adopt-site 在冲突预检通过前不得执行破坏性修改；无关 IIS 站点和其他进程不会被修改或停止，可接管站点也必须由用户明确调用 adopt-site。候选端口只作建议，不自动写回。
+
+如预检发现早期版本创建、内部名称不是当前稳定名称的本地 FTP 防火墙规则需要变更，接口返回 `409 FIREWALL_RULE_UPDATE_CONFIRMATION_REQUIRED`，且不执行 IIS、账户、ACL 或防火墙修改。前端显示规则差异并取得第二次明确确认后，原请求可附加 `"allowLegacyFirewallRuleUpdate": true` 重新提交；该布尔值仅授权本次列出的本地旧规则更新，不保存到 `cameraFtp` 配置。`PolicyStoreSourceType` 不是 `Local`、规则重名无法唯一识别或由策略管理时返回 `FIREWALL_RULE_POLICY_BLOCKED`，即使携带确认标志也不得强制修改。
+
+`POST /check-port` 的普通请求在无法读取 IIS 配置时返回 `inspectionLevel: "partial"`、`requiresAdminForFullInspection: true` 和 `port.conflict: null`；前端不得把该状态显示为“可用”。用户明确点击检测后发送 `fullInspection: true`，工作台请求 UAC 并只读检查已停止站点的 FTP binding。
+
+主要错误码：`UNSUPPORTED_PLATFORM`、`IIS_FTP_NOT_INSTALLED`、`WINDOWS_RESTART_REQUIRED`、`IIS_SITE_NOT_FOUND`、`IIS_SITE_CONFLICT`、`IIS_SITE_ADOPTION_REQUIRED`、`FTP_CONTROL_PORT_INVALID`、`FTP_CONTROL_PORT_IN_USE`、`FTP_CONTROL_PORT_RESERVED`、`FTP_PORT_RANGE_CONFLICT`、`IIS_SITE_PORT_CONFLICT`、`PORT_USED_BY_OTHER_PROCESS`、`NO_AVAILABLE_FTP_PORT`、`FTP_ACCOUNT_CONFLICT`、`FTP_PASSWORD_REQUIRED`、`FTP_PASSWORD_INVALID`、`FTP_EVENT_NOT_FOUND`、`FTP_EVENT_NOT_ALLOWED`、`FTP_UPLOAD_IN_PROGRESS`、`CAMERA_FTP_SWITCH_IN_PROGRESS`、`FTP_EVENT_SWITCH_FAILED`、`FTP_SITE_STOP_FAILED`、`FTP_TARGET_ACL_UPDATE_FAILED`、`FTP_PHYSICAL_PATH_UPDATE_FAILED`、`FTP_WATCHER_SWITCH_FAILED`、`FTP_SITE_RESTART_FAILED`、`FTP_SWITCH_VERIFY_FAILED`、`FTP_SWITCH_ROLLBACK_FAILED`、`FTP_ACTIVE_EVENT_STATE_MISMATCH`、`FTP_SERVICE_MUST_BE_STOPPED`、`FTP_SERVICE_STATE_UNKNOWN`、`FTP_SETUP_REQUIRED`、`FIREWALL_RULE_UPDATE_CONFIRMATION_REQUIRED`、`FIREWALL_RULE_POLICY_BLOCKED`、`FIREWALL_CONFIG_FAILED`、`FIREWALL_RULE_MISMATCH`、`FIREWALL_ROLLBACK_VERIFY_FAILED`、`IIS_FTP_SERVICE_START_FAILED`、`IIS_FTP_SITE_START_FAILED`、`IIS_FTP_SITE_STOP_FAILED`、`IIS_FTP_LISTENER_START_FAILED`、`IIS_FTP_FEATURE_MISSING`、`FTP_SERVICE_NOT_FOUND`、`FTP_SERVICE_NOT_RUNNING`、`SITE_NOT_STARTED`、`CONTROL_PORT_NOT_LISTENING`、`CONTROL_PORT_LISTENER_OWNERSHIP_MISMATCH`、`SITE_BINDING_MISMATCH`、`PHYSICAL_PATH_MISMATCH`、`MANAGED_SITE_ID_MISMATCH`、`FTP_ACCOUNT_STATE_MISMATCH`、`FTP_ACCOUNT_PASSWORD_UPDATE_FAILED`、`FTP_ACCOUNT_PERMISSION_FAILED`、`FTP_DIRECTORY_ACL_NONCANONICAL`、`FTP_DIRECTORY_ACL_TIGHTENING_MISMATCH`、`IIS_AUTH_CONFIGURATION_MISMATCH`、`FTP_AUTHORIZATION_MISMATCH`、`PASSIVE_PORT_MISMATCH`、`FTP_CONFIGURATION_VERIFICATION_FAILED`、`ACTIVE_EVENT_ID_MISMATCH`、`CAMERA_FTP_CONFIG_SAVE_MISMATCH`、`CAMERA_FTP_WATCHER_NOT_RUNNING`、`CAMERA_FTP_WATCHER_TARGET_MISMATCH`、`CAMERA_FTP_NODE_STATE_MISMATCH`、`ADMIN_REQUIRED`、`UAC_CANCELLED`、`ELEVATED_SCRIPT_LAUNCH_FAILED`、`ELEVATED_SCRIPT_NO_RESULT`、`ELEVATED_RESULT_INVALID_JSON`、`ELEVATED_SCRIPT_TIMEOUT`、`IIS_CONFIG_FAILED`。`WINDOWS_RESTART_REQUIRED` 表示 Windows 功能已保留启用结果，但在账户、ACL、IIS 站点、防火墙和服务修改前安全暂停；重启 Windows 后重新执行即可，不应显示为普通配置失败。
+
+自动导入规则：IIS 把 JPG/JPEG 直接写入 `working/{event_slug}/原图/相机FTP/`，watcher 按文件大小和 mtime 稳定性检测，随后以原路径和原文件名写入 `images.original_path/stored_filename`，只生成衍生图与数据库记录。应用退出只关闭 watcher，不停止 IIS 站点或 FTPSVC。
+
+### 历史接口说明
+
+IIS FTP 迁移前的内置接收服务接口、响应示例和配置规则已从当前 API 规范移除。它们不属于现行合同；迁移与版本演进只在变更日志中保留摘要。当前实现仅以上述 IIS FTP API、可配置控制端口和 `原图/相机FTP/` 最终目录为准。
 ## 五、Import 图片导入
 
 ### [已实现] 扫描待导入目录
@@ -983,6 +1061,7 @@ working/{event_slug}/清单
 - **当前接入任务中心的任务类型**：
   - `host_import`：主机图片导入。
   - `client_upload_import`：客户端上传后的主机端图片处理。
+  - `camera_ftp_import`：相机 FTP 接收目录自动导入。
   - `download_zip`：批量 ZIP 下载。
   - `publish_export`：发布导出。
   - `edit_package`：待修包生成。

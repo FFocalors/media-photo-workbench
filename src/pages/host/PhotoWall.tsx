@@ -121,6 +121,7 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
     if (sourceType !== "all" && photo.source_type !== sourceType) return false;
     if (uploadedByClientId !== "all") {
       if (uploadedByClientId === "host" && photo.source_type !== "host_import") return false;
+      if (uploadedByClientId === "camera_ftp" && photo.source_type !== "camera_ftp") return false;
       if (uploadedByClientId !== "host" && photo.uploaded_by_client_id !== uploadedByClientId) return false;
     }
 

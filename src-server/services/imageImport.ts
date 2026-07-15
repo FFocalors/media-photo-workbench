@@ -9,7 +9,7 @@ import { safeLog } from "../utils/logger";
 import { getEventById } from "./events";
 import { ensureEventWorkingDirs, getEventWorkspacePaths } from "./eventWorkspace";
 
-export type ImportSourceType = "host_import" | "client_upload";
+export type ImportSourceType = "host_import" | "client_upload" | "camera_ftp";
 
 export interface ImportScanFile {
   filename: string;
@@ -84,6 +84,12 @@ export interface ImportImageFilesOptions {
   onImageImported?: (image: ImportedImageSummary) => void | Promise<void>;
 }
 
+export interface ImportOriginalPlacement {
+  originalTarget: string;
+  storedFilename: string;
+  copyRequired: boolean;
+}
+
 interface ExifInfo {
   shotAt: string;
   cameraModel: string;
@@ -109,6 +115,42 @@ function sanitizeFilename(value: string): string {
 function formatDateForFilename(date = new Date()): string {
   const pad = (value: number) => value.toString().padStart(2, "0");
   return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}_${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+}
+
+function comparablePath(value: string): string {
+  const resolved = path.resolve(value);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+export function resolveImportOriginalPlacement(input: {
+  sourceType: ImportSourceType;
+  file: Pick<ImportSourceFile, "filename" | "path">;
+  originalDir: string;
+  eventSlug: string;
+  imageId: string;
+  timestamp?: Date;
+}): ImportOriginalPlacement {
+  if (input.sourceType === "camera_ftp") {
+    const sourcePath = path.resolve(input.file.path);
+    if (comparablePath(path.dirname(sourcePath)) !== comparablePath(input.originalDir)) {
+      throw Object.assign(new Error("相机 FTP 文件必须位于当前活动的原图/相机FTP目录。"), {
+        code: "FTP_PATH_INVALID"
+      });
+    }
+    return {
+      originalTarget: sourcePath,
+      storedFilename: path.basename(sourcePath),
+      copyRequired: false
+    };
+  }
+
+  const safeOriginalName = sanitizeFilename(input.file.filename);
+  const storedFilename = `${sanitizeFilename(input.eventSlug)}_${formatDateForFilename(input.timestamp)}_${input.imageId}_${safeOriginalName}`;
+  return {
+    originalTarget: path.join(input.originalDir, storedFilename),
+    storedFilename,
+    copyRequired: true
+  };
 }
 
 async function assertFolder(folderPath: string): Promise<void> {
@@ -242,7 +284,9 @@ function ensureEventReady(eventId: string) {
 }
 
 function getOriginalTargetDir(sourceType: ImportSourceType, workspace: ReturnType<typeof getEventWorkspacePaths>): string {
-  return sourceType === "client_upload" ? workspace.clientUploadOriginalDir : workspace.hostImportOriginalDir;
+  if (sourceType === "client_upload") return workspace.clientUploadOriginalDir;
+  if (sourceType === "camera_ftp") return workspace.cameraFtpOriginalDir;
+  return workspace.hostImportOriginalDir;
 }
 
 function getDefaultImportConcurrency(): number {
@@ -271,6 +315,38 @@ function createProgressSnapshot(
     importedCount: result.imported.length,
     totalBytes,
     processedBytes
+  };
+}
+
+function getUploadColumns(input: {
+  sourceType: ImportSourceType;
+  actor: ActorInfo;
+  device: string;
+}): {
+  uploadedByClientId: string;
+  uploadedByName: string;
+  uploadedByRole: string;
+} {
+  if (input.sourceType === "host_import") {
+    return {
+      uploadedByClientId: "host",
+      uploadedByName: "主机",
+      uploadedByRole: "host"
+    };
+  }
+
+  if (input.sourceType === "camera_ftp") {
+    return {
+      uploadedByClientId: "camera_ftp",
+      uploadedByName: input.actor.name || input.device || "相机 FTP",
+      uploadedByRole: "camera"
+    };
+  }
+
+  return {
+    uploadedByClientId: input.actor.id,
+    uploadedByName: input.actor.name || input.device || "客户端",
+    uploadedByRole: input.actor.type
   };
 }
 
@@ -440,7 +516,9 @@ export async function importImageFiles(input: {
   const remark = input.remark?.trim() ?? "";
   const actor = sourceType === "client_upload"
     ? normalizeActor(input.actor, { type: "client", id: "", name: "客户端" })
-    : normalizeActor(input.actor, HOST_ACTOR);
+    : sourceType === "camera_ftp"
+      ? normalizeActor(input.actor, { type: "camera", id: "camera_ftp", name: device || "相机 FTP" })
+      : normalizeActor(input.actor, HOST_ACTOR);
   const maxErrors = input.options?.maxErrors ?? 100;
   const concurrency = Math.min(
     Math.max(1, input.options?.concurrency ?? getDefaultImportConcurrency()),
@@ -540,13 +618,21 @@ export async function importImageFiles(input: {
       seenHashes.add(fileHash);
 
       const imageId = generateImageId();
-      const safeOriginalName = sanitizeFilename(file.filename);
-      const storedFilename = `${sanitizeFilename(event.slug)}_${formatDateForFilename()}_${imageId}_${safeOriginalName}`;
-      originalTarget = path.join(originalDir, storedFilename);
+      const placement = resolveImportOriginalPlacement({
+        sourceType,
+        file,
+        originalDir,
+        eventSlug: event.slug,
+        imageId
+      });
+      const storedFilename = placement.storedFilename;
+      originalTarget = placement.originalTarget;
       thumbPath = path.join(workspace.thumbsDir, `${imageId}.webp`);
       previewPath = path.join(workspace.previewsDir, `${imageId}.webp`);
 
-      await fs.copy(file.path, originalTarget, { overwrite: false, errorOnExist: true });
+      if (placement.copyRequired) {
+        await fs.copy(file.path, originalTarget, { overwrite: false, errorOnExist: true });
+      }
 
       const metadata = await sharp(originalTarget).metadata();
       await sharp(originalTarget)
@@ -562,6 +648,7 @@ export async function importImageFiles(input: {
 
       const exif = await readExif(originalTarget);
       const now = nowTimestamp();
+      const uploadColumns = getUploadColumns({ sourceType, actor, device });
 
       insertImageStmt.run(
         imageId,
@@ -577,9 +664,9 @@ export async function importImageFiles(input: {
         exif.shotAt,
         remark,
         sourceType,
-        actor.type === "client" ? actor.id : "host",
-        sourceType === "host_import" ? "主机" : actor.name || device || "客户端",
-        actor.type,
+        uploadColumns.uploadedByClientId,
+        uploadColumns.uploadedByName,
+        uploadColumns.uploadedByRole,
         now,
         file.size,
         fileHash,

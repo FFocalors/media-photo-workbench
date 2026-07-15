@@ -12,6 +12,114 @@ function columnExists(db: Database.Database, tableName: string, columnName: stri
   return columns.some((column) => column.name === columnName);
 }
 
+function tableCreateSql(db: Database.Database, tableName: string): string {
+  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(tableName) as { sql?: string } | undefined;
+  return row?.sql ?? "";
+}
+
+function recreateImageIndexes(db: Database.Database): void {
+  db.exec("CREATE INDEX IF NOT EXISTS idx_images_event_id ON images(event_id)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_images_status ON images(status)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_images_rating ON images(rating)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_images_file_hash ON images(file_hash)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_images_deleted ON images(is_deleted)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_images_event_hash ON images(event_id, file_hash)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_images_uploaded_by_client ON images(event_id, uploaded_by_client_id)");
+}
+
+function ensureImagesSourceAllowsCameraFtp(db: Database.Database): void {
+  const logger = getLogger();
+  const createSql = tableCreateSql(db, "images");
+  if (!createSql || createSql.includes("'camera_ftp'")) {
+    return;
+  }
+
+  const columns = [
+    "id",
+    "event_id",
+    "original_filename",
+    "stored_filename",
+    "thumb_path",
+    "preview_path",
+    "original_path",
+    "edited_path",
+    "photographer",
+    "camera_model",
+    "lens_model",
+    "shot_at",
+    "rating",
+    "status",
+    "category",
+    "remark",
+    "source",
+    "uploaded_by_client_id",
+    "uploaded_by_name",
+    "uploaded_by_role",
+    "uploaded_at",
+    "file_size",
+    "file_hash",
+    "exif_shot_at",
+    "width",
+    "height",
+    "is_deleted",
+    "deleted_at",
+    "created_at",
+    "updated_at"
+  ];
+  const columnList = columns.join(", ");
+
+  db.pragma("foreign_keys = OFF");
+  try {
+    const migrate = db.transaction(() => {
+      db.exec(`
+        CREATE TABLE images_camera_ftp_migration (
+          id                TEXT PRIMARY KEY,
+          event_id          TEXT NOT NULL,
+          original_filename TEXT NOT NULL,
+          stored_filename   TEXT NOT NULL,
+          thumb_path        TEXT NOT NULL DEFAULT '',
+          preview_path      TEXT NOT NULL DEFAULT '',
+          original_path     TEXT NOT NULL DEFAULT '',
+          edited_path       TEXT NOT NULL DEFAULT '',
+          photographer      TEXT NOT NULL DEFAULT '',
+          camera_model      TEXT NOT NULL DEFAULT '',
+          lens_model        TEXT NOT NULL DEFAULT '',
+          shot_at           TEXT NOT NULL DEFAULT '',
+          rating            INTEGER NOT NULL DEFAULT 0,
+          status            TEXT NOT NULL DEFAULT 'unselected'
+                            CHECK (status IN ('unselected', 'rejected', 'archive', 'edit', 'edited', 'publish', 'published')),
+          category          TEXT NOT NULL DEFAULT '',
+          remark            TEXT NOT NULL DEFAULT '',
+          source            TEXT NOT NULL DEFAULT 'host_import'
+                            CHECK (source IN ('host_import', 'client_upload', 'camera_ftp', 'remote_import', 'manual_import')),
+          uploaded_by_client_id TEXT NOT NULL DEFAULT '',
+          uploaded_by_name  TEXT NOT NULL DEFAULT '',
+          uploaded_by_role  TEXT NOT NULL DEFAULT '',
+          uploaded_at       TEXT NOT NULL DEFAULT '',
+          file_size         INTEGER NOT NULL DEFAULT 0,
+          file_hash         TEXT NOT NULL DEFAULT '',
+          exif_shot_at      TEXT NOT NULL DEFAULT '',
+          width             INTEGER NOT NULL DEFAULT 0,
+          height            INTEGER NOT NULL DEFAULT 0,
+          is_deleted        INTEGER NOT NULL DEFAULT 0,
+          deleted_at        TEXT NOT NULL DEFAULT '',
+          created_at        TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+          updated_at        TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+          FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+        );
+        INSERT INTO images_camera_ftp_migration (${columnList})
+        SELECT ${columnList} FROM images;
+        DROP TABLE images;
+        ALTER TABLE images_camera_ftp_migration RENAME TO images;
+      `);
+    });
+    migrate();
+    logger.info("数据库迁移完成：images.source 允许 camera_ftp");
+  } finally {
+    db.pragma("foreign_keys = ON");
+  }
+}
+
 function runLightweightMigrations(db: Database.Database): void {
   const logger = getLogger();
 
@@ -50,10 +158,10 @@ function runLightweightMigrations(db: Database.Database): void {
     }
   }
 
-  db.exec("CREATE INDEX IF NOT EXISTS idx_images_deleted ON images(is_deleted)");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_images_event_hash ON images(event_id, file_hash)");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_images_uploaded_by_client ON images(event_id, uploaded_by_client_id)");
+  ensureImagesSourceAllowsCameraFtp(db);
+  recreateImageIndexes(db);
   db.exec("CREATE INDEX IF NOT EXISTS idx_operation_logs_actor ON operation_logs(actor_type, actor_id)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_camera_ftp_receipts_event ON camera_ftp_file_receipts(event_id)");
 }
 
 /**

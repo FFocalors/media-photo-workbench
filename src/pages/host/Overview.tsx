@@ -493,7 +493,7 @@ function buildImageActivity(kind: "created" | "updated" | "deleted", payload: Re
   const photo = payload.image;
   const filename = photo?.original_filename || payload.imageId;
   const actorName = payload.actor?.name || "未知操作者";
-  const uploaderName = photo?.uploaded_by_name || (photo?.source_type === "host_import" ? "主机" : "客户端");
+  const uploaderName = photo?.uploaded_by_name || (photo?.source_type === "host_import" ? "主机" : photo?.source_type === "camera_ftp" ? "相机 FTP" : "客户端");
   const at = payload.updatedAt || new Date().toISOString();
 
   if (kind === "created") {
@@ -501,7 +501,9 @@ function buildImageActivity(kind: "created" | "updated" | "deleted", payload: Re
       id: `created-${payload.imageId}-${at}`,
       text: photo?.source_type === "host_import"
         ? `主机导入了 ${filename}`
-        : `${uploaderName} 上传了 ${filename}`,
+        : photo?.source_type === "camera_ftp"
+          ? `${uploaderName} 传入了 ${filename}`
+          : `${uploaderName} 上传了 ${filename}`,
       at,
       tone: "upload"
     };

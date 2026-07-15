@@ -45,6 +45,8 @@ MediaPhotoWorkspace/
 │   ├── 原图/主机导入/
 │   ├── 原图/客户端上传/
 │   ├── 原图/远程导入/
+│   ├── 原图/相机FTP/
+│   ├── ftp/
 │   ├── 缩略图/
 │   ├── 预览图/
 │   ├── 待修图/
@@ -173,6 +175,23 @@ Windows 打包目标为便携 ZIP 包和 NSIS 安装包，输出到 `release-pac
 客户端支持输入主机地址、扫描二维码、最近连接、连接测试。
 
 校园网可能存在设备隔离、跨网段限制、防火墙限制、同 Wi-Fi 不能互访。连接失败时提示检查同一局域网、主机软件、主机 IP、防火墙、校园网隔离。提示用户可使用 Windows 热点，常见主机 IP 为 `192.168.137.1`。
+
+### 10.1 Windows IIS 相机 FTP
+
+v1.1.0-alpha 的相机 FTP 只使用 Windows IIS FTP。禁止重新引入 `ftp-srv`、Node FTP Server 或双 provider fallback。
+
+- IIS 站点默认名为 `MediaPhotoWorkbenchFTP`，binding `*:21:`，普通 FTP、无 SSL、basic auth 开启、anonymous 关闭，PASV 为 `50000-50100`。
+- 工作台在“导入图片 > 相机 FTP”内检测、初始化、修复、启停和显式接管 IIS。不得静默修改、停止或删除用户现有 IIS 站点、目录或文件。
+- 普通启动不要求管理员权限。只有修改 Windows 功能、IIS、FTPSVC、本地账户、ACL 或防火墙时使用 `Start-Process -Verb RunAs`；提权脚本通过短生命周期 JSON 文件传递参数和结果。
+- 默认用户名是 `camera`，没有默认密码。全局共用一套可修改账户；密码不得进入命令行、`config.json`、SQLite、API 响应、日志或测试快照。只自动管理 Description 为 `Media Photo Workbench Managed FTP Account` 的本地账户。
+- 同一时间只有一个 `activeEventId`，与前端当前查看活动无关。IIS physicalPath、watcher 和原图最终目录统一指向 `working/{event_slug}/原图/相机FTP/`；旧 `ftp/`、`camera_ftp_upload` 不删除、不自动迁移。
+- 相机 FTP 文件稳定后原地导入，`images.original_path` 指向 IIS 已落盘文件，不复制、不移动、不重命名原图。
+- 停止 FTP 只停止工作台管理的 IIS 站点，保留活动关联和 watcher；解除关联必须在站点已停止、无上传/导入任务时独立确认。
+- 多台相机允许共用账户，页面必须提示设置不同文件名前缀以避免同名覆盖。
+- 当前 FTP 活动不得归档、逻辑删除或永久删除。切换前必须确认无未稳定文件和导入中任务；切换失败回滚 IIS 路径、站点状态和 watcher。
+- watcher 只处理 JPG/JPEG，复用 `camera_ftp` 导入管线的 hash 去重、EXIF、thumb、preview、SQLite、任务和 Socket.IO。应用退出只关闭 watcher，不停止 IIS/FTPSVC。
+- 网络地址同时显示 WLAN 和 Windows 热点。`192.168.137.1` 只是常见热点地址，不得写死到 IIS binding。
+- 自动测试不得调用任何 IIS 修改脚本；只允许纯逻辑、临时目录 watcher 和只读状态检测。
 
 ## 11. 多端协作
 

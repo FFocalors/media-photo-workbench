@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS images (
   category          TEXT NOT NULL DEFAULT '',
   remark            TEXT NOT NULL DEFAULT '',
   source            TEXT NOT NULL DEFAULT 'host_import'
-                    CHECK (source IN ('host_import', 'client_upload', 'remote_import', 'manual_import')),
+                    CHECK (source IN ('host_import', 'client_upload', 'camera_ftp', 'remote_import', 'manual_import')),
   uploaded_by_client_id TEXT NOT NULL DEFAULT '',
   uploaded_by_name  TEXT NOT NULL DEFAULT '',
   uploaded_by_role  TEXT NOT NULL DEFAULT '',
@@ -86,6 +86,19 @@ CREATE TABLE IF NOT EXISTS operation_logs (
   actor_name  TEXT NOT NULL DEFAULT '',
   detail      TEXT NOT NULL DEFAULT '',
   created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+
+-- 相机 FTP 文件处理回执：避免工作台重启后重复处理未变化的历史文件
+CREATE TABLE IF NOT EXISTS camera_ftp_file_receipts (
+  event_id    TEXT NOT NULL,
+  path_key    TEXT NOT NULL,
+  file_path   TEXT NOT NULL,
+  file_size   INTEGER NOT NULL DEFAULT 0,
+  modified_ms INTEGER NOT NULL DEFAULT 0,
+  result      TEXT NOT NULL CHECK (result IN ('imported', 'skipped')),
+  updated_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+  PRIMARY KEY (event_id, path_key),
+  FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
 );
 
 -- 下载日志表
@@ -141,6 +154,7 @@ CREATE INDEX IF NOT EXISTS idx_images_rating ON images(rating);
 CREATE INDEX IF NOT EXISTS idx_images_file_hash ON images(file_hash);
 CREATE INDEX IF NOT EXISTS idx_images_event_hash ON images(event_id, file_hash);
 CREATE INDEX IF NOT EXISTS idx_operation_logs_target ON operation_logs(target_type, target_id);
+CREATE INDEX IF NOT EXISTS idx_camera_ftp_receipts_event ON camera_ftp_file_receipts(event_id);
 CREATE INDEX IF NOT EXISTS idx_download_logs_image ON download_logs(image_id);
 CREATE INDEX IF NOT EXISTS idx_export_jobs_event ON export_jobs(event_id);
 `;

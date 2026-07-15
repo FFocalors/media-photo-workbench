@@ -53,6 +53,7 @@ export function FilterSidebar({
       : "all";
   const clientUploaders = uploaders.filter((item) => item.clientId !== "host" && item.sourceType === "client_upload");
   const hasHostImports = uploaders.some((item) => item.clientId === "host" || item.sourceType === "host_import");
+  const hasCameraFtpImports = uploaders.some((item) => item.sourceType === "camera_ftp");
 
   return (
     <div className={cn("flex w-64 shrink-0 flex-col overflow-y-auto border-r border-slate-100 bg-white", className)}>
@@ -114,6 +115,7 @@ export function FilterSidebar({
           >
             <option value="all">全部来源</option>
             <option value="client:host">主机导入{hasHostImports ? "" : "（暂无）"}</option>
+            <option value="source:camera_ftp">相机 FTP{hasCameraFtpImports ? "" : "（暂无）"}</option>
             <option value="source:client_upload">全部客户端上传</option>
             {clientUploaders.map((item) => (
               <option key={`${item.clientId}-${item.clientName}`} value={`client:${item.clientId}`}>

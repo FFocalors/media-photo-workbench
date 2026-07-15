@@ -2,8 +2,10 @@ import { Router } from "express";
 import { getConfig } from "../config/config";
 import { checkRepository } from "../services/repository";
 import { sendSuccess } from "../utils/response";
+import { requireHostOnly } from "../middleware/hostOnly";
 
 const router = Router();
+router.use(requireHostOnly);
 
 /**
  * GET /api/repository/check

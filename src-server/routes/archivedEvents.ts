@@ -1,9 +1,11 @@
-import { Router } from "express";
+import { Router, type RequestHandler } from "express";
 import { deleteArchivedEvent, getArchivedEventDetail, getArchivedEventThumbPath, listArchivedEvents } from "../services/archive";
 import { getLogger } from "../utils/logger";
 import { sendError, sendSuccess } from "../utils/response";
+import { requireHostOnly } from "../middleware/hostOnly";
 
 const router = Router();
+const requireHostArchivedEventRoute = requireHostOnly as RequestHandler<{ id: string }>;
 
 router.get("/", (_req, res) => {
   try {
@@ -51,12 +53,14 @@ router.get("/:id/thumb/:imageId", async (req, res) => {
   }
 });
 
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", requireHostArchivedEventRoute, async (req, res) => {
   try {
     sendSuccess(res, await deleteArchivedEvent(req.params.id));
   } catch (err: any) {
     if (err?.code) {
-      const status = err.code === "ARCHIVED_EVENT_NOT_FOUND" ? 404 : 400;
+      const status = err.code === "ARCHIVED_EVENT_NOT_FOUND"
+        ? 404
+        : (err.code === "FTP_EVENT_NOT_ALLOWED" ? 409 : 400);
       sendError(res, err.code, err.message, status);
       return;
     }

@@ -1,6 +1,6 @@
 {
   "name": "media-photo-workbench",
-  "version": "1.0.0-rc.1",
+  "version": "1.1.0-alpha.4",
   "private": true,
   "description": "Windows desktop photo workflow workbench for campus media teams.",
   "main": "electron/main.cjs",
@@ -13,6 +13,13 @@
     "setup:electron": "pnpm rebuild electron",
     "rebuild:sqlite": "pnpm rebuild better-sqlite3",
     "build": "tsc -p tsconfig.json --noEmit && pnpm build:server && vite build",
+    "test:camera-ftp": "pnpm test:camera-ftp-iis && pnpm test:camera-ftp-provisioning && pnpm test:camera-ftp-elevated && pnpm test:camera-ftp-powershell && pnpm test:camera-ftp-ui && pnpm test:camera-ftp-watcher",
+    "test:camera-ftp-iis": "pnpm build:server && node scripts/test-camera-ftp-iis.cjs",
+    "test:camera-ftp-provisioning": "pnpm build:server && node scripts/test-camera-ftp-provisioning.cjs",
+    "test:camera-ftp-elevated": "pnpm build:server && node scripts/test-elevated-powershell.cjs",
+    "test:camera-ftp-powershell": "pnpm build:server && node scripts/test-camera-ftp-powershell.cjs",
+    "test:camera-ftp-ui": "node scripts/test-camera-ftp-ui.cjs",
+    "test:camera-ftp-watcher": "pnpm build:server && node scripts/test-camera-ftp-watcher.cjs",
     "dist:portable": "pnpm build && electron-builder --win zip",
     "dist:win": "pnpm build && electron-builder --win nsis",
     "preview": "vite preview --host 127.0.0.1",
@@ -37,6 +44,13 @@
         "filter": [
           "icon.png",
           "icon.ico"
+        ]
+      },
+      {
+        "from": "scripts/windows",
+        "to": "scripts/windows",
+        "filter": [
+          "*.ps1"
         ]
       },
       {

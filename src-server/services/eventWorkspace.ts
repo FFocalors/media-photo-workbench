@@ -7,6 +7,7 @@ import { checkRepository } from "./repository";
 export const EVENT_SUBDIRS = [
   "原图/主机导入",
   "原图/客户端上传",
+  "原图/相机FTP",
   "原图/远程导入",
   "缩略图",
   "预览图",
@@ -22,6 +23,8 @@ export interface EventWorkspacePaths {
   eventDir: string;
   hostImportOriginalDir: string;
   clientUploadOriginalDir: string;
+  cameraFtpOriginalDir: string;
+  cameraFtpReceiveDir: string;
   remoteImportOriginalDir: string;
   thumbsDir: string;
   previewsDir: string;
@@ -39,6 +42,8 @@ export function getEventWorkspacePaths(repositoryPath: string, eventSlug: string
     eventDir,
     hostImportOriginalDir: path.join(eventDir, "原图", "主机导入"),
     clientUploadOriginalDir: path.join(eventDir, "原图", "客户端上传"),
+    cameraFtpOriginalDir: path.join(eventDir, "原图", "相机FTP"),
+    cameraFtpReceiveDir: path.join(eventDir, "原图", "相机FTP"),
     remoteImportOriginalDir: path.join(eventDir, "原图", "远程导入"),
     thumbsDir: path.join(eventDir, "缩略图"),
     previewsDir: path.join(eventDir, "预览图"),

@@ -721,7 +721,7 @@ export function SettingsPage() {
           {activeTab === "about" && (
             <div className="space-y-5">
               <InfoCard icon={<BrandLogo size="sm" />} title="融媒体图片工作台">
-                <p>Media Photo Workbench · v0.13.0-dev</p>
+                <p>Media Photo Workbench · v1.1.0-alpha.4</p>
                 <p>桌面端：Electron + React + Vite + TypeScript + Tailwind</p>
                 <p>后端：Express + SQLite + better-sqlite3 + pino</p>
               </InfoCard>

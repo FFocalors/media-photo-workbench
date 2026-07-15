@@ -11,6 +11,7 @@ import {
   migrateDatabaseLocation,
   toServiceError
 } from "../services/databaseMaintenance";
+import { requireHostOnly } from "../middleware/hostOnly";
 
 let _appDataRoot = "";
 
@@ -19,6 +20,7 @@ export function setAppDataRoot(root: string): void {
 }
 
 const router = Router();
+router.use(requireHostOnly);
 
 /**
  * GET /api/settings
@@ -37,7 +39,8 @@ router.get("/", (_req, res) => {
       lastAutoBackupAt: config.database.lastAutoBackupAt,
       autoBackupRetention: config.database.autoBackupRetention
     },
-    gallery: config.gallery
+    gallery: config.gallery,
+    cameraFtp: config.cameraFtp
   });
 });
 

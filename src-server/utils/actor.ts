@@ -1,6 +1,6 @@
 import type { Request } from "express";
 
-export type ActorType = "host" | "client" | "unknown";
+export type ActorType = "host" | "client" | "camera" | "unknown";
 
 export interface ActorInfo {
   type: ActorType;
@@ -35,11 +35,11 @@ function decodeHeaderText(value: string): string {
 export function normalizeActor(input: unknown, fallback: ActorInfo = HOST_ACTOR): ActorInfo {
   const value = input as Partial<ActorInfo> | null | undefined;
   const requestedType = value?.type;
-  const type: ActorType = requestedType === "client" || requestedType === "host" || requestedType === "unknown"
+  const type: ActorType = requestedType === "client" || requestedType === "host" || requestedType === "camera" || requestedType === "unknown"
     ? requestedType
     : fallback.type;
-  const id = cleanText(value?.id, 120) || (type === "host" ? "host" : fallback.id);
-  const name = cleanText(value?.name, 80) || (type === "host" ? "主机" : type === "client" ? "客户端" : fallback.name);
+  const id = cleanText(value?.id, 120) || (type === "host" ? "host" : type === "camera" ? "camera_ftp" : fallback.id);
+  const name = cleanText(value?.name, 80) || (type === "host" ? "主机" : type === "client" ? "客户端" : type === "camera" ? "相机 FTP" : fallback.name);
 
   return { type, id, name };
 }
@@ -70,7 +70,7 @@ export function actorToLogColumns(actor: ActorInfo): {
 } {
   return {
     operator: actor.name,
-    device: actor.type === "client" ? actor.name : actor.type === "host" ? "主机" : "",
+    device: actor.type === "client" ? actor.name : actor.type === "host" ? "主机" : actor.type === "camera" ? "相机 FTP" : "",
     actor_type: actor.type,
     actor_id: actor.id,
     actor_name: actor.name

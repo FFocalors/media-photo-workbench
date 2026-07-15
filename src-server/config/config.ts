@@ -1,4 +1,5 @@
 import fs from "fs-extra";
+import crypto from "crypto";
 import path from "path";
 import { getLogger } from "../utils/logger";
 
@@ -18,9 +19,34 @@ export interface AppConfig {
   gallery: {
     batchSelectionBehavior: BatchSelectionBehavior;
   };
+  cameraFtp: CameraFtpConfig;
 }
 
 export type BatchSelectionBehavior = "clear" | "keep";
+
+export interface CameraFtpConfig {
+  provider: "iis";
+  siteName: string;
+  managedSiteId: number;
+  username: string;
+  accountManaged: boolean;
+  activeEventId: string;
+  controlPort: number;
+  passivePortStart: number;
+  passivePortEnd: number;
+  firewallControlRuleName: string;
+  firewallPassiveRuleName: string;
+  passwordResetRequired: boolean;
+}
+
+export const DEFAULT_CAMERA_FTP_PROVIDER = "iis" as const;
+export const DEFAULT_CAMERA_FTP_SITE_NAME = "MediaPhotoWorkbenchFTP";
+export const DEFAULT_CAMERA_FTP_USERNAME = "camera";
+export const DEFAULT_CAMERA_FTP_PORT = 21 as const;
+export const DEFAULT_CAMERA_FTP_PASV_MIN = 50000 as const;
+export const DEFAULT_CAMERA_FTP_PASV_MAX = 50100 as const;
+export const DEFAULT_CAMERA_FTP_CONTROL_FIREWALL_RULE = "Media Photo Workbench - FTP Control";
+export const DEFAULT_CAMERA_FTP_PASSIVE_FIREWALL_RULE = "Media Photo Workbench - FTP Passive";
 
 const DEFAULT_CONFIG: AppConfig = {
   server: {
@@ -37,11 +63,41 @@ const DEFAULT_CONFIG: AppConfig = {
   },
   gallery: {
     batchSelectionBehavior: "clear"
+  },
+  cameraFtp: {
+    provider: DEFAULT_CAMERA_FTP_PROVIDER,
+    siteName: DEFAULT_CAMERA_FTP_SITE_NAME,
+    managedSiteId: 0,
+    username: DEFAULT_CAMERA_FTP_USERNAME,
+    accountManaged: false,
+    activeEventId: "",
+    controlPort: DEFAULT_CAMERA_FTP_PORT,
+    passivePortStart: DEFAULT_CAMERA_FTP_PASV_MIN,
+    passivePortEnd: DEFAULT_CAMERA_FTP_PASV_MAX,
+    firewallControlRuleName: DEFAULT_CAMERA_FTP_CONTROL_FIREWALL_RULE,
+    firewallPassiveRuleName: DEFAULT_CAMERA_FTP_PASSIVE_FIREWALL_RULE,
+    passwordResetRequired: false
   }
 };
 
 let _configDir = "";
 let _config: AppConfig = createDefaultConfig();
+
+function writeConfigAtomic(configPath: string, value: AppConfig): void {
+  const tempPath = `${configPath}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.tmp`;
+  try {
+    fs.ensureDirSync(path.dirname(configPath));
+    fs.writeJsonSync(tempPath, value, { spaces: 2 });
+    fs.renameSync(tempPath, configPath);
+  } catch (error) {
+    try {
+      fs.removeSync(tempPath);
+    } catch {
+      // Preserve the original config if the atomic replacement cannot finish.
+    }
+    throw error;
+  }
+}
 
 function createDefaultConfig(): AppConfig {
   return {
@@ -50,7 +106,8 @@ function createDefaultConfig(): AppConfig {
     database: { ...DEFAULT_CONFIG.database },
     gallery: {
       batchSelectionBehavior: DEFAULT_CONFIG.gallery.batchSelectionBehavior
-    }
+    },
+    cameraFtp: normalizeCameraFtpConfig(DEFAULT_CONFIG.cameraFtp)
   };
 }
 
@@ -76,6 +133,60 @@ function normalizeBatchSelectionBehavior(value: unknown): BatchSelectionBehavior
   return value === "keep" ? "keep" : "clear";
 }
 
+export function normalizeCameraFtpConfig(raw: any): CameraFtpConfig {
+  const legacyPasswordDetected = typeof raw?.password === "string" && raw.password.length > 0;
+  const rawControlPort = Number(raw?.controlPort);
+  const rawPassiveStart = Number(raw?.passivePortStart);
+  const rawPassiveEnd = Number(raw?.passivePortEnd);
+  const validPort = (value: number) => Number.isInteger(value) && value >= 1 && value <= 65535;
+  let controlPort = validPort(rawControlPort) ? rawControlPort : DEFAULT_CAMERA_FTP_PORT;
+  let passivePortStart = validPort(rawPassiveStart) ? rawPassiveStart : DEFAULT_CAMERA_FTP_PASV_MIN;
+  let passivePortEnd = validPort(rawPassiveEnd) ? rawPassiveEnd : DEFAULT_CAMERA_FTP_PASV_MAX;
+  if (passivePortStart > passivePortEnd) {
+    passivePortStart = DEFAULT_CAMERA_FTP_PASV_MIN;
+    passivePortEnd = DEFAULT_CAMERA_FTP_PASV_MAX;
+  }
+  if (controlPort >= passivePortStart && controlPort <= passivePortEnd) {
+    // A valid custom control port is user-owned configuration and must never
+    // be silently migrated back to 21. API writes reject overlaps before they
+    // reach disk; this fallback only repairs a legacy or manually damaged
+    // passive range while preserving the chosen control port.
+    passivePortStart = DEFAULT_CAMERA_FTP_PASV_MIN;
+    passivePortEnd = DEFAULT_CAMERA_FTP_PASV_MAX;
+    if (controlPort >= passivePortStart && controlPort <= passivePortEnd) {
+      const passiveRangeSize = DEFAULT_CAMERA_FTP_PASV_MAX - DEFAULT_CAMERA_FTP_PASV_MIN;
+      passivePortStart = DEFAULT_CAMERA_FTP_PASV_MAX + 1;
+      passivePortEnd = passivePortStart + passiveRangeSize;
+    }
+  }
+  return {
+    provider: DEFAULT_CAMERA_FTP_PROVIDER,
+    siteName: typeof raw?.siteName === "string" && raw.siteName.trim()
+      ? raw.siteName.trim().slice(0, 120)
+      : DEFAULT_CONFIG.cameraFtp.siteName,
+    managedSiteId: Number.isInteger(Number(raw?.managedSiteId)) && Number(raw?.managedSiteId) > 0
+      ? Number(raw.managedSiteId)
+      : 0,
+    username: typeof raw?.username === "string" && raw.username.trim()
+      ? raw.username.trim().slice(0, 80)
+      : DEFAULT_CONFIG.cameraFtp.username,
+    accountManaged: raw?.accountManaged === true,
+    activeEventId: typeof raw?.activeEventId === "string"
+      ? raw.activeEventId.trim()
+      : (typeof raw?.eventId === "string" ? raw.eventId.trim() : ""),
+    controlPort,
+    passivePortStart,
+    passivePortEnd,
+    firewallControlRuleName: typeof raw?.firewallControlRuleName === "string" && raw.firewallControlRuleName.trim()
+      ? raw.firewallControlRuleName.trim().slice(0, 160)
+      : DEFAULT_CONFIG.cameraFtp.firewallControlRuleName,
+    firewallPassiveRuleName: typeof raw?.firewallPassiveRuleName === "string" && raw.firewallPassiveRuleName.trim()
+      ? raw.firewallPassiveRuleName.trim().slice(0, 160)
+      : DEFAULT_CONFIG.cameraFtp.firewallPassiveRuleName,
+    passwordResetRequired: legacyPasswordDetected || raw?.passwordResetRequired === true
+  };
+}
+
 function normalizeConfig(raw: any): AppConfig {
   return {
     server: {
@@ -96,7 +207,8 @@ function normalizeConfig(raw: any): AppConfig {
     },
     gallery: {
       batchSelectionBehavior: normalizeBatchSelectionBehavior(raw?.gallery?.batchSelectionBehavior)
-    }
+    },
+    cameraFtp: normalizeCameraFtpConfig(raw?.cameraFtp)
   };
 }
 
@@ -111,26 +223,27 @@ export function loadConfig(configDir: string): AppConfig {
   if (fs.existsSync(configPath)) {
     try {
       const raw = fs.readJsonSync(configPath);
-      _config = normalizeConfig(raw);
-      const normalizedNeedsWrite =
-        raw?.server?.port !== _config.server.port ||
-        !raw?.database ||
-        raw?.database?.autoBackupRetention !== _config.database.autoBackupRetention ||
-        !raw?.gallery ||
-        raw?.gallery?.batchSelectionBehavior !== _config.gallery.batchSelectionBehavior;
+      const normalized = normalizeConfig(raw);
+      const normalizedNeedsWrite = JSON.stringify(raw) !== JSON.stringify(normalized);
       if (normalizedNeedsWrite) {
-        fs.writeJsonSync(configPath, _config, { spaces: 2 });
-        logger.info({ configPath, preferredPort: _config.server.port }, "已重置主机服务默认端口配置");
+        writeConfigAtomic(configPath, normalized);
+        logger.info({
+          configPath,
+          preferredPort: normalized.server.port,
+          cameraFtpProvider: normalized.cameraFtp.provider,
+          legacySecretRemoved: typeof raw?.cameraFtp?.password === "string"
+        }, "配置已安全迁移");
       }
+      _config = normalized;
       logger.info({ configPath }, "配置文件已加载");
     } catch (err) {
       logger.warn({ err, configPath }, "配置文件读取失败，使用默认配置");
       _config = createDefaultConfig();
     }
   } else {
-    fs.ensureDirSync(configDir);
-    fs.writeJsonSync(configPath, DEFAULT_CONFIG, { spaces: 2 });
-    _config = createDefaultConfig();
+    const initialConfig = createDefaultConfig();
+    writeConfigAtomic(configPath, initialConfig);
+    _config = initialConfig;
     logger.info({ configPath }, "配置文件不存在，已创建默认配置");
   }
 
@@ -151,32 +264,32 @@ export function getConfig(): AppConfig {
 export function saveConfig(patch: Partial<AppConfig>): AppConfig {
   const logger = getLogger();
   const configPath = path.join(_configDir, "config.json");
-
-  if (patch.server) {
-    _config.server = { ..._config.server, ...patch.server };
-  }
-  if (patch.repository) {
-    _config.repository = { ..._config.repository, ...patch.repository };
-  }
-  if (patch.database) {
-    _config.database = {
-      ..._config.database,
-      ...patch.database,
-      autoBackupRetention: normalizeAutoBackupRetention(
-        patch.database.autoBackupRetention ?? _config.database.autoBackupRetention
-      )
-    };
-  }
-  if (patch.gallery) {
-    _config.gallery = {
-      batchSelectionBehavior: normalizeBatchSelectionBehavior(
-        patch.gallery.batchSelectionBehavior ?? _config.gallery.batchSelectionBehavior
-      )
-    };
-  }
-
+  const nextConfig: AppConfig = {
+    server: patch.server ? { ..._config.server, ...patch.server } : { ..._config.server },
+    repository: patch.repository ? { ..._config.repository, ...patch.repository } : { ..._config.repository },
+    database: patch.database
+      ? {
+        ..._config.database,
+        ...patch.database,
+        autoBackupRetention: normalizeAutoBackupRetention(
+          patch.database.autoBackupRetention ?? _config.database.autoBackupRetention
+        )
+      }
+      : { ..._config.database },
+    gallery: patch.gallery
+      ? {
+        batchSelectionBehavior: normalizeBatchSelectionBehavior(
+          patch.gallery.batchSelectionBehavior ?? _config.gallery.batchSelectionBehavior
+        )
+      }
+      : { ..._config.gallery },
+    cameraFtp: patch.cameraFtp
+      ? normalizeCameraFtpConfig({ ..._config.cameraFtp, ...patch.cameraFtp })
+      : normalizeCameraFtpConfig(_config.cameraFtp)
+  };
   try {
-    fs.writeJsonSync(configPath, _config, { spaces: 2 });
+    writeConfigAtomic(configPath, nextConfig);
+    _config = nextConfig;
     logger.info({ configPath }, "配置文件已保存");
   } catch (err) {
     logger.error({ err, configPath }, "配置文件保存失败");

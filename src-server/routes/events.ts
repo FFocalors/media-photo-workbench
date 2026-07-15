@@ -1,4 +1,4 @@
-import { Request, Router } from "express";
+import { Request, Router, type RequestHandler } from "express";
 import { sendSuccess, sendError } from "../utils/response";
 import {
   listEvents,
@@ -10,6 +10,7 @@ import {
   listDeletedEvents,
   purgeEvent,
   restoreEvent,
+  assertEventNotActiveCameraFtp,
   CreateEventInput
 } from "../services/events";
 import {
@@ -27,10 +28,12 @@ import { normalizeActor } from "../utils/actor";
 import { createEditPackage, EditedUploadProgressSnapshot, listEditPackages, uploadEditedImages } from "../services/editWorkflow";
 import { createPublishExport } from "../services/publishExport";
 import { cleanupEventArchive, prepareEventArchive, verifyEventArchive } from "../services/archive";
+import { requireHostOnly } from "../middleware/hostOnly";
 import { createDownloadZipTask } from "../services/downloadPackages";
 import { createTask, failTask, finishTask, isTaskCancellationRequested, updateTask } from "../services/tasks";
 
 const router = Router();
+const requireHostEventRoute = requireHostOnly as RequestHandler<{ id: string }>;
 
 function getBaseUrl(req: Request): string {
   return `${req.protocol}://${req.get("host")}`;
@@ -885,7 +888,7 @@ router.post("/:id/export", async (req, res) => {
  * POST /api/events/:id/archive/prepare
  * 生成活动归档目录、清单、CSV 和独立 event.db。
  */
-router.post("/:id/archive/prepare", async (req, res) => {
+router.post("/:id/archive/prepare", requireHostEventRoute, async (req, res) => {
   const task = createTask({
     type: "archive_prepare",
     eventId: req.params.id,
@@ -938,7 +941,7 @@ router.post("/:id/archive/prepare", async (req, res) => {
   } catch (err: any) {
     failTask(task.id, [{ reason: err?.message || "生成活动归档失败" }]);
     if (err?.code) {
-      const status = err.code === "EVENT_NOT_FOUND" ? 404 : 400;
+      const status = err.code === "EVENT_NOT_FOUND" ? 404 : (err.code === "FTP_EVENT_NOT_ALLOWED" ? 409 : 400);
       sendError(res, err.code, err.message, status);
       return;
     }
@@ -951,7 +954,7 @@ router.post("/:id/archive/prepare", async (req, res) => {
  * POST /api/events/:id/archive/verify
  * 验证活动归档完整性。
  */
-router.post("/:id/archive/verify", async (req, res) => {
+router.post("/:id/archive/verify", requireHostEventRoute, async (req, res) => {
   try {
     const result = await verifyEventArchive(
       req.params.id,
@@ -960,7 +963,9 @@ router.post("/:id/archive/verify", async (req, res) => {
     sendSuccess(res, result);
   } catch (err: any) {
     if (err?.code) {
-      const status = err.code === "EVENT_NOT_FOUND" || err.code === "ARCHIVE_NOT_FOUND" ? 404 : 400;
+      const status = err.code === "EVENT_NOT_FOUND" || err.code === "ARCHIVE_NOT_FOUND"
+        ? 404
+        : (err.code === "FTP_EVENT_NOT_ALLOWED" ? 409 : 400);
       sendError(res, err.code, err.message, status);
       return;
     }
@@ -973,12 +978,14 @@ router.post("/:id/archive/verify", async (req, res) => {
  * POST /api/events/:id/archive/cleanup
  * 创建归档 working 工作区清理任务。
  */
-router.post("/:id/archive/cleanup", async (req, res) => {
+router.post("/:id/archive/cleanup", requireHostEventRoute, async (req, res) => {
   try {
     if (req.body?.confirm !== true) {
       sendError(res, "ARCHIVE_CLEANUP_NOT_CONFIRMED", "清理工作区需要二次确认", 400);
       return;
     }
+
+    assertEventNotActiveCameraFtp(req.params.id);
 
     const archivePath = typeof req.body?.archivePath === "string" ? req.body.archivePath : undefined;
     const task = createTask({
@@ -1041,7 +1048,9 @@ router.post("/:id/archive/cleanup", async (req, res) => {
     sendSuccess(res, { taskId: task.id, total: 0, mode: "archive_cleanup" }, 202);
   } catch (err: any) {
     if (err?.code) {
-      const status = err.code === "EVENT_NOT_FOUND" || err.code === "ARCHIVE_NOT_FOUND" ? 404 : 400;
+      const status = err.code === "EVENT_NOT_FOUND" || err.code === "ARCHIVE_NOT_FOUND"
+        ? 404
+        : (err.code === "FTP_EVENT_NOT_ALLOWED" ? 409 : 400);
       sendError(res, err.code, err.message, status);
       return;
     }
@@ -1092,7 +1101,7 @@ router.patch("/:id", (req, res) => {
  * PATCH /api/events/:id/status
  * 更新活动状态。
  */
-router.patch("/:id/status", (req, res) => {
+router.patch("/:id/status", requireHostEventRoute, (req, res) => {
   const { status } = req.body;
 
   if (!status || typeof status !== "string") {
@@ -1108,8 +1117,8 @@ router.patch("/:id/status", (req, res) => {
     }
     sendSuccess(res, event);
   } catch (err: any) {
-    if (err?.code === "INVALID_STATUS") {
-      sendError(res, err.code, err.message);
+    if (err?.code) {
+      sendError(res, err.code, err.message, err.code === "FTP_EVENT_NOT_ALLOWED" ? 409 : 400);
     } else {
       getLogger().error({ err }, "更新活动状态失败");
       sendError(res, "UPDATE_STATUS_FAILED", "更新活动状态失败", 500);
@@ -1121,7 +1130,7 @@ router.patch("/:id/status", (req, res) => {
  * PATCH /api/events/:id/restore
  * 从活动回收站恢复活动。
  */
-router.patch("/:id/restore", (req, res) => {
+router.patch("/:id/restore", requireHostEventRoute, (req, res) => {
   try {
     const status = typeof req.body?.status === "string" ? req.body.status : "active";
     const event = restoreEvent(req.params.id, status);
@@ -1144,7 +1153,7 @@ router.patch("/:id/restore", (req, res) => {
  * DELETE /api/events/:id
  * 逻辑删除活动，只标记 status = deleted，不删除文件。
  */
-router.delete("/:id", (req, res) => {
+router.delete("/:id", requireHostEventRoute, (req, res) => {
   try {
     const event = deleteEvent(req.params.id);
     if (!event) {
@@ -1152,9 +1161,13 @@ router.delete("/:id", (req, res) => {
       return;
     }
     sendSuccess(res, event);
-  } catch (err) {
-    getLogger().error({ err }, "删除活动失败");
-    sendError(res, "DELETE_EVENT_FAILED", "删除活动失败", 500);
+  } catch (err: any) {
+    if (err?.code) {
+      sendError(res, err.code, err.message, err.code === "FTP_EVENT_NOT_ALLOWED" ? 409 : 400);
+    } else {
+      getLogger().error({ err }, "删除活动失败");
+      sendError(res, "DELETE_EVENT_FAILED", "删除活动失败", 500);
+    }
   }
 });
 
@@ -1162,7 +1175,7 @@ router.delete("/:id", (req, res) => {
  * DELETE /api/events/:id/purge
  * 永久删除已进入回收站的活动。
  */
-router.delete("/:id/purge", async (req, res) => {
+router.delete("/:id/purge", requireHostEventRoute, async (req, res) => {
   try {
     const result = await purgeEvent(req.params.id, {
       includeArchive: req.body?.includeArchive !== false
@@ -1170,7 +1183,7 @@ router.delete("/:id/purge", async (req, res) => {
     sendSuccess(res, result);
   } catch (err: any) {
     if (err?.code) {
-      const status = err.code === "EVENT_NOT_FOUND" ? 404 : 400;
+      const status = err.code === "EVENT_NOT_FOUND" ? 404 : (err.code === "FTP_EVENT_NOT_ALLOWED" ? 409 : 400);
       sendError(res, err.code, err.message, status);
     } else {
       getLogger().error({ err }, "永久删除活动失败");

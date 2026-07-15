@@ -7,7 +7,8 @@ import { getConfig } from "../config/config";
 import { getDatabase } from "../db/database";
 import { emitArchiveUpdated } from "../realtime/socket";
 import { getLogger } from "../utils/logger";
-import { EventRow, getEventById } from "./events";
+import { EventRow, assertEventNotActiveCameraFtp, getEventById } from "./events";
+import { reserveCameraFtpEventLifecycle } from "./cameraFtpRuntimeState";
 import { getEventWorkspacePaths } from "./eventWorkspace";
 import { ImageRow } from "./images";
 import { checkRepository } from "./repository";
@@ -836,6 +837,18 @@ async function removeArchiveDirectory(archivePath: string): Promise<boolean> {
 }
 
 export async function prepareEventArchive(eventId: string): Promise<ArchivePrepareResult> {
+  assertEventNotActiveCameraFtp(eventId);
+  const releaseReservation = reserveCameraFtpEventLifecycle(eventId, "活动归档生成");
+  try {
+    assertEventNotActiveCameraFtp(eventId);
+    return await prepareEventArchiveInternal(eventId);
+  } finally {
+    releaseReservation();
+  }
+}
+
+async function prepareEventArchiveInternal(eventId: string): Promise<ArchivePrepareResult> {
+  assertEventNotActiveCameraFtp(eventId);
   const event = ensureArchiveableEvent(eventId);
   const repositoryPath = ensureRepositoryReady();
   const archivePath = await createArchiveRoot(repositoryPath, event.slug);
@@ -1058,10 +1071,26 @@ export async function cleanupEventArchive(eventId: string, input: {
   archivePath?: string;
   onProgress?: (progress: ArchiveCleanupProgress) => void;
 }): Promise<ArchiveCleanupResult> {
+  assertEventNotActiveCameraFtp(eventId);
+  const releaseReservation = reserveCameraFtpEventLifecycle(eventId, "活动归档清理");
+  try {
+    assertEventNotActiveCameraFtp(eventId);
+    return await cleanupEventArchiveInternal(eventId, input);
+  } finally {
+    releaseReservation();
+  }
+}
+
+async function cleanupEventArchiveInternal(eventId: string, input: {
+  confirm?: boolean;
+  archivePath?: string;
+  onProgress?: (progress: ArchiveCleanupProgress) => void;
+}): Promise<ArchiveCleanupResult> {
   if (input.confirm !== true) {
     throw { code: "ARCHIVE_CLEANUP_NOT_CONFIRMED", message: "清理工作区需要二次确认" };
   }
 
+  assertEventNotActiveCameraFtp(eventId);
   const event = ensureArchiveableEvent(eventId);
   const repositoryPath = ensureRepositoryReady();
   const resolvedArchivePath = await resolveArchivePath(event, input.archivePath);
@@ -1226,11 +1255,27 @@ export async function getArchivedEventThumbPath(id: string, imageId: string): Pr
 }
 
 export async function deleteArchivedEvent(id: string): Promise<ArchivedEventDeleteResult> {
+  const archivedEvent = getDatabase().prepare("SELECT * FROM archived_events WHERE id = ?").get(id) as ArchivedEventRow | undefined;
+  if (!archivedEvent) {
+    throw { code: "ARCHIVED_EVENT_NOT_FOUND", message: "归档活动不存在" };
+  }
+  assertEventNotActiveCameraFtp(archivedEvent.event_id);
+  const releaseReservation = reserveCameraFtpEventLifecycle(archivedEvent.event_id, "归档目录删除");
+  try {
+    assertEventNotActiveCameraFtp(archivedEvent.event_id);
+    return await deleteArchivedEventInternal(id);
+  } finally {
+    releaseReservation();
+  }
+}
+
+async function deleteArchivedEventInternal(id: string): Promise<ArchivedEventDeleteResult> {
   const db = getDatabase();
   const archivedEvent = db.prepare("SELECT * FROM archived_events WHERE id = ?").get(id) as ArchivedEventRow | undefined;
   if (!archivedEvent) {
     throw { code: "ARCHIVED_EVENT_NOT_FOUND", message: "归档活动不存在" };
   }
+  assertEventNotActiveCameraFtp(archivedEvent.event_id);
 
   const missingFiles: string[] = [];
   const deletedArchive = await removeArchiveDirectory(archivedEvent.archive_path);

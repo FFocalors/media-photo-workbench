@@ -2,8 +2,8 @@
 
 ## 数据库设计原则
 
-- **当前版本**：`v1.0.0-rc.1`。
-- **发布候选状态**：正式版候选阶段功能冻结，本轮不新增 SQLite 表或字段。
+- **当前版本**：`v1.1.0-alpha.3`。
+- **当前状态**：相机 FTP 全面转向 Windows IIS FTP；页面入口仍在“导入图片 > 相机 FTP”，不新增 SQLite 表或字段。
 - **技术选型**：使用 SQLite 关系型数据库。
 - **文件位置**：数据库文件默认位于软件目录 `data/app.db`。
 - **分离存储**：真正的图片文件（如原始 JPG、WebP 缩略图）**绝不**存入数据库，数据库只存储元数据、文件路径、状态和操作日志。
@@ -20,23 +20,38 @@
 - **绝对不允许**在生产环境中直接手动修改 SQLite 数据库的表结构。
 - v0.17.0 开发阶段 17.1 允许轻量兼容迁移：启动时通过 `PRAGMA table_info` 检查字段，缺失时才为 `images` 增加上传来源追踪字段、为 `operation_logs` 增加 actor 字段；字段已存在则跳过，不要求重新初始化旧库。
 - v0.17.0 开发阶段 17.2 不新增 SQLite 字段或表。批量操作后选择行为保存在本地 `config.json` 的 `gallery` 配置中。
-- v1.0.0-rc.1 不新增数据库结构，只整理文档和发布候选回归清单。升级到本阶段仍沿用既有兼容迁移，不要求重新初始化数据库。
+- v1.1.0-alpha.1 为支持 `source = camera_ftp` 扩展 `images.source` CHECK 枚举；v1.1.0-alpha.4 新增轻量 `camera_ftp_file_receipts` 表，持久化已处理 FTP 文件的路径、大小、修改时间和结果，避免工作台重启后重复导入。两项均由启动时 schema/migration 自动完成，不要求重新初始化数据库。
+- v1.1.0-alpha.3 不新增 SQLite 表、字段、索引或迁移逻辑；本地 `config/config.json` 只保存 IIS 站点、非敏感账户状态、`activeEventId`、固定端口和防火墙规则名。旧明文 FTP 密码会被清理，不迁移到 IIS 配置。
 
 ---
 
 ## 配置文件扩展：`config.json`
 
-17.2 新增图片墙偏好配置，不属于 SQLite schema：
+17.2 新增图片墙偏好配置，v1.1.0-alpha.1 新增相机 FTP 配置，v1.1.0-alpha.3 迁移为 IIS FTP 非敏感参数；这些都不属于 SQLite schema：
 
 ```json
 {
   "gallery": {
     "batchSelectionBehavior": "clear"
+  },
+  "cameraFtp": {
+    "provider": "iis",
+    "siteName": "MediaPhotoWorkbenchFTP",
+    "managedSiteId": 0,
+    "username": "camera",
+    "accountManaged": false,
+    "activeEventId": "",
+    "controlPort": 21,
+    "passivePortStart": 50000,
+    "passivePortEnd": 50100,
+    "firewallControlRuleName": "Media Photo Workbench - FTP Control",
+    "firewallPassiveRuleName": "Media Photo Workbench - FTP Passive",
+    "passwordResetRequired": false
   }
 }
 ```
 
-`batchSelectionBehavior` 支持 `clear | keep`，默认 `clear`。旧配置文件没有 `gallery` 时会在加载时自动补齐默认值。
+`batchSelectionBehavior` 支持 `clear | keep`，默认 `clear`。`cameraFtp` 不保存密码；`passwordResetRequired` 仅表示旧配置已清除明文密码、需要用户重新设置。`managedSiteId` 在成功创建或显式接管站点后保存真实 IIS Site ID，`0` 表示尚未建立可信站点绑定。密码不写入 SQLite、`operation_logs` 或配置文件。
 
 ---
 
@@ -80,7 +95,7 @@
 | `source` | TEXT | 导入来源 | NOT NULL, DEFAULT 'host_import', 取值见枚举 |
 | `uploaded_by_client_id` | TEXT | 上传客户端 ID；主机导入可为 `host`，旧数据可为空 | NOT NULL, DEFAULT '' |
 | `uploaded_by_name` | TEXT | 上传设备名称或来源名称，如“修图电脑A” | NOT NULL, DEFAULT '' |
-| `uploaded_by_role` | TEXT | 轻量来源角色，如 `client` / `host`，不是账号权限 | NOT NULL, DEFAULT '' |
+| `uploaded_by_role` | TEXT | 轻量来源角色，如 `client` / `host` / `camera`，不是账号权限 | NOT NULL, DEFAULT '' |
 | `uploaded_at` | TEXT | 上传 / 导入入库时间 | NOT NULL, DEFAULT '' |
 | `file_size` | INTEGER | 文件大小 (Bytes) | NOT NULL, DEFAULT 0 |
 | `file_hash` | TEXT | 防重 hash (可选) | NOT NULL, DEFAULT '' |
@@ -119,7 +134,7 @@
 | `target_id` | TEXT | 操作对象ID | NOT NULL, DEFAULT '' |
 | `operator` | TEXT | 操作人姓名 | NOT NULL, DEFAULT '' |
 | `device` | TEXT | 客户端设备名 | NOT NULL, DEFAULT '' |
-| `actor_type` | TEXT | 操作者类型：`host` / `client` / `unknown` | NOT NULL, DEFAULT '' |
+| `actor_type` | TEXT | 操作者类型：`host` / `client` / `camera` / `unknown` | NOT NULL, DEFAULT '' |
 | `actor_id` | TEXT | 操作者 ID；客户端为 `clientId`，主机为 `host` | NOT NULL, DEFAULT '' |
 | `actor_name` | TEXT | 操作者显示名，如“主机”或客户端设备名 | NOT NULL, DEFAULT '' |
 | `detail` | TEXT | JSON格式的变更详情 | NOT NULL, DEFAULT '' |
@@ -137,6 +152,21 @@
 | `device` | TEXT | 下载设备名 | NOT NULL, DEFAULT '' |
 | `file_path` | TEXT | 生成的供下载的物理路径 | NOT NULL, DEFAULT '' |
 | `created_at`| TEXT | 记录时间 | NOT NULL, DEFAULT `now` |
+
+### 6.1 `camera_ftp_file_receipts`（相机 FTP 文件处理回执）
+**用途**：记录已经成功导入或确认重复跳过的相机 FTP 文件指纹。watcher 重启时只跳过路径、大小和修改时间完全一致的历史文件；发生变化或停机期间新上传的文件仍会进入稳定检测。
+
+| 字段名 | 类型 | 含义 | 约束 |
+|---|---|---|---|
+| `event_id` | TEXT | 所属活动 ID | NOT NULL, FOREIGN KEY -> events(id) ON DELETE CASCADE |
+| `path_key` | TEXT | Windows 规范化小写路径键 | NOT NULL |
+| `file_path` | TEXT | 文件绝对路径 | NOT NULL |
+| `file_size` | INTEGER | 完成处理时文件大小 | NOT NULL, DEFAULT 0 |
+| `modified_ms` | INTEGER | 完成处理时文件修改时间戳 | NOT NULL, DEFAULT 0 |
+| `result` | TEXT | `imported` 或 `skipped` | NOT NULL |
+| `updated_at` | TEXT | 最近处理时间 | NOT NULL, DEFAULT `now` |
+
+联合主键为 `(event_id, path_key)`。表中不保存 FTP 密码、图片内容、EXIF 或文件哈希。
 
 ### 7. `export_jobs` (导出任务表)
 **用途**：记录正式发布、待修包、批量打包等后台长耗时任务或生成物状态信息。
@@ -191,6 +221,7 @@
 - `idx_images_deleted`：默认图片墙查询过滤 `is_deleted = 0`。
 - `idx_images_uploaded_by_client`：按活动和上传客户端筛选图片。
 - `idx_operation_logs_actor`：按操作者类型和 ID 查询操作日志。
+- `idx_camera_ftp_receipts_event`：按活动恢复相机 FTP 已处理文件指纹。
 
 ### `events.status`
 - `draft`：草稿/未开始（保留状态，当前新建活动不默认使用）
@@ -204,7 +235,8 @@
 ### `images.source_type` (对应 `images.source`)
 - `host_import`：主机端直接扫描本地文件夹导入
 - `client_upload`：客户端通过局域网网页/软件主动上传
-- `remote_import`：远程传输预留来源值，v1.0.0-rc.1 未实现远程传输
+- `camera_ftp`：相机通过 Windows IIS FTP 直接上传到当前活动 `working/{event_slug}/原图/相机FTP/`；稳定后原地写入图片记录，`original_path` 指向该文件，不复制第二份原图
+- `remote_import`：远程传输预留来源值，v1.1.0 当前未实现远程传输
 - `manual_import`：其他零星手动导入方式
 
 ### 17.1 协作追踪字段说明

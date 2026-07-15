@@ -27,16 +27,169 @@
 ---
 
 ## 开发记录
+### v1.1.0-alpha.4 优化：相机 FTP 运行状态、连接活动与接收记录语义
+- **日期**：2026-07-15
+- **重启重复处理修复**：旧 watcher 启动时清空内存 `processedFiles` 后全量扫描接收目录，导致上次已导入或重复跳过的文件再次进入任务。新增 SQLite 文件处理回执，终态为 `imported/skipped` 时保存活动、规范化路径、大小和修改时间；启动时恢复完全一致的指纹，只处理新增或已变化文件。首次升级会从现有 `images.source = camera_ftp` 路径与大小引导生成回执，避免更新后的第一次启动仍重复扫描；回执写入失败不会阻止上传链路，仍由图片 hash 去重兜底。
+- **密码状态体验**：已配置账户不再显示两个空密码框，而显示“FTP 密码已设置”和当前用户名；用户主动点击“修改账户或密码”后才进入编辑。真实密码仍不持久化、不回显，仅在当前 React 页面内存中短暂存在，提交成功立即清理。
+- **陈旧等待状态根因**：chokidar 对同一落盘路径可能连续发出多次变更通知；旧 `enqueueCandidate` 只在异步 `stat` 前检查 pending，两个并发通知会各自创建接收记录，后写入 pending 的记录完成导入后，较早记录失去更新入口并永久停留在“等待 IIS FTP 写入完成”。这也解释了页面计数为 0、同名文件已成功导入但仍残留等待行的矛盾状态。
+- **watcher 修复**：异步 `stat` 全程增加路径 reservation，阻止同一路径并发建档；新增记录时清理同路径旧的非终态记录，状态输出再按“活动 + 规范化路径”合并为最新有效记录，终态在同时间戳下优先。停止或切换 watcher 时同步清理未完成展示记录，避免旧活动残留。
+- **前端状态层级**：FTP 正常运行时顶部直接显示“相机 FTP 已启动 / 运行中”，首屏汇总当前活动、地址、端口、账户、接收目录、最近接收和相机传输活动；停止与重启上移，账户、端口和初始化设置默认折叠，普通权限深度检测不再覆盖运行成功状态。
+- **连接状态证据**：普通权限读取 `C:\inetpub\logs\LogFiles\FTPSVC3` 被 Windows 拒绝，现有 watcher 也不提供客户端 IP 或持续会话。因此只使用文件接收、等待稳定和导入状态推断“正在传输 / 最近有相机连接 / 暂无相机连接活动”，并明确近期活动不等于实时在线；不伪造连接数和 IP。
+- **视觉语义**：最近文件的接收/等待/导入统一为蓝色，导入成功为绿色，重复跳过为黄色，只有失败为红色；状态图标、标签和原因文字同步。统计改为紧凑标签并隐藏零值，列表去掉重复活动名和与标签重复的成功/等待说明，仅失败时展开原因，保留独立滚动。
+- **通用文案与适配**：页面标题、空状态和复制参数改为通用相机 FTP 表述，仅保留 Nikon Z6III 已验证说明；管理按钮统一为“配置并启动 FTP / 自动配置并启动 FTP”。顶部按钮支持换行，长路径继续省略并可悬停查看，最近列表保持独立滚动。
+- **业务边界**：未修改 IIS 配置、账户、活动切换、相机上传、watcher 导入或图片原地登记逻辑；连接活动完全使用已有只读状态。
 
-### v1.0.0-rc.1：正式版候选准备
-- **日期**：2026-05-25
+### v1.1.0-alpha.4 修正：FTP 接收活动切换陈旧状态误判
+- **日期**：2026-07-15
+- **日志证据**：旧活动 `evt_7cbb3b249380407d / ftp测试2` 切换到 `evt_354f03ba8d2644c4 / ftp测试3`。目标 set-path operation `9123a03b-e840-4181-8a85-7949f5a68fc0` 成功，目标 start operation `ed8b1a8c-c643-4afb-84b4-f7e9cc007685` 返回 Site ID 3、目标 physicalPath、Started、`*:1024:` 及 FTPSVC listener 全部正确。旧 Node 编排却优先读取 set-path 在独立 stop 之后生成的 Stopped 快照，导致 `CAMERA_FTP_CONFIG_MISMATCH` 假失败。旧流程没有父 operationId，前端因此显示未知阶段。
+- **事务修复**：活动切换改为单一 IIS set-path 子事务，由 PowerShell 在同一快照内更新目标 ACL、必要时停止站点、提交 physicalPath、恢复精确原运行状态并等待监听稳定；Node 随后切换 watcher，验证 Site ID、路径、binding、站点状态、监听归属和 watcher，最后才持久化新 `activeEventId`。原站点停止时保持停止，不强制启动或要求监听。
+- **回滚与诊断**：新增父 operationId 与全阶段日志，关联 PowerShell child operationId；失败后按旧 IIS 路径/站点状态、watcher、activeEventId 回滚并复核。新增 `FTP_EVENT_SWITCH_FAILED / FTP_SITE_STOP_FAILED / FTP_TARGET_ACL_UPDATE_FAILED / FTP_PHYSICAL_PATH_UPDATE_FAILED / FTP_WATCHER_SWITCH_FAILED / FTP_SITE_RESTART_FAILED / FTP_SWITCH_VERIFY_FAILED / FTP_SWITCH_ROLLBACK_FAILED / FTP_ACTIVE_EVENT_STATE_MISMATCH`。
+- **前端同步**：下拉框仅表示待切换活动，成功前当前配置仍显示服务端 active event；执行中暂停轮询并丢弃已发出的旧请求，失败后强制刷新真实状态和重置下拉值。切换按钮显示目标名，错误卡展示中文真实阶段、回滚结果和 operationId。
+- **测试与边界**：新增纯逻辑事务/回滚、运行/停止站点、中文路径、快速切换、上传阻断、前端轮询和 PowerShell 阶段合同；不改变已通过真机验证的 setup、账户、端口、Nikon 连接、上传和原地导入逻辑，不修改无关 IIS 资源。
+
+### v1.1.0-alpha.4 修正：IIS 配置枚举误判与防火墙回滚失败
+- **日期**：2026-07-15
+- **真实证据**：operation `6b7e6fe2-6c97-4fe1-a1e7-5d4140901a83` 的 Preflight、Windows Features、账户、ACL、IIS 站点、防火墙和启动均成功，失败只发生在 `verify_configuration`。实际 binding 为 `*:1024:`、Site ID 为 3、路径和 Basic/Anonymous 均正确；Microsoft.Web.Administration 返回 SSL `0/0`、Authorization `0/3`。本机 IIS `FTP_schema.xml` 明确这些值是 `SslAllow/SslAllow`、`Allow` 和 `Read + Write`，确认属于验证器误判。
+- **验证修复**：统一归一化 IIS 数值/名称枚举并保留 raw 值；最终配置和管理员系统状态均输出逐项 `id/code/passed/expected/actual`，覆盖 Windows 功能、FTPSVC、站点、Site ID、路径、binding、端口监听及 FTPSVC 归属、认证、授权、账户、ACL、PASV 和防火墙。监听稳定等待延长至 15 秒。
+- **回滚修复**：原回滚把 Boolean `True` 传给 `Set-NetFirewallRule -Enabled`，Windows 11 无法转换为 NetSecurity 枚举，导致控制端口规则残留在 1024。现改用枚举字符串并在恢复后逐字段验证快照；不触碰无关规则。
+- **前端诊断**：最终验证失败显示具体中文检查项与稳定错误码；技术详情继续保留 operationId、raw/normalized actual、回滚 items/warnings，并执行密码脱敏。
+- **Node 最终验证**：管理员脚本成功后继续核对保存配置中的活动、Site ID、控制/被动端口和 watcher 运行目标；失败返回 `ACTIVE_EVENT_ID_MISMATCH`、`CAMERA_FTP_CONFIG_SAVE_MISMATCH` 或 watcher 专用错误码，并恢复 Node 配置与 watcher 快照。
+- **安全边界**：自动测试只做 PowerShell 5.1 parser、纯枚举/参数绑定、mock 防火墙快照、临时 ACL 与只读状态，不执行真实 setup、站点、账户或防火墙修改。
+
+### v1.1.0-alpha.4 修正：非规范目录 ACL、可验证回滚与配置页适配
+- **日期**：2026-07-15
+- **真实证据**：最近失败 operation `25a7fc1f-f4b9-4fd8-8094-3439fbb9b718` 停在 `configure_directory_acl`，退出码 7；目标目录 `E:\OneDrive\Desktop\仓库2\working\ftp测试2\原图\相机FTP` 的 DACL 为 protected 且 `AreAccessRulesCanonical=false`。在只读内存复现中，对该 ACL 调用 `RemoveAccessRuleSpecific` 得到 `0x80131501`：非规范 ACL 不能修改。旧回滚虽然上报成功，现场仍保留非规范 ACL 与已删除工作台账户留下的孤立 SID，说明旧 DirectorySecurity 对象恢复没有完成可验证回写。
+- **ACL 修复**：修改前保存 DACL SDDL；非规范 ACL 先按显式 Deny、显式 Allow 的 Windows 规范顺序重建，再添加目标账户权限或执行经确认的宽泛权限收紧。写入后重新读取并验证 canonical 与实际读写权限；回滚由 SDDL 创建新的 DirectorySecurity，回写后逐字验证安全描述符。
+- **安全回滚**：ACL 回滚失败时不再删除本轮托管账户，避免制造新的孤立 SID；结果标为 partial/failed，并返回失败步骤、HRESULT、owner/protected/canonical/ruleCount 和逐项回滚验证。最终验证改为命名检查表，明确指出 Site ID、binding、路径、认证、SSL、授权、ACL 或收紧项中的实际失败项。
+- **重试闭环**：repair 检测到账户缺失、密码未配置或需要重置时复用当前密码表单，并只在修复成功后清空；管理员操作响应直接采用本次完整检测结果，后续普通轮询只填充新结果，不再用 unknown 覆盖刚确认的管理员字段，同时仍明确标记 inspectionLevel=partial。
+- **前端适配**：首次配置主操作移到长计划/普通提醒之前；计划默认只展示摘要、数量和阻塞/确认项，完整项目与普通信息折叠并限制高度。问题中心按阻塞、确认、自动修复、信息排序，低优先级默认收起。通用确认弹窗采用固定标题/底部操作区，中部独立滚动，限制为当前 viewport 高度并禁止横向溢出。
+- **验证边界**：PowerShell 5.1 测试用内存非规范 DACL和临时目录 SDDL round-trip 验证修复/回滚；未调用真实 IIS mutation，未修改现场目录 ACL、账户、站点或防火墙。现场 ACL 需用户下一次在工作台确认 UAC 后由新流程修复。
+
+### v1.1.0-alpha.4 重构：IIS FTP 统一配置编排与事务回滚
+- **日期**：2026-07-14
+- **最新真实根因**：现场 operation `98a7f120-7aa8-4c21-a0f0-d56525fb6676` 已成功调用 FTP 站点 Start，但 IIS / Windows PowerShell 5.1 把 `ftpServer.state` 返回为数值 `1`。旧等待逻辑只识别字符串 `Started`，10 秒后把已启动站点误判为失败并执行回滚。运行状态现统一把 `0/1/2/3/4` 解析为 `Starting/Started/Stopping/Stopped/Unknown`。
+- **统一编排**：新增纯 `cameraFtpProvisioner` 计划器和只读 `/api/camera-ftp/provisioning-plan`。setup、repair、start、restart、adopt-site 全部进入同一管理员脚本，按 `Preflight → Plan → Apply → Verify → Commit / Rollback` 执行；start 不再盲目切换运行状态，而是发现缺项后自动 repair + start。
+- **安全与幂等**：托管站点先按 `managedSiteId` 找回；只修改工作台资源或本次明确接管的精确 Site ID。授权更新只替换目标账户规则，防火墙只处理工作台固定名称或已确认旧规则，端口冲突不停止其他程序，旧 `ftp/` 目录只报告不迁移/删除。只读计划和站点发现不创建目录。
+- **事务边界**：管理员脚本记录 IIS 站点、binding、路径、认证/授权、账户、ACL、PASV、防火墙、FTPSVC 和站点状态快照，失败时逆序恢复；Node 侧 watcher 与 config 采用快照提交，IIS 成功后 watcher/config 提交失败会恢复原应用状态且不保存错误配置。密码重置和 Windows Feature 启用属于平台不可逆项目，会在计划/回滚报告中明确标记。
+- **重启与诊断**：Windows Feature 返回 RestartNeeded 时以 `WINDOWS_RESTART_REQUIRED` 安全暂停，账户、ACL、站点、防火墙和 FTPSVC 不继续修改。站点启动失败收集 HRESULT、Win32 code、FTPSVC、Site ID、binding、physicalPath、端口归属、只读 appcmd 列表和近期 IIS/FTP/WAS 事件；失败响应保留 completedSteps、preflight、plan 和 rollback。
+- **前端**：首次配置保持活动、账户、端口、主按钮四步；点击后先显示计划摘要与风险确认，再请求一次 UAC，并轮转展示七个执行阶段。提醒按信息、可自动修复、需要确认、阻塞四类分组；失败卡显示真实阶段、回滚结果、推荐端口、接管、技术详情和日志入口。
+- **测试**：新增 30 个 provisioning fixture 场景，补齐数值运行状态、只读预检不落盘、unlink 实时安全门、manager-before-watcher、Node 回滚和嵌套诊断脱敏等合同；所有自动测试保持 mock / fixture / 临时目录，不执行真实 IIS 修改。
+
+### v1.1.0-alpha.4 修正：FTPSVC 正常但 FTP 站点启动失败
+- **日期**：2026-07-14
+- **日志根因**：操作已完成 IIS、账户、ACL 和防火墙配置，失败发生在启动阶段；现场只读检查确认 `FTPSVC` 为 `Running/Automatic`，端口 22 尚未监听。公共脚本却使用通用 Web 站点的 `Site.Start/Stop/State` 管理 FTP 站点，并把底层异常替换成 `IIS_SERVICE_START_FAILED`，因此页面误报 Microsoft FTP Service 无法启动。
+- **完成内容**：按 IIS FTP 站点模型改用站点级 `ftpServer.Start/Stop` 方法、`ftpServer.state` 运行状态和 `ftpServer.serverAutoStart`；setup、adopt、start、restart、路径切换和回滚全部复用同一 FTP 专用实现。FTPSVC、站点启动和端口监听验证拆成独立阶段。
+- **诊断优化**：新增 `IIS_FTP_SERVICE_START_FAILED / IIS_FTP_SITE_START_FAILED / IIS_FTP_LISTENER_START_FAILED`，保留底层异常类型、HRESULT、FTPSVC 状态、站点前后状态和监听快照；回滚警告携带脱敏技术原因并展示在“复制技术详情”中。
+- **安全边界**：仍只操作工作台托管或用户明确接管的站点；不停止其他程序、不启动或修改无关 IIS 站点。自动测试仅使用内存 fake FTP runtime 验证 Start/Stop 合同，未执行真实 IIS 修改。
+- **验证方式**：PowerShell 5.1 解析及 FTP 专用运行时合同、UI 中文错误与诊断详情、TypeScript、相机 FTP 全套回归、生产构建和 `git diff --check`。
+
+### v1.1.0-alpha.4 修正：旧 FTP 防火墙规则更新失败与风险确认
+- **日期**：2026-07-14
+- **日志根因**：`MpsSvc` 与 `BFE` 均为 Running/Automatic，失败不是服务不可用。早期规则以 GUID 为内部名称且仍使用端口 21、热点专用远程范围；更新命令同时传入 `Set-NetFirewallRule -Name` 与 `-DisplayName`，落入互斥参数集并在 `configure_firewall` 阶段失败。原 catch 又丢弃底层异常，页面因此误导用户检查防火墙服务。
+- **完成内容**：规则更新改用 `-Name + -NewDisplayName` 并一次同步端口与 `LocalSubnet`；setup/repair/adopt 在任何 IIS、账户或 ACL 修改前预检旧规则。需要改变 GUID 内部名称的本地旧规则时返回结构化差异并要求前端二次高风险确认；策略/动态/重名规则拒绝强改。更新前保存快照，当前规则更新失败或后续步骤失败时恢复原端口、作用域、启用状态和显示名。
+- **诊断与前端**：新增 `FIREWALL_RULE_UPDATE_CONFIRMATION_REQUIRED`、`FIREWALL_RULE_POLICY_BLOCKED` 和 `preflight_firewall` 中文阶段；保留实际 PowerShell 命令和底层错误，移除“只检查防火墙服务”的固定建议。密码表单在预检确认之间保持 React state，不进入配置、日志或错误详情。
+- **现场只读验证**：目标端口 22 的预检准确列出控制规则 `21 + 192.168.137.0/24 -> 22 + LocalSubnet`，以及被动规则 `50000-50100 + 192.168.137.0/24 -> 50000-50100 + LocalSubnet`；两条来源均为 `Local`。`Set-NetFirewallRule -WhatIf` 参数绑定通过，未修改真实规则。
+- **验证方式**：PowerShell 5.1 解析与安全合同、UI 风险确认/策略拒绝、TypeScript、完整相机 FTP 回归、生产构建和 `git diff --check`。
+
+### v1.1.0-alpha.4 修正：自定义端口通过预检后在 FTP 授权阶段失败
+- **日期**：2026-07-14
+- **日志根因**：22 端口已通过冲突检测并进入管理员 setup，但 `configure_iis_site` 调用了 `$security.GetChildElement('authorization')`。FTP 授权不是站点内嵌 `ftpServer/security` 的子元素，而是按站点路径生效的 `system.ftpServer/security/authorization` 配置节，因此 IIS 返回“无法识别的元素 authorization”。两次失败均完成回滚，没有留下半配置站点。
+- **完成内容**：新增站点作用域 FTP 授权配置节读取 helper；首次配置、站点状态模型、显式接管、账户更新和失败回滚统一通过同一个 `ServerManager` 读取、写入并提交授权规则。
+- **验证方式**：PowerShell 5.1 解析通过；新增授权 schema 合同，禁止再次调用 `GetChildElement('authorization')`，并检查所有调用链显式传递 `ServerManager`。
+- **安全边界**：本轮自动验证未执行真实 setup、接管、启停或修复；需要重启当前工作台后由用户再次确认 UAC 验收 22 端口。
+
+### v1.1.0-alpha.4 修正：未启动 IIS binding 误报可用与自定义端口配置失败
+- **日期**：2026-07-14
+- **日志根因**：普通权限只能看到 TCP 21 未监听，无法读取已绑定但停止的 IIS FTP 站点，前端却把 `port.conflict=null` 当成“可用”。自定义端口 setup 的真实失败位于 `configure_iis_site`，`Get-MpwGlobalPassivePorts` 错误读取了只属于站点级的 `externalIp4Address`，IIS 返回 `0x80070585 无效索引` 并触发安全回滚。
+- **完成内容**：普通部分检测改为“需管理员确认”；用户明确点击端口检测时发送 `fullInspection: true`，自动请求 UAC，只读核对 IIS binding。全局 PASV 配置只读写 `lowDataChannelPort/highDataChannelPort`，站点级外部地址继续在站点元素处理。
+- **验证方式**：PowerShell 5.1 解析、全局 PASV schema 合同、UI 部分检测与显式 UAC 合同、TypeScript 和完整相机 FTP 回归。
+- **安全边界**：诊断过程未修改 IIS；自动测试不调用真实 setup/adopt/start/stop/repair。
+
+### v1.1.0-alpha.4 修正：IIS FTP 可配置控制端口与非破坏性冲突处理
+- **日期**：2026-07-14
+- **根因**：`cameraFtp.controlPort` 在配置归一化时被强制迁回 21，TypeScript 管理层固定发送 `*:21:`，PowerShell 状态、setup、adopt、control、防火墙与监听验证也全部调用 Port21 专用逻辑；因此遇到现有 IIS 站点或其他进程占用时只能笼统失败。
+- **完成内容**：控制端口改为 1-65535 可配置并持久化；控制端口不得与高级被动端口范围重叠。新增动态 binding、防火墙、监听验证、Windows 排除端口检测、PID/进程/IIS 站点归属、工作台托管归属和空闲端口建议。setup/repair/adopt 仅在成功复检后保存端口。
+- **安全边界**：冲突预检先于功能、账户、ACL、站点和防火墙修改；不停止其他程序，不修改无关 IIS 站点，不删除其他 binding，不静默接管，不自动采用候选端口。repair 只允许处理持久化 Site ID 和托管账户标记匹配的站点。
+- **前端变化**：首次配置增加控制端口与高级被动端口；即时显示可用/冲突/保留状态、PID/进程或站点来源、推荐端口和重新检测。错误卡中文展示失败阶段、占用来源与建议；按钮改为高对比且允许完整换行。
+- **验证**：`pnpm test:camera-ftp` 通过，覆盖端口配置保留、范围校验、PowerShell 动态合同、冲突中文化、候选端口和密码脱敏；真实 IIS 修改脚本未由自动测试调用。
+
+### v1.1.0-alpha.4 修正：管理员状态回填与自动冲突处理
+- **日期**：2026-07-14
+- **真实日志证据**：管理员只读操作已成功启动并退出，但返回 `candidateCount: 0` 后前端又执行普通权限检测，导致页面重新显示 partial；setup 随后在 `inspect_iis_sites` 阶段失败。预检代码为判断端口所有者调用完整 FTP 子配置模型，使不完整的既有站点在候选项生成前抛错。
+- **完成内容**：站点冲突预检改为只读 IIS Site ID、名称、路径和 binding；单站点详细配置异常降级为身份模型，不再阻断整批发现；管理员诊断直接回填提权后的完整状态。后续端口修正已取消首次配置中的自动接管，所有接管均需用户明确确认。仓库路径变化由修复流程同步 IIS physicalPath 与 watcher，Wi-Fi/热点切换自动更新推荐地址且保持通配地址 binding。
+- **前端修复**：“管理员检测”改为“管理员诊断（只读）”；新增高对比主按钮“自动检测、修复并启动 FTP”，操作按钮允许换行并明确区分可用/禁用态；运行中隐藏旧失败卡，避免同时显示失败和正在配置。
+- **诊断改进**：失败日志增加已脱敏的 `technicalMessage / exceptionType / command`，便于下一次直接定位 PowerShell 异常。
+- **验证方式**：`pnpm test:camera-ftp` 全套通过（IIS 逻辑、提权 IPC、PowerShell 5.1、UI 状态机和 watcher）；`pnpm build` 与 `git diff --check` 通过。首次测试仅暴露 UI 文案断言仍引用旧按钮名，断言同步后完整回归通过。
+- **安全边界**：未静默切换或断开 Windows 网络，未结束端口进程，未删除/重命名 IIS 站点或原目录；自动测试未调用真实 IIS 修改脚本。
+
+### v1.1.0-alpha.4 修正：OneDrive 相机 FTP 接收目录路径误判
+- **日期**：2026-07-14
+- **真实日志证据**：操作 `65a704d9-202b-46ac-b8aa-3aca57472dc4` 和 `c54813eb-1a72-4602-a7fb-b78224b45fa7` 均已接受 UAC、启动管理员进程并生成结果 JSON，随后在 `validate_configuration` 阶段以 `FTP_PATH_INVALID / exit 2` 退出。
+- **根因**：实际目录 `E:\OneDrive\Desktop\仓库2\working\ftp测试2\原图\相机FTP` 是 OneDrive Files On-Demand 目录，Windows 会设置 `ReparsePoint` 属性，但它没有 `LinkType` 和 `Target`，并不是 SymbolicLink 或 Junction。旧校验拒绝了所有 reparse point，造成误判。
+- **修复**：允许没有链接类型和目标的云占位目录；继续拒绝真实符号链接和目录联接，防止 FTP 根目录逃逸到活动目录外。前端补充 `FTP_PATH_INVALID` 中文说明和 OneDrive 处理建议。
+- **验证**：Windows PowerShell 5.1 语法/协议测试通过；mock 覆盖云占位目录、Junction 和普通目录；同一真实 OneDrive 接收目录只读校验已返回成功。
+- **数据影响**：未触发新的 UAC，未修改 IIS、账户、ACL、防火墙、站点或图片文件。
+
+### v1.1.0-alpha.4：IIS FTP 提权执行器与首次配置闭环修复
+- **日期**：2026-07-14
+- **开发者 / 工具**：Codex
+- **真实根因**：Windows PowerShell 5.1 会把无 BOM UTF-8 临时 `.ps1` 当作当前 ANSI 代码页解析；提权启动脚本含中文回退文本或中文路径时可能在目标脚本写结果前解析失败。旧执行器随后删除临时目录，只向 API 暴露 `IIS_CONFIG_FAILED / exit 1`，日志也缺少操作 ID 和失败阶段。修复执行器后，本机下一项预期阻断是端口 21 已由非工作台管理的 `MPW-IIS-FTP-Test` 占用，必须显式选择接管。
+- **完成内容**：
+  - UAC launcher / runner 使用 UTF-8 BOM、Windows PowerShell 5.1 固定路径、独立 UUID 临时目录和 input/status/output 三文件协议；支持 UAC 取消、启动失败、无结果、无效 JSON、超时和 finally 清理。
+  - 五类 IIS 管理脚本补齐结构化阶段、技术摘要、安全命令名、回滚状态和分类退出码；PASV、防火墙、ACL 和本地账户托管边界保持不变。
+  - 新增管理员只读站点发现 API 和前端选择确认流程；setup 未完成时不再开放启动、停止、重启、修复，密码只在成功后清空。
+  - 错误卡改为中文阶段、处理建议、脱敏技术详情、复制详情、打开日志和重试；`UAC_CANCELLED` 明确说明本次未执行系统修改。
+- **验证方式**：`pnpm test:camera-ftp`、`pnpm build` 和 `git diff --check`；测试使用临时目录和只读/模拟脚本，不调用真实 IIS 修改入口。
+- **数据影响**：未修改或删除真实 IIS 站点、`ftpsvc`、本地账户、防火墙、`D:\MPW-IIS-FTP-Test` 或图片文件。
+- **未完成事项**：需要用户在工作台中接受 UAC，先执行管理员检测，再明确选择是否接管现有 `MPW-IIS-FTP-Test`，最后进行 Nikon 真机上传验收。
+
+### v1.1.0-alpha.3：首次配置状态机、原图目录与服务语义闭环
+- **日期**：2026-07-14
+- **完成内容**：
+  - `GET /api/camera-ftp/status` 增加 `inspectionLevel`、`requiresAdminForFullInspection` 和 `requiresAdminForSystemChanges`；普通权限无法读完整 IIS 时仍返回成功的 partial 状态，不再把 `ADMIN_REQUIRED` 渲染成全局阻断错误。
+  - 首次配置改为“选择活动 → 填写全局账户 → 配置并启动 FTP”；setup 一次接收活动、用户名和密码，确认后自动请求 UAC，不要求先保存账户或管理员检测。
+  - IIS physicalPath、watcher 和相机原图最终目录统一为 `working/{event_slug}/原图/相机FTP/`。稳定后的相机文件原地写入 SQLite 并生成衍生图，不再复制、移动或重命名原图。
+  - “停止 FTP”只停止工作台管理的 IIS 站点，保留 `activeEventId`、目录与 watcher；解除活动关联独立执行，站点未停止或仍有上传/导入任务时拒绝。
+  - 默认用户名改为 `camera`，活动切换继续复用全局账户；页面增加多相机文件名前缀提示。
+- **验证方式**：`pnpm test:camera-ftp` 通过 26 项 IIS/IPC/状态机/首次配置 UI/原地导入断言和 10 项 watcher 断言；自动测试未触发 UAC 或修改 IIS。TypeScript 服务端和前端类型检查通过。
+- **数据影响**：未移动、复制或删除现有真实图片；未删除旧 `ftp/`、`camera_ftp_upload`；未修改真实 IIS、账户、防火墙或 ACL。
+- **未完成事项**：仍需用户在界面确认 UAC 后完成真实 setup，以及 Nikon 多相机文件名前缀和原地入库人工验收。
+
+### v1.1.0-alpha.3：相机 FTP 全面迁移到 Windows IIS FTP
+- **日期**：2026-07-13
+- **开发者 / 工具**：Codex
+- **迁移原因与真机证据**：旧 Node `ftp-srv` 路线在 Nikon Z6III 真机上持续出现控制/被动连接兼容问题。已确认 Nikon Z6III 在 Windows IIS FTP、控制端口 21、PASV `50000-50100`、无 SSL、basic auth 配置下真机上传成功，因此本轮移除 `ftp-srv` 及所有 fallback。
+- **新架构**：
+  - `iisFtpManager` 负责只读状态、初始化、修复、启停和显式站点接管；`cameraFtpOrchestrator` 负责当前活动切换、互斥锁、验证和回滚；`cameraFtpWatcher` 只负责 `ftp` 目录稳定检测与自动导入。
+  - IIS 默认站点 `MediaPhotoWorkbenchFTP`，binding `*:21:`，FTPSVC，无 SSL，basic auth 开启，anonymous 关闭，被动端口 `50000-50100`，防火墙目标作用域 `LocalSubnet` / Profile `Any`。
+  - 配置保存 `managedSiteId`；后续系统修改必须同时匹配站点名、真实 IIS Site ID、FTP binding 和托管账户标记，避免误控制后来创建的同名站点。授权规则作为可修复健康项单独校验，损坏时可由“一键修复”恢复。
+  - 同一时间只有一个 `activeEventId`；本条最初使用的 `ftp/` 中转目录已在 2026-07-14 改为 `working/{event_slug}/原图/相机FTP/` 最终原图目录。
+- **UAC 和 PowerShell**：普通启动和 GET status 不提权。系统修改通过 `Start-Process -Verb RunAs` 启动独立 PowerShell 脚本，只传递随机短生命周期 JSON 输入/输出文件路径，支持 UAC 取消、超时、互斥和 finally 清理。打包 `extraResources` 包含 `scripts/windows/*.ps1`。
+- **密码安全**：默认用户名现为 `camera`，不生成默认密码。密码只存在前端本次表单、本次 API 请求内存、严格 ACL 的短期 JSON 和 PowerShell SecureString 中；不进入命令行、配置、SQLite、API 响应、日志或快照。
+- **网络模式**：前端同时展示 WLAN / 同一 Wi-Fi 和 Windows 移动热点。热点 `192.168.137.1` 优先识别，即使是 Wi-Fi Direct/虚拟适配器也不过滤；该地址不写入 IIS binding。
+- **前端变化**：保留“导入图片 > 相机 FTP”现有设计语言，重构为总状态、IIS 环境、管理操作、当前 FTP 活动、账户、Wi-Fi/热点、Nikon 固定参数、最近文件和站点冲突。删除 session、USER/PASS/STOR、原始命令、PASV 返回 IP、2121 建议和密码显示/复制。
+- **watcher 变化**：当前监听 `working/{event_slug}/原图/相机FTP/` 的 JPG/JPEG，以 size + mtime 稳定检测防止半文件并原地入库，继续复用 hash、EXIF、thumb、preview、SQLite、任务和 `image-created`。应用退出只关闭 watcher，不停 IIS/FTPSVC。
+- **活动安全**：当前 FTP 活动的归档、逻辑删除、永久删除和归档工作区清理在 service 层被拒绝；恢复活动不自动绑定。切换活动时如有未稳定或导入中文件则返回 `FTP_UPLOAD_IN_PROGRESS`。
+- **自动测试**：旧 ftp-srv 协议诊断测试已删除，替换为 22 项 IIS 配置/状态/JSON IPC/提权边界/网络纯逻辑与只读现场检测，以及 10 项临时目录 watcher 回归；`pnpm test:camera-ftp` 和 `pnpm build` 均通过。测试不调用 setup/repair/adopt/control/credentials 修改脚本；Vite 仅保留现有的主 chunk 大于 500 kB 警告。
+- **本机旧配置迁移**：已单独调用配置加载迁移，原子移除忽略目录 `config/config.json` 中的旧明文密码字段并设置 `passwordResetRequired`；没有因此启动应用、watcher、IIS 站点或 FTPSVC。
+- **当前只读现场结果**：Windows 11 Home Insider build 26300；FTPSVC 存在且 Running/Auto；普通权限无法读取 IIS `applicationHost.config`，因此站点/binding/path 字段必须返回 unknown + `requiresAdmin`，不能误判为不存在。现场防火墙规则仅限 `192.168.137.0/24`，与目标 `LocalSubnet` 有偏差；`mpw-camera` Description 为 `Nikon FTP test account`，不是工作台托管账户，必须作为冲突且不得自动修改。本轮只读检查未接管站点、未修改防火墙、未删除 `D:\MPW-IIS-FTP-Test` 或其图片。
+- **已知风险**：Windows Home/普通权限对 IIS 配置读取会被拒绝；无提权 status 只能给出部分信息。IIS 被动端口是服务器全局配置，显式 setup/repair/adopt 前必须向用户说明影响。普通 FTP 是明文协议，只能在可信局域网/热点使用专用密码。当前便携 ZIP 的外置提权脚本尚未签名或由受保护安装目录保障，稳定发布前应迁移到签名且受保护的提权辅助程序。真机完整验收仍需用户手动确认 UAC 后进行。
+
+### 历史：IIS FTP 迁移前的相机接收方案（归档摘要）
+
+- v1.1.0-alpha.1 至早期 alpha.3 曾验证过不同的局域网 FTP 接收方式、网络地址选择和相机兼容性诊断；这些实现已退出运行时，也不再作为配置、测试或排障依据。
+- 历史验证确认了同一 Wi-Fi 与 Windows 热点两种现场网络方式，以及文件稳定检测、同活动去重、原地导入、任务记录和图片墙广播等产品需求；这些需求已由当前 Windows IIS FTP 单一架构承接。
+- 迁移前的接口、固定端口、临时接收目录、命令级会话诊断和旧配置字段不在本开发日志中继续展开。需要追溯版本节点时查看 `CHANGELOG.md`；当前实现与验收以 `API_SPEC.md`、`TESTING_NOTES.md` 和上方 IIS FTP 开发记录为准。
+
+### v1.1.0：继续开发准备
+- **日期**：2026-06-13
 - **开发者 / 工具**：Codex
 - **完成内容**：
-  - 将项目从 v0.x 开发阶段切换到 `v1.0.0-rc.1` 正式版候选阶段。
-  - 将 `package.json` 版本号更新为 `1.0.0-rc.1`。
-  - 明确 `v1.0.0-rc.1` 功能冻结：不再新增远程传输、RAW / HEIC / 视频、账号系统、权限系统、NSIS、Web Installer、云同步或大 UI 重构。
+  - 暂缓 v1.0.0 正式发布，将项目切换到 `v1.1.0` 继续开发。
+  - 将 `package.json` 版本号更新为 `1.1.0`。
+  - 明确 `v1.1.0` 暂不纳入远程传输、RAW / HEIC / 视频、账号系统、权限系统、NSIS、Web Installer、云同步或大 UI 重构。
   - 整理 README，使其偏向普通使用者阅读，覆盖下载方式、主机快速开始、客户端快速开始、网络建议、数据安全、常见问题和已知限制。
-  - 整理 CHANGELOG、ROADMAP、API_SPEC、DATABASE_SCHEMA 和 TESTING_NOTES，准备发布候选说明和完整回归测试清单。
+  - 整理 CHANGELOG、ROADMAP、API_SPEC、DATABASE_SCHEMA 和 TESTING_NOTES，改为正式版说明和完整回归测试清单。
   - 继续确认 Windows ZIP 便携包是推荐交付物，安装器暂不纳入 1.0.0 阻塞项。
 - **修改文件**：
   - `package.json`
@@ -50,13 +203,12 @@
 - **验证方式**：
   - 执行 `pnpm build`。
 - **冻结规则**：
-  - 只允许修复阻塞性 bug、文档问题、打包问题和发布前回归发现的问题。
-  - 本轮不打 tag、不创建 GitHub Release、不打包 ZIP、不自动提交。
+  - 正式版发布阶段只允许修复阻塞性 bug、文档问题、打包问题和正式发布验证发现的问题。
 - **发布准备信息**：
-  - 未来 ZIP 文件名：`MediaPhotoWorkbench-v1.0.0-rc.1-x64.zip`
-  - 未来 Git tag：`v1.0.0-rc.1`
-  - 未来 Release 标题：`v1.0.0-rc.1 - Windows ZIP Portable Release Candidate`
-  - Release 类型：Pre-release
+  - ZIP 文件名：`MediaPhotoWorkbench-v1.1.0-x64.zip`
+  - Git tag：`v1.1.0`
+  - Release 标题：`v1.1.0 - Windows ZIP Portable Stable Release`
+  - Release 类型：正式稳定版
 
 ### v0.17.0 开发阶段：17.2 图片墙效率增强
 - **日期**：2026-05-22
