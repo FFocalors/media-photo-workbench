@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
-import { Notice } from "../../components/ui/States";
+import { TransientNotice } from "../../components/ui/States";
 import {
   createEditPackage,
   deleteEditPackage,
@@ -343,7 +343,7 @@ export function RetouchPage() {
         <MetricCard icon={<FileArchive size={18} />} label="最近待修包" textValue={lastPackage ? `${lastPackage.success}/${lastPackage.total}` : "未生成"} />
       </div>
 
-      {message && <Notice className="mb-6" tone={message.tone} title={message.title}>{message.body}</Notice>}
+      <TransientNotice className="mb-6" message={message} onDismiss={() => setMessage(null)} />
 
       <div className="mb-6 flex border-b border-slate-200">
         <button

@@ -20,6 +20,10 @@ function Invoke-MpwIisFtpControl {
     $newAclSnapshot = $null
     $newPath = $null
     $setPathCommitted = $false
+    $serviceSnapshot = $null
+    $siteRuntimeSnapshot = $null
+    $serviceMutationAttempted = $false
+    $siteRuntimeMutationAttempted = $false
     $currentStage = 'read_input'
     $steps = [Collections.Generic.List[object]]::new()
     $warnings = [Collections.Generic.List[object]]::new()
@@ -74,13 +78,19 @@ function Invoke-MpwIisFtpControl {
                 Throw-MpwFailure -Code 'IIS_SITE_PORT_CONFLICT' -Message 'Another IIS FTP site uses the configured control port. It was not modified.' -Details ([ordered]@{ port = $options.ControlPort; source = 'iisSite'; canChangePort = $true; availablePorts = @(Get-MpwAvailableControlPorts -PreferredPort 21 -PassiveStart $options.PassivePortStart -PassiveEnd $options.PassivePortEnd -Count 5); recommendation = 'Choose another available control port.'; candidates = @($otherPortSites | ForEach-Object { [ordered]@{ siteName = $_.name; physicalPath = $_.physicalPath; bindings = $_.bindings; state = $_.state; adoptable = $false } }) })
             }
         }
+        if ($action -eq 'start' -or $action -eq 'restart') {
+            $serviceSnapshot = Get-MpwFtpServiceStatus
+            $siteRuntimeSnapshot = Get-MpwFtpSiteRuntimeState -Site $site
+        }
         [void]$steps.Add([ordered]@{ name = 'preflight'; status = 'success'; message = 'The IIS FTP site and requested action were validated.' })
 
         switch ($action) {
             'start' {
                 $currentStage = 'start_ftp_service'
+                $serviceMutationAttempted = $true
                 Start-MpwFtpService
                 $currentStage = 'start_ftp_site'
+                $siteRuntimeMutationAttempted = $true
                 Start-MpwSite -Site $site
                 $currentStage = 'verify_ftp_listener'
                 $listener = Wait-MpwPortListener -Port $options.ControlPort -PassiveStart $options.PassivePortStart -PassiveEnd $options.PassivePortEnd -TimeoutMilliseconds 5000
@@ -96,8 +106,10 @@ function Invoke-MpwIisFtpControl {
             }
             'restart' {
                 $currentStage = 'stop_ftp_site'
+                $siteRuntimeMutationAttempted = $true
                 Stop-MpwSite -Site $site
                 $currentStage = 'start_ftp_service'
+                $serviceMutationAttempted = $true
                 Start-MpwFtpService
                 $currentStage = 'start_ftp_site'
                 Start-MpwSite -Site $site
@@ -113,7 +125,7 @@ function Invoke-MpwIisFtpControl {
                 $siteSnapshot = Get-MpwSiteSnapshot -Manager $manager -Site $site
                 $siteWasStarted = [string]$siteSnapshot.state -eq 'Started'
                 if ([IO.Directory]::Exists($newPath)) {
-                    $newAclSnapshot = [IO.Directory]::GetAccessControl($newPath)
+                    $newAclSnapshot = Get-MpwDirectoryAclSnapshot -PhysicalPath $newPath
                 }
                 [void]$steps.Add([ordered]@{ name = 'snapshot_current_state'; status = 'success'; message = 'The current Site ID, physicalPath and runtime state were captured.' })
 
@@ -231,14 +243,55 @@ function Invoke-MpwIisFtpControl {
             [void]$rollbackItems.Add([ordered]@{ stage = 'rollback_physical_path'; status = 'not_required'; message = 'physicalPath was not committed.' })
             [void]$rollbackItems.Add([ordered]@{ stage = 'rollback_site_state'; status = 'not_required'; message = 'The site state was not changed.' })
         }
-        if ($null -ne $newAclSnapshot -and -not [string]::IsNullOrWhiteSpace($newPath) -and [IO.Directory]::Exists($newPath)) {
+        if (($action -eq 'start' -or $action -eq 'restart') -and $siteRuntimeMutationAttempted -and $null -ne $site -and $null -ne $siteRuntimeSnapshot) {
             try {
-                [IO.Directory]::SetAccessControl($newPath, $newAclSnapshot)
-                [void]$rollbackItems.Add([ordered]@{ stage = 'rollback_target_acl'; status = 'success'; message = 'The target directory ACL snapshot was restored.' })
+                $expectedRuntimeState = [string]$siteRuntimeSnapshot
+                $currentRuntimeState = Get-MpwFtpSiteRuntimeState -Site $site
+                if ($expectedRuntimeState -eq 'Started' -and $currentRuntimeState -ne 'Started') {
+                    Start-MpwSite -Site $site
+                }
+                elseif ($expectedRuntimeState -eq 'Stopped' -and $currentRuntimeState -ne 'Stopped') {
+                    Stop-MpwSite -Site $site
+                }
+                $restoredRuntimeState = Get-MpwFtpSiteRuntimeState -Site $site
+                if ($restoredRuntimeState -ne $expectedRuntimeState) {
+                    Throw-MpwFailure -Code 'FTP_SITE_RUNTIME_ROLLBACK_FAILED' -Message 'The managed FTP site runtime state could not be restored.'
+                }
+                [void]$rollbackItems.Add([ordered]@{ stage = 'rollback_site_state'; status = 'success'; expected = $expectedRuntimeState; actual = $restoredRuntimeState })
             }
             catch {
-                [void]$rollbackItems.Add([ordered]@{ stage = 'rollback_target_acl'; status = 'failed'; code = 'FTP_ACL_ROLLBACK_FAILED'; message = [string]$_.Exception.Message })
-                [void]$rollbackWarnings.Add([ordered]@{ code = 'FTP_ACL_ROLLBACK_FAILED'; message = 'The target FTP directory ACL could not be restored.' })
+                [void]$rollbackItems.Add([ordered]@{ stage = 'rollback_site_state'; status = 'failed'; code = 'FTP_SITE_RUNTIME_ROLLBACK_FAILED'; message = [string]$_.Exception.Message })
+                [void]$rollbackWarnings.Add([ordered]@{ code = 'FTP_SITE_RUNTIME_ROLLBACK_FAILED'; message = 'The managed FTP site runtime state could not be fully restored.'; technicalMessage = [string]$_.Exception.Message })
+            }
+        }
+        if (($action -eq 'start' -or $action -eq 'restart') -and $serviceMutationAttempted -and $null -ne $serviceSnapshot) {
+            try {
+                $serviceRollback = Restore-MpwFtpServiceSnapshot -Snapshot $serviceSnapshot -Manager $manager -TargetSiteId ([long]$site.Id) -TargetSiteName $options.SiteName
+                foreach ($serviceWarning in @($serviceRollback.warnings)) { [void]$rollbackWarnings.Add($serviceWarning) }
+                [void]$rollbackItems.Add([ordered]@{
+                    stage = 'rollback_ftp_service'
+                    status = if ($serviceRollback.succeeded) { 'success' } else { 'partial' }
+                    code = if ($serviceRollback.succeeded) { $null } else { 'FTPSVC_ROLLBACK_PARTIAL' }
+                    message = if ($serviceRollback.succeeded) { 'The original FTPSVC startup type and running state were restored.' } else { 'FTPSVC rollback was only partially completed; shared IIS FTP sites were preserved.' }
+                })
+            }
+            catch {
+                [void]$rollbackItems.Add([ordered]@{ stage = 'rollback_ftp_service'; status = 'failed'; code = 'FTPSVC_ROLLBACK_FAILED'; message = [string]$_.Exception.Message })
+                [void]$rollbackWarnings.Add([ordered]@{ code = 'FTPSVC_ROLLBACK_FAILED'; message = 'The Microsoft FTP Service snapshot could not be restored.'; technicalMessage = [string]$_.Exception.Message })
+            }
+        }
+        if ($null -ne $newAclSnapshot -and -not [string]::IsNullOrWhiteSpace($newPath) -and [IO.Directory]::Exists($newPath)) {
+            try {
+                $aclRollback = Restore-MpwDirectoryAclSnapshot -PhysicalPath $newPath -Snapshot $newAclSnapshot
+                if (-not $aclRollback.succeeded) {
+                    Throw-MpwFailure -Code 'FTP_ACL_ROLLBACK_VERIFY_FAILED' -Message 'The target directory ACL rollback did not pass SDDL verification.'
+                }
+                [void]$rollbackItems.Add([ordered]@{ stage = 'rollback_target_acl'; status = 'success'; message = 'The target directory ACL snapshot was restored and verified.' })
+            }
+            catch {
+                $aclRollbackCode = if ($_.Exception.Data.Contains('MpwCode')) { [string]$_.Exception.Data['MpwCode'] } else { 'FTP_ACL_ROLLBACK_FAILED' }
+                [void]$rollbackItems.Add([ordered]@{ stage = 'rollback_target_acl'; status = 'failed'; code = $aclRollbackCode; message = [string]$_.Exception.Message })
+                [void]$rollbackWarnings.Add([ordered]@{ code = $aclRollbackCode; message = 'The target FTP directory ACL could not be restored and verified.' })
             }
         }
         $safe = ConvertTo-MpwSafeException -ErrorRecord $failure
@@ -251,6 +304,23 @@ function Invoke-MpwIisFtpControl {
                 'verify_switched_state' { $safe.code = 'FTP_SWITCH_VERIFY_FAILED' }
             }
         }
+        $rollbackAttempted = [bool](
+            ($action -eq 'set-path' -and ($setPathCommitted -or $null -ne $newAclSnapshot)) -or
+            (($action -eq 'start' -or $action -eq 'restart') -and ($siteRuntimeMutationAttempted -or $serviceMutationAttempted))
+        )
+        $rollbackSucceeded = if ($rollbackAttempted) { $rollbackWarnings.Count -eq 0 } else { $null }
+        $rollbackStatus = if (-not $rollbackAttempted) {
+            'not_required'
+        }
+        elseif ($rollbackSucceeded) {
+            'success'
+        }
+        elseif (@($rollbackItems | Where-Object { $_.status -eq 'success' -or $_.status -eq 'partial' }).Count -gt 0) {
+            'partial'
+        }
+        else {
+            'failed'
+        }
         $data = [ordered]@{
             action = $action
             status = 'failed'
@@ -260,14 +330,12 @@ function Invoke-MpwIisFtpControl {
             requiresAdmin = $safe.code -eq 'ADMIN_REQUIRED'
             previousPhysicalPath = if ($null -ne $siteSnapshot) { [string]$siteSnapshot.physicalPath } else { $null }
             rollback = [ordered]@{
-                attempted = [bool]($setPathCommitted -or $null -ne $newAclSnapshot)
-                status = if ($rollbackWarnings.Count -eq 0) { 'success' } else { 'partial' }
-                succeeded = $rollbackWarnings.Count -eq 0
+                attempted = $rollbackAttempted
+                status = $rollbackStatus
+                succeeded = $rollbackSucceeded
                 items = @($rollbackItems)
             }
         }
-        $rollbackAttempted = [bool]($action -eq 'set-path' -and ($setPathCommitted -or $null -ne $newAclSnapshot))
-        $rollbackSucceeded = if ($rollbackAttempted) { $rollbackWarnings.Count -eq 0 } else { $null }
         Write-MpwScriptResult -OutputPath $OutputPath -Action $action -Ok $false -Stage $failedStage -SiteName $(if ($null -ne $options) { $options.SiteName } else { '' }) -Data $data -ErrorObject $safe -Warnings @($rollbackWarnings) -RollbackAttempted $rollbackAttempted -RollbackSucceeded $rollbackSucceeded
         return (Get-MpwExitCode -Code ([string]$safe.code))
     }

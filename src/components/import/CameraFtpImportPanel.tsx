@@ -1,9 +1,7 @@
 import {
-  Activity,
   AlertCircle,
   Camera,
   CheckCircle2,
-  Clock3,
   Copy,
   KeyRound,
   Loader2,
@@ -19,7 +17,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
-import { Notice, StatusPill } from "../ui/States";
+import { Notice, StatusPill, TransientNotice } from "../ui/States";
 import {
   adoptCameraFtpSite,
   checkCameraFtpPort,
@@ -32,7 +30,6 @@ import {
   type CameraFtpPortCheckData,
   type CameraFtpProvisioningGoal,
   type CameraFtpProvisioningPlanData,
-  type CameraFtpRecentRecordData,
   type CameraFtpStatusData,
   type CameraFtpWatcherData,
   type EventData,
@@ -52,11 +49,15 @@ import {
 } from "../../lib/api";
 import { cn } from "../../lib/cn";
 import {
+  getOperationalStatusSemantic,
+  type OperationalStatus,
+  type StatusTone
+} from "../../lib/statusSemantics";
+import {
+  applyCameraFtpStatusObservation,
   buildCameraFtpErrorPresentation,
   buildCameraFtpStatusIssues,
   cameraFtpPlanCanApply,
-  CAMERA_FTP_ISSUE_LEVEL_META,
-  CAMERA_FTP_PLAN_ITEM_STATUS_META,
   getCameraFtpProvisioningProgress,
   getCameraFtpButtonState,
   groupCameraFtpIssues,
@@ -64,6 +65,15 @@ import {
   validateCameraFtpPortSettings,
   type CameraFtpErrorPresentation
 } from "./cameraFtpUiState";
+import { CameraFtpRecentFiles } from "./camera-ftp/CameraFtpRecentFiles";
+import { formatCameraFtpDateTime } from "./camera-ftp/formatters";
+import { CameraFtpPanel as Panel } from "./camera-ftp/CameraFtpPanel";
+import {
+  CameraFtpIssueCenter,
+  CameraFtpProvisioningPlanSummary,
+  CameraFtpProvisioningProgress
+} from "./camera-ftp/CameraFtpProvisioningFeedback";
+import { CameraFtpDiagnosticErrorCard } from "./camera-ftp/CameraFtpDiagnosticErrorCard";
 
 type MessageState = {
   tone: "success" | "warning" | "danger" | "info";
@@ -105,6 +115,7 @@ const DEFAULT_HOTSPOT_ADDRESS = "192.168.137.1";
 const DEFAULT_CONTROL_PORT = 21;
 const PASSIVE_PORT_START = 50000;
 const PASSIVE_PORT_END = 50100;
+const CAMERA_FTP_ADMIN_REQUIRED_CODES = new Set(["ADMIN_REQUIRED", "ACCESS_DENIED", "IIS_STATUS_ADMIN_REQUIRED"]);
 
 const PROVISIONING_ACTIONS: CameraFtpProvisioningGoal[] = ["setup", "repair", "start", "restart", "adopt-site"];
 
@@ -132,44 +143,13 @@ function firewallRuleChangePreviews(value: unknown): FirewallRuleChangePreview[]
   });
 }
 
-/**
- * Ordinary polling intentionally remains non-elevated.  Preserve individual
- * administrator-confirmed values only where the partial response says
- * "unknown"; keep the response labelled partial so stale evidence is never
- * presented as a fresh full inspection.
- */
-function mergePartialCameraFtpStatus(
-  previous: CameraFtpStatusData | null,
-  incoming: CameraFtpStatusData
-): CameraFtpStatusData {
-  if (!previous || previous.inspectionLevel !== "full" || incoming.inspectionLevel !== "partial") return incoming;
-  const preserveUnknown = <T,>(known: T, next: T): T => {
-    if (next === null || next === undefined) return known;
-    if (Array.isArray(next) || typeof next !== "object") return next;
-    if (typeof known !== "object" || known === null || Array.isArray(known)) return next;
-    return Object.fromEntries(Object.entries(next as Record<string, unknown>).map(([key, value]) => [
-      key,
-      preserveUnknown((known as Record<string, unknown>)[key], value)
-    ])) as T;
-  };
-  return {
-    ...incoming,
-    windowsFeatures: preserveUnknown(previous.windowsFeatures, incoming.windowsFeatures),
-    site: preserveUnknown(previous.site, incoming.site),
-    binding: preserveUnknown(previous.binding, incoming.binding),
-    authentication: preserveUnknown(previous.authentication, incoming.authentication),
-    authorization: preserveUnknown(previous.authorization, incoming.authorization),
-    account: preserveUnknown(previous.account, incoming.account),
-    acl: preserveUnknown(previous.acl, incoming.acl),
-    passivePorts: preserveUnknown(previous.passivePorts, incoming.passivePorts),
-    firewall: preserveUnknown(previous.firewall, incoming.firewall),
-    port: preserveUnknown(previous.port, incoming.port),
-    conflicts: preserveUnknown(previous.conflicts, incoming.conflicts)
-  };
-}
-
 export function CameraFtpImportPanel() {
-  const [status, setStatus] = useState<CameraFtpStatusData | null>(null);
+  const [statusUiState, setStatusUiState] = useState({
+    current: null,
+    lastFullInspection: null
+  } as Parameters<typeof applyCameraFtpStatusObservation>[0]);
+  const status = statusUiState.current?.status ?? null;
+  const lastFullInspection = statusUiState.lastFullInspection;
   const [events, setEvents] = useState<EventData[]>([]);
   const [selectedEventId, setSelectedEventId] = useState("");
   const [selectedAddress, setSelectedAddress] = useState("");
@@ -203,7 +183,23 @@ export function CameraFtpImportPanel() {
   const operationInProgressRef = useRef(false);
   const statusRequestSequence = useRef(0);
 
+  const applyStatusObservation = useCallback((
+    incoming: CameraFtpStatusData,
+    source: "ordinary" | "admin",
+    requestId: number,
+    latestRequestId = statusRequestSequence.current
+  ) => {
+    setStatusUiState((current) => applyCameraFtpStatusObservation(current, {
+      source,
+      status: incoming,
+      inspectedAt: incoming.inspectedAt || new Date().toISOString(),
+      requestId,
+      latestRequestId
+    }));
+  }, []);
+
   const loadPage = useCallback(async (quiet = false) => {
+    const requestId = ++statusRequestSequence.current;
     if (!quiet) setLoading(true);
     try {
       const [activeRes, reviewingRes, draftRes, statusRes] = await Promise.all([
@@ -218,7 +214,9 @@ export function CameraFtpImportPanel() {
       setEvents(nextEvents);
 
       if (statusRes.ok && statusRes.data) {
-        setStatus((current) => mergePartialCameraFtpStatus(current, statusRes.data));
+        if (requestId === statusRequestSequence.current && !operationInProgressRef.current) {
+          applyStatusObservation(statusRes.data, "ordinary", requestId);
+        }
         setSelectedEventId((current) => current || statusRes.data.activeEvent?.id || nextEvents[0]?.id || "");
       } else if (!quiet) {
         setMessage(apiErrorMessage(statusRes, "无法读取 Windows IIS FTP 状态。"));
@@ -234,7 +232,7 @@ export function CameraFtpImportPanel() {
     } finally {
       if (!quiet) setLoading(false);
     }
-  }, []);
+  }, [applyStatusObservation]);
 
   const refreshStatus = useCallback(async (showFeedback = true, applyDuringOperation = false): Promise<CameraFtpStatusData | null> => {
     const requestId = ++statusRequestSequence.current;
@@ -243,7 +241,7 @@ export function CameraFtpImportPanel() {
       const response = await fetchCameraFtpStatus(showFeedback);
       if (response.ok && response.data) {
         if (requestId === statusRequestSequence.current && (!operationInProgressRef.current || applyDuringOperation)) {
-          setStatus((current) => mergePartialCameraFtpStatus(current, response.data));
+          applyStatusObservation(response.data, "ordinary", requestId);
         }
         if (showFeedback) {
           setLastFailedAction(null);
@@ -260,7 +258,7 @@ export function CameraFtpImportPanel() {
       if (showFeedback) setRefreshing(false);
     }
     return null;
-  }, []);
+  }, [applyStatusObservation]);
 
   useEffect(() => {
     void loadPage();
@@ -349,7 +347,8 @@ export function CameraFtpImportPanel() {
       && status?.port?.listening !== false
   );
   const uploadInProgress = Boolean(
-    (watcher?.unstableCount ?? 0) > 0
+    watcher?.busy === true
+      || (watcher?.unstableCount ?? 0) > 0
       || (watcher?.pendingCount ?? 0) > 0
       || (watcher?.queuedCount ?? 0) > 0
       || (watcher?.importingCount ?? 0) > 0
@@ -404,7 +403,6 @@ export function CameraFtpImportPanel() {
   const overall = getOverallStatus(status, activeAction || preparingPlanAction, message?.diagnostic?.code === "UAC_CANCELLED", serviceReady);
   const serviceSummary = getServiceSummary(status, activeAction || preparingPlanAction, serviceReady);
   const cameraActivity = getCameraActivityMeta(watcher, serviceReady);
-  const recentStatusCounts = countRecentRecordStatuses(watcher?.recentRecords ?? []);
   const displayedControlPort = firstSetupRequired
     ? portValidation.controlPort ?? status?.controlPort ?? DEFAULT_CONTROL_PORT
     : status?.controlPort ?? portValidation.controlPort ?? DEFAULT_CONTROL_PORT;
@@ -611,7 +609,7 @@ export function CameraFtpImportPanel() {
         } else {
           setLastFailedAction(nextAction);
           setMessage({
-            tone: "danger",
+            tone: "warning",
             title: "配置计划存在阻塞项",
             body: plan.summary || "请先按下方阻塞错误处理外部资源冲突，再重新生成配置计划。"
           });
@@ -694,7 +692,7 @@ export function CameraFtpImportPanel() {
     if (action.plan && !cameraFtpPlanCanApply(action.plan)) {
       setPendingAction(null);
       setProvisioningPlan(action.plan);
-      setMessage({ tone: "danger", title: "配置计划存在阻塞项", body: "阻塞项未解决前不会执行系统修改。请按问题提示处理后重新生成配置计划。" });
+      setMessage({ tone: "warning", title: "配置计划存在阻塞项", body: "阻塞项未解决前不会执行系统修改。请按问题提示处理后重新生成配置计划。" });
       return;
     }
     const confirmedPorts = validateCameraFtpPortSettings(controlPort, passivePortStart, passivePortEnd);
@@ -711,7 +709,7 @@ export function CameraFtpImportPanel() {
     const allowAclTightening = action.plan?.confirmations.some((confirmation) => confirmation.key === "tighten-broad-acl") === true;
     setPendingAction(null);
     operationInProgressRef.current = true;
-    statusRequestSequence.current += 1;
+    const actionRequestId = ++statusRequestSequence.current;
     setActiveAction(action.kind);
     setProvisioningPhaseIndex(0);
     setLastOperation(null);
@@ -794,7 +792,7 @@ export function CameraFtpImportPanel() {
           setCredentialsDirty(false);
           setEditingCredentials(false);
         }
-        setStatus(response.data.status);
+        applyStatusObservation(response.data.status, "admin", actionRequestId);
         setProvisioningPlan(null);
         if (["setup", "repair", "adopt-site"].includes(action.kind)) {
           setControlPort(String(response.data.status.controlPort));
@@ -855,6 +853,7 @@ export function CameraFtpImportPanel() {
       setMessage({ tone: "warning", title: "请先选择接收活动", body: "管理员检测需要用所选活动预览目标接收目录。" });
       return;
     }
+    const discoveryRequestId = ++statusRequestSequence.current;
     setActiveAction("discover-sites");
     setMessage({ tone: "info", title: "正在请求管理员检测", body: "Windows 将弹出 UAC；本次操作只读取 IIS FTP 站点，不修改站点、目录或文件。" });
     try {
@@ -870,7 +869,7 @@ export function CameraFtpImportPanel() {
       });
       if (response.ok && response.data) {
         setLastFailedDiscovery(false);
-        setStatus(response.data.status);
+        applyStatusObservation(response.data.status, "admin", discoveryRequestId);
         setDiscoveredSites(response.data.sites);
         setSelectedDiscoveredSiteName(response.data.sites[0]?.siteName || "");
         setMessage({
@@ -929,11 +928,12 @@ export function CameraFtpImportPanel() {
   };
 
   const handleOpenFolder = async () => {
+    const requestId = ++statusRequestSequence.current;
     setActiveAction("open-folder");
     try {
       const response = await openCameraFtpFolder();
       if (response.ok && response.data) {
-        setStatus(response.data.status);
+        applyStatusObservation(response.data.status, "ordinary", requestId);
         setMessage({ tone: "success", title: "已打开 FTP 文件夹", body: response.data.path || response.data.status.ftpPath });
       } else {
         setMessage(apiErrorMessage(response, "无法打开当前 FTP 接收目录。"));
@@ -1039,8 +1039,8 @@ export function CameraFtpImportPanel() {
           <SummaryTile label="当前用户名" value={status?.account?.username || DEFAULT_USERNAME} />
           <SummaryTile label="接收目录" value={status?.ftpPath || "未配置"} title={status?.ftpPath} />
           <SummaryTile label="服务状态" value={serviceSummary.label} tone={serviceSummary.tone} />
-          <SummaryTile label="相机连接活动" value={cameraActivity.label} tone={cameraActivity.tone === "success" ? "success" : cameraActivity.tone === "warning" ? "warning" : "neutral"} />
-          <SummaryTile label="最近接收时间" value={formatDateTime(watcher?.lastReceivedAt)} />
+          <SummaryTile label="相机连接活动" value={cameraActivity.label} tone={cameraActivity.tone} />
+          <SummaryTile label="最近接收时间" value={formatCameraFtpDateTime(watcher?.lastReceivedAt)} />
         </div>
 
         <div className="mt-3 flex flex-col gap-3 rounded-xl border border-white/80 bg-white/80 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1055,7 +1055,7 @@ export function CameraFtpImportPanel() {
             </div>
           </div>
           <div className="grid shrink-0 grid-cols-2 gap-x-5 gap-y-1 text-xs text-slate-500 sm:text-right">
-            <span>最近连接</span><span className="font-medium text-slate-700">{formatDateTime(cameraActivity.lastConnectionAt)}</span>
+            <span>最近连接</span><span className="font-medium text-slate-700">{formatCameraFtpDateTime(cameraActivity.lastConnectionAt)}</span>
             <span>实时连接数</span><span className="font-medium text-slate-700">无法可靠获取</span>
             <span>最近客户端 IP</span><span className="font-medium text-slate-700">未提供</span>
           </div>
@@ -1063,7 +1063,7 @@ export function CameraFtpImportPanel() {
       </section>
 
       {!uiBusy && message?.diagnostic ? (
-        <DiagnosticErrorCard
+        <CameraFtpDiagnosticErrorCard
           diagnostic={message.diagnostic}
           onAdopt={(message.diagnostic.adoptableSiteName || siteConflict?.siteName)
             ? () => validateAndRequestAdoption(message.diagnostic?.adoptableSiteName || siteConflict?.siteName || "")
@@ -1071,13 +1071,20 @@ export function CameraFtpImportPanel() {
           onCopy={() => void copyTechnicalDetails()}
           onOpenLogs={() => void openLogsDirectory()}
           onSelectPort={message.diagnostic.availablePorts.length > 0 ? useRecommendedPort : undefined}
-          onRetry={lastFailedAction
-            ? retryLastFailedAction
-            : lastFailedDiscovery
-              ? () => void handleDiscoverSites()
-              : undefined}
+          onRetry={message.diagnostic.retryable
+            ? lastFailedAction
+              ? retryLastFailedAction
+              : lastFailedDiscovery
+                ? () => void handleDiscoverSites()
+                : undefined
+            : undefined}
         />
-      ) : !uiBusy && message ? <Notice tone={message.tone} title={message.title}>{message.body}</Notice> : null}
+      ) : (
+        <TransientNotice
+          message={!uiBusy && message ? message : null}
+          onDismiss={() => setMessage(null)}
+        />
+      )}
       {preparingPlanAction && (
         <Notice tone="info" title="正在生成配置计划">
           正在执行只读 Preflight，并区分已符合、可自动修复、需要确认和阻塞项目；此阶段不会修改 Windows 或 IIS。
@@ -1267,6 +1274,15 @@ export function CameraFtpImportPanel() {
           onUseRecommendedPort={recommendedPort ? () => useRecommendedPort(recommendedPort) : undefined}
         />
       )}
+      {status?.startupRecovery && status.startupRecovery.status !== "restored" && status.startupRecovery.status !== "already_running" && (
+        <Notice
+          tone={status.startupRecovery.status === "failed" ? "warning" : "info"}
+          title="本次启动未恢复相机 FTP 文件监听"
+        >
+          {status.startupRecovery.warnings[0]?.message
+            || `恢复已跳过（${status.startupRecovery.decision.reasonCode}）。工作台没有修改 IIS、配置或接收目录，请确认当前活动、仓库和 IIS physicalPath 后手动修复。`}
+        </Notice>
+      )}
       <Notice tone="warning" title="仅限可信局域网使用">
         普通 FTP 不加密用户名、密码和传输内容。请只在可信 Wi-Fi 或 Windows 热点中使用，并为相机 FTP 设置独立密码，不要复用 Windows、校园网或其他账户密码。
       </Notice>
@@ -1277,6 +1293,24 @@ export function CameraFtpImportPanel() {
         </summary>
         <div className="mt-4 grid gap-5 xl:grid-cols-2">
           <Panel title="IIS 环境状态" icon={<ShieldCheck size={18} />}>
+          <div className="mb-4 grid gap-2 sm:grid-cols-2">
+            <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2.5">
+              <p className="text-xs font-semibold text-blue-800">{statusUiState.current?.label || "当前普通检测"}</p>
+              <p className="mt-1 text-[11px] leading-4 text-blue-700">
+                {statusUiState.current
+                  ? `${statusUiState.current.status.inspectionLevel === "full" ? "完整" : "部分 / 未知项保留"} · ${formatCameraFtpDateTime(statusUiState.current.inspectedAt)}`
+                  : "等待本次普通权限只读检测"}
+              </p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+              <p className="text-xs font-semibold text-slate-700">最近管理员完整检测</p>
+              <p className="mt-1 text-[11px] leading-4 text-slate-500">
+                {lastFullInspection
+                  ? `${formatCameraFtpDateTime(lastFullInspection.inspectedAt)} · ${lastFullInspection.status.site?.name || "IIS FTP 站点"}`
+                  : "本次运行尚未执行管理员完整检测"}
+              </p>
+            </div>
+          </div>
           <div className="grid gap-2 sm:grid-cols-2">
             <EnvironmentRow label="IIS FTP 组件" meta={featureMeta(status)} detail={featureDetail(status)} />
             <EnvironmentRow label="Microsoft FTP Service" meta={booleanMeta(status?.service?.running, status?.service?.exists ? "已停止" : "未安装")} detail={status?.service?.startType || status?.service?.name} />
@@ -1424,30 +1458,7 @@ export function CameraFtpImportPanel() {
         </Panel>
       </div>
 
-      <Panel title="最近接收" icon={<Activity size={18} />}>
-        <div className="mb-4 flex flex-wrap items-center gap-2 border-b border-slate-100 pb-4">
-          {(watcher?.unstableCount ?? 0) > 0 && <RecentStatChip label="正在接收" tone="info" value={watcher?.unstableCount ?? 0} />}
-          {((watcher?.pendingCount ?? 0) + (watcher?.queuedCount ?? 0)) > 0 && <RecentStatChip label="等待稳定" tone="info" value={(watcher?.pendingCount ?? 0) + (watcher?.queuedCount ?? 0)} />}
-          {(watcher?.importingCount ?? 0) > 0 && <RecentStatChip label="正在导入" tone="info" value={watcher?.importingCount ?? 0} />}
-          {recentStatusCounts.imported > 0 && <RecentStatChip label="成功" tone="success" value={recentStatusCounts.imported} />}
-          {recentStatusCounts.skipped > 0 && <RecentStatChip label="跳过" tone="warning" value={recentStatusCounts.skipped} />}
-          {recentStatusCounts.failed > 0 && <RecentStatChip label="失败" tone="danger" value={recentStatusCounts.failed} />}
-          <div className="ml-auto flex min-w-0 items-center gap-2 text-xs text-slate-400">
-            <Clock3 size={14} />
-            <span className="truncate">最近接收 {formatDateTime(watcher?.lastReceivedAt)}</span>
-          </div>
-        </div>
-        {watcher?.lastError && <Notice className="mb-4" tone="warning" title="watcher 最近错误">{watcher.lastError}</Notice>}
-        {(watcher?.recentRecords?.length ?? 0) > 0 ? (
-          <div className="max-h-[420px] space-y-1.5 overflow-y-auto pr-1">
-            {watcher?.recentRecords.map((record) => <RecentRecordRow key={record.id} record={record} />)}
-          </div>
-        ) : (
-          <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-5 py-7 text-center text-sm text-slate-400">
-            相机 FTP 上传到当前活动“原图/相机FTP”目录后，文件稳定检测和原地导入结果会显示在这里。
-          </div>
-        )}
-      </Panel>
+      <CameraFtpRecentFiles watcher={watcher} />
 
       {showSiteConflict && siteConflict && (
         <Panel title="发现可接管的 IIS FTP 站点" icon={<AlertCircle size={18} />}>
@@ -1499,227 +1510,12 @@ export function CameraFtpImportPanel() {
   );
 }
 
-function Panel({ title, icon, children }: { title: string; icon: ReactNode; children: ReactNode }) {
-  return (
-    <section className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm sm:p-6">
-      <div className="mb-5 flex items-center gap-2 text-slate-900">
-        <span className="text-blue-600">{icon}</span>
-        <h3 className="font-semibold">{title}</h3>
-      </div>
-      {children}
-    </section>
-  );
-}
-
-function CameraFtpProvisioningProgress({ phases }: { phases: ReturnType<typeof getCameraFtpProvisioningProgress> }) {
-  const current = phases.find((phase) => phase.status === "running") || phases[phases.length - 1];
-  return (
-    <section className="rounded-2xl border border-blue-100 bg-blue-50 p-5">
-      <div className="flex items-start gap-3">
-        <Loader2 className="mt-0.5 shrink-0 animate-spin text-blue-600" size={20} />
-        <div className="min-w-0 flex-1">
-          <h3 className="font-semibold text-blue-900">正在执行完整 FTP 配置计划</h3>
-          <p className="mt-1 text-sm leading-6 text-blue-800">{current?.label}。如出现 Windows 用户账户控制窗口，请确认本次工作台操作。</p>
-          <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-            {phases.map((phase, index) => (
-              <div className="flex items-center gap-2 rounded-lg border border-blue-100 bg-white/80 px-3 py-2 text-xs" key={phase.id}>
-                {phase.status === "success" ? (
-                  <CheckCircle2 className="shrink-0 text-emerald-600" size={15} />
-                ) : phase.status === "running" ? (
-                  <Loader2 className="shrink-0 animate-spin text-blue-600" size={15} />
-                ) : (
-                  <span className="flex h-[15px] w-[15px] shrink-0 items-center justify-center rounded-full border border-slate-300 text-[9px] text-slate-400">{index + 1}</span>
-                )}
-                <span className={phase.status === "pending" ? "text-slate-400" : "font-medium text-slate-700"}>{phase.label.replace(/^正在/, "")}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function CameraFtpProvisioningPlanSummary({ plan }: { plan: CameraFtpProvisioningPlanData }) {
-  const blocked = !cameraFtpPlanCanApply(plan);
-  const attentionItems = plan.items.filter((item) => item.status === "blocked" || item.status === "user_confirmation_required");
-  const routineIssues = plan.issues.filter((issue) => issue.level === "info" || issue.level === "auto_repair");
-  const attentionIssues = plan.issues.filter((issue) => issue.level === "blocked" || issue.level === "user_confirmation");
-  const statusCounts = Object.entries(CAMERA_FTP_PLAN_ITEM_STATUS_META)
-    .map(([status, meta]) => ({ status, meta, count: plan.items.filter((item) => item.status === status).length }))
-    .filter((entry) => entry.count > 0);
-  return (
-    <section className={cn("min-w-0 rounded-2xl border p-4 sm:p-5", blocked ? "border-red-200 bg-red-50" : "border-blue-100 bg-blue-50")}>
-      <div className="flex items-start gap-3">
-        {blocked ? <AlertCircle className="mt-0.5 shrink-0 text-red-600" size={20} /> : <Settings2 className="mt-0.5 shrink-0 text-blue-600" size={20} />}
-        <div className="min-w-0 flex-1">
-          <h3 className={cn("font-semibold", blocked ? "text-red-900" : "text-blue-900")}>{blocked ? "配置计划存在阻塞项" : "配置计划摘要"}</h3>
-          <p className={cn("mt-1 text-sm leading-6", blocked ? "text-red-800" : "text-blue-800")}>{plan.summary}</p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {statusCounts.map(({ status, meta, count }) => <StatusPill key={status} tone={meta.tone}>{meta.label} {count}</StatusPill>)}
-          </div>
-          {attentionItems.length > 0 && (
-            <div className="mt-3 space-y-2">
-              {attentionItems.map((item) => {
-                const meta = CAMERA_FTP_PLAN_ITEM_STATUS_META[item.status];
-                return (
-                  <div className="flex min-w-0 items-start justify-between gap-3 rounded-lg bg-white/80 px-3 py-2" key={item.id}>
-                    <div className="min-w-0"><p className="text-xs font-semibold text-slate-700">{item.label}</p><p className="mt-0.5 break-words text-xs leading-5 text-slate-500">{item.summary}</p></div>
-                    <StatusPill tone={meta.tone}>{meta.label}</StatusPill>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-          {attentionIssues.length > 0 && (
-            <div className="mt-3 space-y-2">
-              {attentionIssues.map((issue) => {
-                const meta = CAMERA_FTP_ISSUE_LEVEL_META[issue.level];
-                return <div className="flex min-w-0 items-start gap-2 rounded-lg bg-white/80 px-3 py-2 text-xs" key={issue.id}><StatusPill tone={meta.tone}>{meta.label}</StatusPill><p className="min-w-0 break-words leading-5 text-slate-600"><span className="font-semibold text-slate-700">{issue.title}：</span>{issue.message}</p></div>;
-              })}
-            </div>
-          )}
-          {plan.confirmations.length > 0 && (
-            <div className="mt-3 space-y-2">
-              {plan.confirmations.map((confirmation) => <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800" key={confirmation.key}><span className="font-semibold">{confirmation.title}：</span>{confirmation.message}</div>)}
-            </div>
-          )}
-          <details className="mt-3 rounded-lg border border-white/80 bg-white/60 px-3 py-2">
-            <summary className="cursor-pointer select-none text-xs font-semibold text-slate-700">查看全部配置项（{plan.items.length}）</summary>
-            <div className="mt-2 max-h-[min(38vh,320px)] space-y-2 overflow-y-auto overscroll-contain pr-1">
-            {plan.items.map((item) => {
-              const meta = CAMERA_FTP_PLAN_ITEM_STATUS_META[item.status];
-              return (
-                <div className="flex min-w-0 items-start justify-between gap-3 rounded-lg bg-white/80 px-3 py-2" key={item.id}>
-                  <div className="min-w-0">
-                    <p className="text-xs font-semibold text-slate-700">{item.label}</p>
-                    <p className="mt-0.5 break-words text-xs leading-5 text-slate-500">{item.summary}</p>
-                  </div>
-                  <StatusPill tone={meta.tone}>{meta.label}</StatusPill>
-                </div>
-              );
-            })}
-            </div>
-          </details>
-          {routineIssues.length > 0 && (
-            <details className="mt-2 rounded-lg border border-white/80 bg-white/60 px-3 py-2">
-              <summary className="cursor-pointer select-none text-xs font-semibold text-slate-700">查看普通信息与自动修复项（{routineIssues.length}）</summary>
-              <div className="mt-2 max-h-48 space-y-2 overflow-y-auto overscroll-contain pr-1">
-              {routineIssues.map((issue) => {
-                const meta = CAMERA_FTP_ISSUE_LEVEL_META[issue.level];
-                return (
-                  <div className="flex min-w-0 items-start gap-2 rounded-lg bg-white/80 px-3 py-2 text-xs" key={issue.id}>
-                    <StatusPill tone={meta.tone}>{meta.label}</StatusPill>
-                    <p className="min-w-0 break-words leading-5 text-slate-600"><span className="font-semibold text-slate-700">{issue.title}：</span>{issue.message}</p>
-                  </div>
-                );
-              })}
-              </div>
-            </details>
-          )}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function CameraFtpIssueCenter({ groups, onUseRecommendedPort }: {
-  groups: ReturnType<typeof groupCameraFtpIssues>;
-  onUseRecommendedPort?: () => void;
-}) {
-  const sortedGroups = [...groups].sort((left, right) => {
-    const priority = { blocked: 0, user_confirmation: 1, auto_repair: 2, info: 3 } as const;
-    return priority[left.level] - priority[right.level];
-  });
-  return (
-    <section className="space-y-2" aria-label="FTP 检测结果分类">
-      {sortedGroups.map((group) => {
-        const hasPortChoice = group.level === "user_confirmation" && group.items.some((item) => /PORT|端口/i.test(`${item.code}${item.title}`));
-        const critical = group.level === "blocked" || group.level === "user_confirmation";
-        return (
-          <details className={cn("rounded-xl border bg-white px-4 py-3 shadow-sm", group.level === "blocked" ? "border-red-200" : group.level === "user_confirmation" ? "border-amber-200" : "border-slate-100")} key={group.level} open={critical}>
-            <summary className="cursor-pointer select-none text-sm font-semibold text-slate-800"><span className="mr-2">{group.label}</span><StatusPill tone={group.tone}>{group.items.length} 项</StatusPill>{!critical && <span className="ml-2 text-xs font-normal text-slate-400">默认收起</span>}</summary>
-            <div className="mt-3 max-h-52 space-y-2 overflow-y-auto overscroll-contain pr-1">
-              {group.items.map((item) => (
-                <div className="min-w-0 rounded-lg bg-slate-50 px-3 py-2 text-xs" key={item.id}>
-                  <p className="font-semibold text-slate-700">{item.title}</p>
-                  <p className="mt-0.5 break-words leading-5 text-slate-600">{item.message}</p>
-                </div>
-              ))}
-              {hasPortChoice && onUseRecommendedPort && (
-                <button className="rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-semibold text-amber-800 shadow-sm hover:bg-amber-50" onClick={onUseRecommendedPort} type="button">
-                  使用推荐端口
-                </button>
-              )}
-            </div>
-          </details>
-        );
-      })}
-    </section>
-  );
-}
-
-function DiagnosticErrorCard({ diagnostic, onAdopt, onCopy, onOpenLogs, onRetry, onSelectPort }: {
-  diagnostic: CameraFtpErrorPresentation;
-  onAdopt?: () => void;
-  onCopy: () => void;
-  onOpenLogs: () => void;
-  onRetry?: () => void;
-  onSelectPort?: (port: number) => void;
-}) {
-  const warning = diagnostic.tone === "warning";
-  return (
-    <section className={cn(
-      "rounded-2xl border p-5",
-      warning ? "border-amber-200 bg-amber-50" : "border-red-200 bg-red-50"
-    )}>
-      <div className="flex items-start gap-3">
-        <AlertCircle className={warning ? "text-amber-600" : "text-red-600"} size={20} />
-        <div className="min-w-0 flex-1">
-          <h3 className={cn("font-semibold", warning ? "text-amber-900" : "text-red-900")}>{diagnostic.title}</h3>
-          <p className={cn("mt-1 text-sm leading-6", warning ? "text-amber-800" : "text-red-800")}>{diagnostic.body}</p>
-          <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
-            <div className="rounded-lg bg-white/70 px-3 py-2"><dt className="text-slate-400">失败阶段</dt><dd className="mt-1 font-medium text-slate-700">{diagnostic.stage}</dd></div>
-            <div className="rounded-lg bg-white/70 px-3 py-2"><dt className="text-slate-400">建议</dt><dd className="mt-1 leading-5 text-slate-700">{diagnostic.advice}</dd></div>
-            {diagnostic.conflictPort !== undefined && <div className="rounded-lg bg-white/70 px-3 py-2"><dt className="text-slate-400">冲突端口</dt><dd className="mt-1 font-medium text-slate-700">{diagnostic.conflictPort}</dd></div>}
-            {diagnostic.conflictOwner && <div className="rounded-lg bg-white/70 px-3 py-2"><dt className="text-slate-400">占用来源</dt><dd className="mt-1 font-medium text-slate-700">{diagnostic.conflictOwner}</dd></div>}
-            {diagnostic.rollbackAttempted !== undefined && <div className="rounded-lg bg-white/70 px-3 py-2"><dt className="text-slate-400">自动回滚</dt><dd className="mt-1 font-medium text-slate-700">{diagnostic.rollbackSummary || (diagnostic.rollbackAttempted ? "已尝试，结果未知" : "未修改系统，无需回滚")}</dd></div>}
-          </dl>
-          <div className="mt-4 flex flex-wrap gap-2">
-            {onRetry && <button className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 shadow-sm hover:bg-slate-50" onClick={onRetry} type="button">重试</button>}
-            {onSelectPort && diagnostic.availablePorts.slice(0, 3).map((port) => <button className="rounded-lg border border-blue-600 bg-blue-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-blue-700" key={port} onClick={() => onSelectPort(port)} type="button">选择端口 {port}</button>)}
-            {onAdopt && <button className="rounded-lg border border-amber-500 bg-white px-3 py-2 text-xs font-semibold text-amber-800 shadow-sm hover:bg-amber-50" onClick={onAdopt} type="button">接管现有站点</button>}
-            <button className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 shadow-sm hover:bg-slate-50" onClick={onCopy} type="button">复制技术详情</button>
-            <button className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 shadow-sm hover:bg-slate-50" onClick={onOpenLogs} type="button">打开日志目录</button>
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function SummaryTile({ label, value, tone = "neutral", title, className }: { label: string; value: string; tone?: "neutral" | "success" | "warning" | "danger"; title?: string; className?: string }) {
+function SummaryTile({ label, value, tone = "neutral", title, className }: { label: string; value: string; tone?: StatusTone; title?: string; className?: string }) {
   return (
     <div className={cn("min-w-0 rounded-xl bg-slate-50 px-4 py-3", className)}>
       <p className="text-xs text-slate-400">{label}</p>
-      <p className={cn("mt-1 truncate text-sm font-medium", tone === "success" ? "text-emerald-600" : tone === "warning" ? "text-amber-700" : tone === "danger" ? "text-red-600" : "text-slate-800")} title={title || value}>{value}</p>
+      <p className={cn("mt-1 truncate text-sm font-medium", tone === "success" ? "text-emerald-600" : tone === "info" ? "text-blue-600" : tone === "warning" ? "text-amber-700" : tone === "danger" ? "text-red-600" : "text-slate-800")} title={title || value}>{value}</p>
     </div>
-  );
-}
-
-function RecentStatChip({ label, value, tone }: { label: string; value: number; tone: "info" | "success" | "warning" | "danger" }) {
-  const toneClass = tone === "success"
-    ? "border-emerald-100 bg-emerald-50 text-emerald-700"
-    : tone === "warning"
-      ? "border-amber-100 bg-amber-50 text-amber-700"
-      : tone === "danger"
-        ? "border-red-100 bg-red-50 text-red-700"
-        : "border-blue-100 bg-blue-50 text-blue-700";
-  return (
-    <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium", toneClass)}>
-      <span>{label}</span>
-      <strong className="font-semibold tabular-nums">{value}</strong>
-    </span>
   );
 }
 
@@ -1732,7 +1528,12 @@ function ParameterTile({ label, value }: { label: string; value: string }) {
   );
 }
 
-type StatusMeta = { tone: "success" | "warning" | "danger" | "neutral" | "info"; label: string };
+type StatusMeta = { tone: StatusTone; label: string };
+
+function operationalStatusMeta(status: OperationalStatus, label?: string): StatusMeta {
+  const semantic = getOperationalStatusSemantic(status);
+  return { tone: semantic.tone, label: label || semantic.label };
+}
 
 function EnvironmentRow({ label, meta, detail }: { label: string; meta: StatusMeta; detail?: string }) {
   return (
@@ -1797,32 +1598,6 @@ function NetworkModeCard({ title, body, addresses, empty, onCopy }: { title: str
   );
 }
 
-function RecentRecordRow({ record }: { record: CameraFtpRecentRecordData }) {
-  const meta = recordStatusMeta(record.status);
-  const statusIcon = recordStatusIcon(record.status);
-  const detailMessage = record.status === "failed" ? record.error || record.reason : "";
-  return (
-    <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2.5">
-      <div className="flex flex-wrap items-center justify-between gap-2.5">
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-slate-800" title={record.filename}>{record.filename}</p>
-          <div className="mt-1 flex flex-wrap gap-x-2.5 gap-y-1 text-[11px] text-slate-400">
-            <span>{formatBytes(record.size)}</span>
-            <span>接收 {formatDateTime(record.receivedAt || record.detectedAt)}</span>
-            {record.importedAt && <span>导入 {formatDateTime(record.importedAt)}</span>}
-          </div>
-        </div>
-        <StatusPill tone={meta.tone}><span className="flex items-center gap-1.5">{statusIcon}{meta.label}</span></StatusPill>
-      </div>
-      {detailMessage && (
-        <p className="mt-2 break-words text-xs leading-5 text-red-600">
-          {detailMessage}
-        </p>
-      )}
-    </div>
-  );
-}
-
 function buildAddressOptions(status: CameraFtpStatusData | null): AddressOption[] {
   const network = status?.networkAddresses;
   const result: AddressOption[] = [];
@@ -1849,29 +1624,32 @@ function buildAddressOptions(status: CameraFtpStatusData | null): AddressOption[
 }
 
 function getOverallStatus(status: CameraFtpStatusData | null, action: string | null, uacCancelled = false, serviceReady = false): StatusMeta {
-  if (action) return { tone: "info", label: action === "start" || action === "restart" ? "正在启动" : "正在配置" };
-  if (uacCancelled) return { tone: "warning", label: "UAC 被取消" };
-  if (!status) return { tone: "danger", label: "配置异常" };
-  if (!status.platform?.supported) return { tone: "danger", label: "配置异常" };
-  if (serviceReady) return { tone: "success", label: "运行中" };
-  if (status.lastError && status.inspectionLevel !== "partial") return { tone: "danger", label: "配置异常" };
-  if (status.conflicts?.items?.length || status.port?.conflict === true || status.account?.conflict === true) return { tone: "warning", label: "需要用户选择" };
-  if (!status.passwordConfigured || !status.activeEvent?.valid) return { tone: "warning", label: "需要配置" };
-  if (status.windowsFeatures?.ftpService?.installed === false || status.site?.exists === false) return { tone: "warning", label: "需要配置" };
-  if (status.service?.running === false || status.site?.started === false) return { tone: "warning", label: "已停止" };
-  if (hasUnknownSystemDetection(status)) return { tone: "warning", label: "需管理员检测" };
-  if (!status.passwordConfigured || !status.activeEvent?.valid || status.binding?.correct === false || status.authentication?.correct === false || status.authorization?.correct === false || status.acl?.correct === false || status.firewall?.correct === false) {
-    return { tone: "warning", label: "配置不完整" };
+  if (action) return operationalStatusMeta(action === "start" || action === "restart" ? "running" : "processing", action === "start" || action === "restart" ? "正在启动" : "正在配置");
+  if (uacCancelled) return operationalStatusMeta("warning", "UAC 被取消");
+  if (!status) return operationalStatusMeta("unknown", "状态未知");
+  if (!status.platform?.supported) return operationalStatusMeta("warning", "当前平台不支持");
+  if (serviceReady) return operationalStatusMeta("running", "运行中");
+  if (statusRequiresAdminInspection(status)) return operationalStatusMeta("admin_required", "需管理员检测");
+  if (status.lastError) return operationalStatusMeta("failed", "配置异常");
+  if (status.conflicts?.items?.length || status.port?.conflict === true || status.account?.conflict === true) return operationalStatusMeta("warning", "需要用户选择");
+  if (!status.passwordConfigured || !status.activeEvent?.valid) return operationalStatusMeta("warning", "需要配置");
+  if (status.windowsFeatures?.ftpService?.installed === false || status.site?.exists === false) return operationalStatusMeta("warning", "需要配置");
+  if (status.service?.running === false || status.site?.started === false) {
+    return operationalStatusMeta("stopped", status.activeEvent?.id ? "已停止，活动仍关联" : "已停止");
   }
-  return { tone: "success", label: "运行中" };
+  if (hasUnknownSystemDetection(status)) return operationalStatusMeta("admin_required", "需管理员检测");
+  if (!status.passwordConfigured || !status.activeEvent?.valid || status.binding?.correct === false || status.authentication?.correct === false || status.authorization?.correct === false || status.acl?.correct === false || status.firewall?.correct === false) {
+    return operationalStatusMeta("warning", "配置不完整");
+  }
+  return operationalStatusMeta("running", "运行中");
 }
 
 function featureMeta(status: CameraFtpStatusData | null): StatusMeta {
-  if (!status?.windowsFeatures) return { tone: "neutral", label: "检测失败" };
+  if (!status?.windowsFeatures) return operationalStatusMeta("unknown", "检测失败");
   const features = [status.windowsFeatures.ftpService, status.windowsFeatures.ftpExtensibility, status.windowsFeatures.managementTools];
-  if (features.some((item) => item?.installed == null)) return { tone: "neutral", label: "需管理员检测" };
-  if (features.every((item) => item?.installed)) return { tone: "success", label: "正常" };
-  return { tone: "warning", label: "未安装" };
+  if (features.some((item) => item?.installed == null)) return operationalStatusMeta("admin_required", "需管理员检测");
+  if (features.every((item) => item?.installed)) return operationalStatusMeta("success", "正常");
+  return operationalStatusMeta("warning", "未安装");
 }
 
 function featureDetail(status: CameraFtpStatusData | null): string {
@@ -1888,16 +1666,16 @@ function featureDetail(status: CameraFtpStatusData | null): string {
 }
 
 function booleanMeta(value: boolean | null | undefined, falseLabel: string): StatusMeta {
-  if (value === true) return { tone: "success", label: "正常" };
-  if (value == null) return { tone: "neutral", label: "需管理员检测" };
-  return { tone: falseLabel.includes("冲突") ? "danger" : "warning", label: falseLabel };
+  if (value === true) return operationalStatusMeta("success", "正常");
+  if (value == null) return operationalStatusMeta("admin_required", "需管理员检测");
+  return operationalStatusMeta("warning", falseLabel);
 }
 
 function portMeta(status: CameraFtpStatusData | null): StatusMeta {
-  if (!status?.port) return { tone: "neutral", label: "检测失败" };
-  if (status.port.conflict === true) return { tone: "danger", label: "冲突" };
-  if (status.port.listening == null) return { tone: "neutral", label: "检测失败" };
-  return status.port.listening ? { tone: "success", label: "正常" } : { tone: "warning", label: "未监听" };
+  if (!status?.port) return operationalStatusMeta("unknown", "检测失败");
+  if (status.port.conflict === true) return operationalStatusMeta("warning", "冲突");
+  if (status.port.listening == null) return operationalStatusMeta("unknown", "检测失败");
+  return status.port.listening ? operationalStatusMeta("success", "正常") : operationalStatusMeta("stopped", "未监听");
 }
 
 function portDetail(status: CameraFtpStatusData | null): string {
@@ -1907,13 +1685,13 @@ function portDetail(status: CameraFtpStatusData | null): string {
 }
 
 function getPortAvailabilityMeta(valid: boolean, portCheck: CameraFtpPortCheckData | null, checking: boolean): StatusMeta {
-  if (!valid) return { tone: "danger", label: "输入无效" };
-  if (checking) return { tone: "info", label: "检测中" };
-  if (!portCheck) return { tone: "neutral", label: "等待检测" };
-  if (portCheck.port.reserved === true) return { tone: "danger", label: "Windows 保留" };
-  if (portCheck.port.conflict === true) return { tone: "danger", label: "端口冲突" };
-  if (portCheck.requiresAdminForFullInspection || portCheck.port.conflict === null) return { tone: "warning", label: "需管理员确认" };
-  return { tone: "success", label: "可用" };
+  if (!valid) return operationalStatusMeta("warning", "输入无效");
+  if (checking) return operationalStatusMeta("processing", "检测中");
+  if (!portCheck) return operationalStatusMeta("unknown", "等待检测");
+  if (portCheck.port.reserved === true) return operationalStatusMeta("warning", "Windows 保留");
+  if (portCheck.port.conflict === true) return operationalStatusMeta("warning", "端口冲突");
+  if (portCheck.requiresAdminForFullInspection || portCheck.port.conflict === null) return operationalStatusMeta("admin_required", "需管理员确认");
+  return operationalStatusMeta("success", "可用");
 }
 
 function buildPortConflictSummary(check: CameraFtpPortCheckData | null): string {
@@ -1932,12 +1710,12 @@ function buildPortConflictSummary(check: CameraFtpPortCheckData | null): string 
 }
 
 function accountMeta(status: CameraFtpStatusData | null): StatusMeta {
-  if (!status?.account) return { tone: "neutral", label: "检测失败" };
-  if (status.account.conflict === true) return { tone: "danger", label: "冲突" };
-  if (status.account.exists == null || status.account.enabled == null) return { tone: "neutral", label: "需管理员检测" };
-  if (!status.account.exists) return { tone: "warning", label: "未配置" };
-  if (!status.account.enabled) return { tone: "danger", label: "已禁用" };
-  return { tone: "success", label: "正常" };
+  if (!status?.account) return operationalStatusMeta("unknown", "检测失败");
+  if (status.account.conflict === true) return operationalStatusMeta("warning", "冲突");
+  if (status.account.exists == null || status.account.enabled == null) return operationalStatusMeta("admin_required", "需管理员检测");
+  if (!status.account.exists) return operationalStatusMeta("warning", "未配置");
+  if (!status.account.enabled) return operationalStatusMeta("warning", "已禁用");
+  return operationalStatusMeta("success", "正常");
 }
 
 function hasUnknownSystemDetection(status: CameraFtpStatusData): boolean {
@@ -1961,14 +1739,22 @@ function hasUnknownSystemDetection(status: CameraFtpStatusData): boolean {
   ].some((value) => value == null);
 }
 
-function getServiceSummary(status: CameraFtpStatusData | null, action: string | null, serviceReady: boolean): { label: string; tone: "neutral" | "success" | "warning" | "danger" } {
-  if (action === "start" || action === "restart") return { label: "正在启动", tone: "neutral" };
-  if (action) return { label: "正在配置", tone: "neutral" };
-  if (serviceReady) return { label: "运行中", tone: "success" };
-  if (!status || status.lastError) return { label: "配置异常", tone: "danger" };
-  if (!status.initialized || status.site?.exists === false) return { label: "需要配置", tone: "warning" };
-  if (status.site?.started == null) return { label: "需要管理员检测", tone: "neutral" };
-  return { label: "已停止", tone: "warning" };
+function statusRequiresAdminInspection(status: CameraFtpStatusData): boolean {
+  return status.inspectionLevel === "partial"
+    || status.requiresAdmin === true
+    || CAMERA_FTP_ADMIN_REQUIRED_CODES.has(status.lastError?.code || "");
+}
+
+function getServiceSummary(status: CameraFtpStatusData | null, action: string | null, serviceReady: boolean): StatusMeta {
+  if (action === "start" || action === "restart") return operationalStatusMeta("running", "正在启动");
+  if (action) return operationalStatusMeta("processing", "正在配置");
+  if (serviceReady) return operationalStatusMeta("running", "运行中");
+  if (!status) return operationalStatusMeta("unknown", "状态未知");
+  if (statusRequiresAdminInspection(status)) return operationalStatusMeta("admin_required", "需要管理员检测");
+  if (status.lastError) return operationalStatusMeta("failed", "配置异常");
+  if (!status.initialized || status.site?.exists === false) return operationalStatusMeta("warning", "需要配置");
+  if (status.site?.started == null) return operationalStatusMeta("admin_required", "需要管理员检测");
+  return operationalStatusMeta("stopped", status.activeEvent?.id ? "已停止，活动仍关联" : "已停止");
 }
 
 type CameraActivityMeta = StatusMeta & {
@@ -1979,19 +1765,20 @@ type CameraActivityMeta = StatusMeta & {
 function getCameraActivityMeta(watcher: CameraFtpWatcherData | undefined, serviceReady: boolean): CameraActivityMeta {
   if (!serviceReady) {
     return {
-      tone: "neutral",
+      tone: getOperationalStatusSemantic("stopped").tone,
       label: "暂无相机连接",
       description: "FTP 服务未运行时相机无法建立上传连接。",
       lastConnectionAt: watcher?.lastReceivedAt || ""
     };
   }
-  const transferring = (watcher?.unstableCount ?? 0) > 0
+  const transferring = watcher?.busy === true
+    || (watcher?.unstableCount ?? 0) > 0
     || (watcher?.pendingCount ?? 0) > 0
     || (watcher?.queuedCount ?? 0) > 0
     || (watcher?.importingCount ?? 0) > 0;
   if (transferring) {
     return {
-      tone: "info",
+      tone: getOperationalStatusSemantic("receiving").tone,
       label: "正在传输",
       description: "watcher 检测到文件正在接收、等待稳定或进入自动导入流程。",
       lastConnectionAt: watcher?.lastReceivedAt || ""
@@ -2001,7 +1788,7 @@ function getCameraActivityMeta(watcher: CameraFtpWatcherData | undefined, servic
   const recentlyActive = Number.isFinite(lastReceivedAt) && Date.now() - lastReceivedAt <= 5 * 60 * 1000;
   if (recentlyActive) {
     return {
-      tone: "success",
+      tone: getOperationalStatusSemantic("running").tone,
       label: "最近有相机连接",
       description: "最近 5 分钟检测到相机 FTP 文件活动；这表示近期连接，不代表相机仍保持在线。",
       lastConnectionAt: watcher?.lastReceivedAt || ""
@@ -2009,44 +1796,18 @@ function getCameraActivityMeta(watcher: CameraFtpWatcherData | undefined, servic
   }
   if (watcher?.running) {
     return {
-      tone: "neutral",
+      tone: getOperationalStatusSemantic("unknown").tone,
       label: "暂无相机连接活动",
       description: "FTP 已就绪，但最近 5 分钟没有检测到文件接收活动。",
       lastConnectionAt: watcher.lastReceivedAt || ""
     };
   }
   return {
-    tone: "warning",
+    tone: getOperationalStatusSemantic("unknown").tone,
     label: "连接状态未知",
     description: "当前没有可用于推断相机活动的 watcher 数据。",
     lastConnectionAt: watcher?.lastReceivedAt || ""
   };
-}
-
-function countRecentRecordStatuses(records: CameraFtpRecentRecordData[]): Record<CameraFtpRecentRecordData["status"], number> {
-  return records.reduce<Record<CameraFtpRecentRecordData["status"], number>>((counts, record) => {
-    counts[record.status] += 1;
-    return counts;
-  }, { receiving: 0, waiting: 0, importing: 0, imported: 0, skipped: 0, failed: 0 });
-}
-
-function recordStatusMeta(status: CameraFtpRecentRecordData["status"]): StatusMeta {
-  const map: Record<CameraFtpRecentRecordData["status"], StatusMeta> = {
-    receiving: { tone: "info", label: "正在接收" },
-    waiting: { tone: "info", label: "等待稳定" },
-    importing: { tone: "info", label: "正在导入" },
-    imported: { tone: "success", label: "导入成功" },
-    skipped: { tone: "warning", label: "重复跳过" },
-    failed: { tone: "danger", label: "导入失败" }
-  };
-  return map[status];
-}
-
-function recordStatusIcon(status: CameraFtpRecentRecordData["status"]): ReactNode {
-  if (status === "imported") return <CheckCircle2 size={13} />;
-  if (status === "failed") return <AlertCircle size={13} />;
-  if (status === "receiving" || status === "waiting" || status === "importing") return <Loader2 className="animate-spin" size={13} />;
-  return <Clock3 size={13} />;
 }
 
 function apiErrorMessage<T>(response: ApiResponse<T>, fallback: string): MessageState {
@@ -2147,18 +1908,4 @@ function buildCameraParameters(status: CameraFtpStatusData | null, address: stri
     "多相机：请为不同相机设置不同文件名前缀，避免同名文件被覆盖。",
     "说明：此文本不包含 FTP 密码。"
   ].join("\n");
-}
-
-function formatDateTime(value?: string): string {
-  if (!value) return "暂无";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
-}
-
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-  return `${(bytes / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
 }

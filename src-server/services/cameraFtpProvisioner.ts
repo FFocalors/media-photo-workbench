@@ -86,6 +86,7 @@ export interface CameraFtpProvisioningPreflight {
 
 export interface CameraFtpProvisioningPlan {
   planId: string;
+  operationId?: string;
   target: CameraFtpProvisioningGoal;
   targetState: "running";
   summary: string;

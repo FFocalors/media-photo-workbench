@@ -107,6 +107,7 @@ function getDiskSpace(repoPath: string): DiskSpaceInfo {
   const safePath = repoPath.replace(/'/g, "''");
 
   const psScript = `
+$ProgressPreference = 'SilentlyContinue'
 $path = '${safePath}'
 $volume = Get-Volume -FilePath $path -ErrorAction Stop
 @{

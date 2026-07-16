@@ -88,11 +88,34 @@ function getSameOriginApiBase(): string | null {
 export interface ApiResponse<T> {
   ok: boolean;
   data: T;
-  error: { code: string; message: string; details?: ApiErrorDetails } | null;
+  error: ApiError | null;
+  operationId?: string;
+}
+
+export interface ApiError {
+  code: string;
+  title?: string;
+  message: string;
+  impact?: string;
+  nextAction?: string;
+  rollbackStatus?: string;
+  operationId?: string;
+  retryable?: boolean;
+  technicalDetails?: string;
+  details?: ApiErrorDetails;
 }
 
 export interface ApiErrorDetails {
+  title?: string;
+  impact?: string;
+  nextAction?: string;
+  advice?: string;
+  rollbackStatus?: string;
+  retryable?: boolean;
+  technicalDetails?: string;
   operationId?: string;
+  childOperationId?: string;
+  parentOperationId?: string;
   operation?: string;
   scriptName?: string;
   stage?: string;
@@ -135,23 +158,138 @@ async function requestFromBase<T>(
   return parseApiResponse<T>(res);
 }
 
-async function parseApiResponse<T>(res: Response): Promise<ApiResponse<T>> {
+function redactErrorResponseText(value: string): string {
+  return value
+    .replace(/("?[\w.-]*(?:password|passphrase|secret|token|securestring|credential)[\w.-]*"?\s*[=:：]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;}]+)/gi, "$1[已隐藏]")
+    .replace(/[A-Za-z]:\\+[^\r\n"',;}]+/g, "[路径已隐藏]")
+    .replace(/\\\\+[^\r\n"',;}]+/g, "[路径已隐藏]");
+}
+
+function apiProtocolFailure<T>(input: {
+  code: string;
+  title: string;
+  message: string;
+  status: number;
+  contentType: string;
+  operationId?: string;
+}): ApiResponse<T> {
+  return {
+    ok: false,
+    data: null as T,
+    error: {
+      code: input.code,
+      title: input.title,
+      message: input.message,
+      impact: "当前操作没有得到可确认的 API 结果。",
+      nextAction: "请确认主机服务仍在运行后重试；若问题持续，请使用操作 ID 查看后端日志。",
+      rollbackStatus: "unknown",
+      operationId: input.operationId,
+      retryable: true,
+      technicalDetails: `HTTP ${input.status || "unknown"}；Content-Type: ${input.contentType || "unknown"}`
+    },
+    operationId: input.operationId
+  };
+}
+
+export async function parseApiResponse<T>(res: Response): Promise<ApiResponse<T>> {
   const contentType = res.headers.get("Content-Type") || "";
-  if (contentType.includes("application/json")) {
-    return await res.json() as ApiResponse<T>;
+  const headerOperationId = res.headers.get("X-Operation-Id") || undefined;
+  const rawText = await res.text();
+  if (/\bjson\b/i.test(contentType)) {
+    let parsedValue: unknown;
+    try {
+      parsedValue = JSON.parse(rawText);
+    } catch {
+      const failure = apiProtocolFailure<T>({
+        code: "HTTP_INVALID_JSON_RESPONSE",
+        title: "接口响应损坏",
+        message: "接口声明返回 JSON，但内容不完整或无法解析。",
+        status: res.status,
+        contentType,
+        operationId: headerOperationId
+      });
+      if (failure.error) failure.error.technicalDetails += "；JSON 解析失败";
+      return failure;
+    }
+
+    if (!parsedValue || typeof parsedValue !== "object" || Array.isArray(parsedValue)) {
+      return apiProtocolFailure<T>({
+        code: "HTTP_INVALID_JSON_ENVELOPE",
+        title: "接口响应格式异常",
+        message: "接口返回的 JSON 不符合统一响应格式。",
+        status: res.status,
+        contentType,
+        operationId: headerOperationId
+      });
+    }
+
+    const parsed = parsedValue as Record<string, unknown>;
+    const bodyOperationId = typeof parsed.operationId === "string" ? parsed.operationId : undefined;
+    const operationId = headerOperationId || bodyOperationId;
+    const hasData = Object.prototype.hasOwnProperty.call(parsed, "data");
+    const hasError = Object.prototype.hasOwnProperty.call(parsed, "error");
+    const errorValue = parsed.error;
+    const validError = Boolean(
+      errorValue
+      && typeof errorValue === "object"
+      && !Array.isArray(errorValue)
+      && typeof (errorValue as Record<string, unknown>).code === "string"
+      && typeof (errorValue as Record<string, unknown>).message === "string"
+    );
+    const validSuccess = parsed.ok === true && hasData && hasError && errorValue === null;
+    const validFailure = parsed.ok === false && hasData && parsed.data === null && hasError && validError;
+
+    if (!validSuccess && !validFailure) {
+      return apiProtocolFailure<T>({
+        code: "HTTP_INVALID_JSON_ENVELOPE",
+        title: "接口响应格式异常",
+        message: "接口返回的 JSON 缺少有效的 ok、data 或 error 字段。",
+        status: res.status,
+        contentType,
+        operationId
+      });
+    }
+    if (validSuccess && !res.ok) {
+      return apiProtocolFailure<T>({
+        code: "HTTP_STATUS_ENVELOPE_MISMATCH",
+        title: "接口状态不一致",
+        message: "接口返回了失败的 HTTP 状态，但响应内容却声明操作成功；本次结果不会按成功处理。",
+        status: res.status,
+        contentType,
+        operationId
+      });
+    }
+
+    const normalized = { ...parsed, operationId } as unknown as ApiResponse<T>;
+    if (validFailure && normalized.error && operationId) {
+      normalized.error = { ...normalized.error, operationId };
+    }
+    return normalized;
   }
 
-  const text = await res.text();
+  const text = redactErrorResponseText(rawText);
+  const operationId = headerOperationId;
   const looksLikeHtml = /^\s*<!doctype html/i.test(text) || /^\s*<html/i.test(text);
+  const message = looksLikeHtml
+    ? "接口返回了前端页面而不是 JSON。请重启完整应用，确认本地后端已加载最新接口。"
+    : (text.trim() || `接口返回非 JSON 响应，HTTP ${res.status}`);
   return {
     ok: false,
     data: null as T,
     error: {
       code: `HTTP_${res.status || "NON_JSON_RESPONSE"}`,
-      message: looksLikeHtml
-        ? "接口返回了前端页面而不是 JSON。请重启完整应用，确认本地后端已加载最新接口。"
-        : (text.trim() || `接口返回非 JSON 响应，HTTP ${res.status}`)
-    }
+      title: looksLikeHtml ? "接口路由异常" : "接口响应异常",
+      message,
+      impact: "当前操作没有得到可确认的 API 结果。",
+      nextAction: looksLikeHtml
+        ? "请重启完整应用，并确认页面与本地后端来自同一版本。"
+        : "请确认主机服务仍在运行后重试；若问题持续，请查看后端日志。",
+      rollbackStatus: "unknown",
+      operationId,
+      retryable: true,
+      technicalDetails: `HTTP ${res.status || "unknown"}；Content-Type: ${contentType || "unknown"}`
+    },
+    operationId
   };
 }
 
@@ -412,6 +550,7 @@ export interface CameraFtpAclData {
 
 export interface CameraFtpWatcherData {
   running: boolean;
+  busy: boolean;
   directory: string;
   eventId: string;
   eventName: string;
@@ -502,9 +641,32 @@ export interface CameraFtpConflictsData {
   items: CameraFtpConflictItemData[];
 }
 
+export interface CameraFtpStartupRecoveryWarningData {
+  code: string;
+  message: string;
+}
+
+export interface CameraFtpStartupRecoveryData {
+  status: "restored" | "skipped" | "failed" | "already_running";
+  checkedAt: string;
+  decision: {
+    action: "restore" | "keep" | "skip";
+    status: "eligible" | "already_running" | "skipped";
+    reasonCode: string;
+    inspectionLevel: "full" | "partial" | "unknown" | "admin_required";
+    shouldStartWatcher: boolean;
+    shouldScan: boolean;
+    warnings: CameraFtpStartupRecoveryWarningData[];
+  };
+  warnings: CameraFtpStartupRecoveryWarningData[];
+}
+
 export interface CameraFtpStatusData {
   provider: "iis";
   inspectionLevel: "full" | "partial";
+  inspectionOutcome?: "confirmed" | "partial" | "unknown" | "admin_required";
+  inspectionSource?: "ordinary" | "administrator";
+  inspectedAt?: string;
   requiresAdminForFullInspection: boolean;
   requiresAdminForSystemChanges: boolean;
   platform: CameraFtpPlatformData;
@@ -533,12 +695,52 @@ export interface CameraFtpStatusData {
   repairable: boolean;
   missingItems: string[];
   lastError: { code: string; message: string } | null;
+  startupRecovery?: CameraFtpStartupRecoveryData | null;
+}
+
+export interface CameraFtpDiagnosticData {
+  generatedAt: string;
+  operationId: string;
+  diagnosticRequestOperationId: string;
+  platform: {
+    os: string;
+    arch: string;
+    release: string;
+    version: string;
+  };
+  ftp: {
+    provider: "iis";
+    siteName: string;
+    managedSiteId: number | null;
+    accountManaged: boolean;
+    controlPort: number;
+    passivePortStart: number;
+    passivePortEnd: number;
+    activeEvent: { id: string; name: string } | null;
+    inspectionLevel: "full" | "partial";
+    inspectionOutcome: "confirmed" | "partial" | "unknown" | "admin_required";
+    inspectionSource: "ordinary" | "administrator";
+    initialized: boolean;
+    requiresAdmin: boolean;
+    watcher: {
+      running: boolean;
+      busy: boolean;
+      eventId: string;
+      pendingCount: number;
+      queuedCount: number;
+      importingCount: number;
+      unstableCount: number;
+      lastScanAt: string;
+    };
+    lastErrorCode: string | null;
+  };
 }
 
 export interface CameraFtpOperationData {
   action: "setup" | "adopt-site" | "start" | "stop" | "restart" | "repair" | "credentials" | "active-event" | "open-folder";
   status: "pending" | "running" | "success" | "failed";
   message: string;
+  operationId?: string;
   steps?: Array<{ id?: string; label: string; status: "pending" | "running" | "success" | "failed"; message?: string }>;
   requiresAdmin?: boolean;
 }
@@ -584,6 +786,7 @@ export interface CameraFtpIssueData {
 
 export interface CameraFtpProvisioningPlanData {
   planId: string;
+  operationId?: string;
   target: CameraFtpProvisioningGoal;
   summary: string;
   items: CameraFtpProvisioningPlanItemData[];
@@ -607,6 +810,10 @@ export interface CameraFtpSiteDiscoveryData {
 
 export async function fetchCameraFtpStatus(forceSystemRefresh = false): Promise<ApiResponse<CameraFtpStatusData>> {
   return request<CameraFtpStatusData>(`/api/camera-ftp/status${forceSystemRefresh ? "?refresh=1" : ""}`);
+}
+
+export async function fetchCameraFtpDiagnostics(): Promise<ApiResponse<CameraFtpDiagnosticData>> {
+  return request<CameraFtpDiagnosticData>("/api/camera-ftp/diagnostics");
 }
 
 function postCameraFtpAction<T = CameraFtpActionData>(path: string, body?: unknown): Promise<ApiResponse<T>> {

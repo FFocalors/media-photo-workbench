@@ -1,4 +1,5 @@
 import type { TaskData, TaskErrorItem } from "./api";
+import { getOperationalStatusSemantic } from "./statusSemantics";
 
 export type NormalizedTaskStats = {
   total: number;
@@ -85,11 +86,10 @@ export function getTaskStats(task: TaskData | null | undefined): NormalizedTaskS
 }
 
 export function taskStatusLabel(status: TaskData["status"]): string {
-  if (status === "pending") return "等待中";
+  // Keep the established task copy while sourcing every other label from the
+  // shared operational status contract.
   if (status === "running") return "执行中";
-  if (status === "success") return "已完成";
-  if (status === "failed") return "失败";
-  return "已取消";
+  return getOperationalStatusSemantic(status).label;
 }
 
 export function formatTaskDuration(ms?: number | null): string {

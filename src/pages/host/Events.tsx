@@ -15,7 +15,7 @@ import {
   updateEventStatus
 } from "../../lib/api";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
-import { Notice } from "../../components/ui/States";
+import { TransientNotice } from "../../components/ui/States";
 
 const statusActions: Array<{ status: EventStatus; label: string; icon: typeof PlayCircle }> = [
   { status: "active", label: "设为进行中", icon: PlayCircle },
@@ -221,10 +221,11 @@ export function EventsPage() {
         setPurgeTarget(null);
         setPurgeConfirmName("");
         await loadEvents(activeTab);
+        const cleanupIncomplete = res.data.errors.length > 0;
         setMessage({
-          tone: res.data.errors.length > 0 ? "warning" : "success",
-          title: "活动已永久删除",
-          body: `删除活动记录 ${res.data.deletedRecords.events} 条、图片记录 ${res.data.deletedRecords.images} 条、关联标签 ${res.data.deletedRecords.imageTags} 条、下载日志 ${res.data.deletedRecords.downloadLogs} 条、导出任务 ${res.data.deletedRecords.exportJobs} 条、操作日志 ${res.data.deletedRecords.operationLogs} 条、归档摘要 ${res.data.deletedRecords.archivedEvents} 条。working 和归档目录已清理。`
+          tone: cleanupIncomplete ? "warning" : "success",
+          title: cleanupIncomplete ? "活动记录已删除，文件清理未完成" : "活动已永久删除",
+          body: `删除活动记录 ${res.data.deletedRecords.events} 条、图片记录 ${res.data.deletedRecords.images} 条、关联标签 ${res.data.deletedRecords.imageTags} 条、下载日志 ${res.data.deletedRecords.downloadLogs} 条、导出任务 ${res.data.deletedRecords.exportJobs} 条、操作日志 ${res.data.deletedRecords.operationLogs} 条、归档摘要 ${res.data.deletedRecords.archivedEvents} 条。${cleanupIncomplete ? `隔离目录仍保留，未伪报清理成功：${res.data.errors.join("；")}` : "working 和归档目录已清理。"}`
         });
       } else {
         setMessage({ tone: "danger", title: "永久删除失败", body: res.error?.message || "无法永久删除活动。" });
@@ -277,11 +278,7 @@ export function EventsPage() {
         </div>
       </div>
 
-      {message && (
-        <Notice className="mb-5" tone={message.tone} title={message.title}>
-          {message.body}
-        </Notice>
-      )}
+      <TransientNotice className="mb-5" message={message} onDismiss={() => setMessage(null)} />
 
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">

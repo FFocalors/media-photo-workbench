@@ -182,7 +182,13 @@ function emit(eventName: string, payload: unknown): void {
     return;
   }
 
-  io.emit(eventName, payload);
+  try {
+    io.emit(eventName, payload);
+  } catch (error) {
+    // Realtime delivery is a post-commit notification. A Socket.IO failure
+    // must never unwind an already completed database or filesystem action.
+    getLogger().warn({ error, eventName }, "实时同步广播失败，核心业务结果已保留");
+  }
 }
 
 export function emitImageCreated(payload: RealtimeImagePayload): void {

@@ -1,7 +1,7 @@
 import { ImagePlus, UploadCloud } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Notice } from "../../components/ui/States";
+import { TransientNotice } from "../../components/ui/States";
 import { ClientUploadData, ClientUploadTaskData, EventData, fetchEvents, fetchTask, getClientApiBase, uploadClientImages, type TaskData } from "../../lib/api";
 import { getClientName, setClientName } from "../../lib/clientIdentity";
 import { cn } from "../../lib/cn";
@@ -224,7 +224,7 @@ export function ClientUploadPage() {
       <div className="flex-1 overflow-y-auto p-4 lg:p-6">
         <div className="mx-auto grid max-w-5xl gap-6 xl:grid-cols-[1fr_320px]">
           <section className="space-y-6">
-            {message && <Notice tone={message.tone} title={message.title}>{message.body}</Notice>}
+            <TransientNotice message={message} onDismiss={() => setMessage(null)} />
 
             <div className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
               <h2 className="mb-5 font-semibold text-slate-900">上传信息</h2>

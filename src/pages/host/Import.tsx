@@ -1,10 +1,11 @@
 import { AlertCircle, CheckCircle2, FolderOpen, Image, Loader2, Play, Search, UploadCloud, XCircle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Step } from "../../components/ui/FormControls";
-import { Notice } from "../../components/ui/States";
+import { Notice, TransientNotice } from "../../components/ui/States";
 import { EventData, fetchEvents, fetchTask, ImportScanData, ImportStartData, ImportTaskStartData, scanImportFolder, startImport, type TaskData } from "../../lib/api";
 import { cn } from "../../lib/cn";
 import { subscribeRealtimeTaskEvent } from "../../lib/socket";
+import { getOperationalStatusSemantic } from "../../lib/statusSemantics";
 import { formatTaskDuration, getTaskStats, taskStatusLabel } from "../../lib/taskStats";
 import { CameraFtpImportPanel } from "../../components/import/CameraFtpImportPanel";
 
@@ -41,6 +42,7 @@ export function ImportPage() {
   const canStartImport = sourceMode === "folder" ? Boolean(scanResult && scanResult.count > 0) : hasSelectedFiles;
   const displayTask = activeTask ?? createInitialImportTask(startedTask);
   const taskStats = getTaskStats(displayTask);
+  const taskProgressClass = displayTask ? getOperationalStatusSemantic(displayTask.status).progressClass : "bg-blue-600";
   const taskTerminal = Boolean(displayTask && (displayTask.status === "success" || displayTask.status === "failed" || displayTask.status === "cancelled"));
   const step = importing || (displayTask && !taskTerminal) ? 3 : importResult || taskTerminal ? 4 : scanResult || hasSelectedFiles ? 2 : 1;
 
@@ -424,7 +426,7 @@ export function ImportPage() {
           <h3 className="mb-5 font-medium text-slate-900">导入设置</h3>
 
           <div className="flex-1 space-y-5 overflow-y-auto pr-2">
-            {message && <Notice tone={message.tone} title={message.title}>{message.body}</Notice>}
+            <TransientNotice message={message} onDismiss={() => setMessage(null)} />
 
             <div
               className={cn(
@@ -628,7 +630,7 @@ export function ImportPage() {
             </div>
             <div className="mb-3 h-2 w-full overflow-hidden rounded-full bg-slate-100">
               <div
-                className={cn("h-full rounded-full transition-all", displayTask?.status === "failed" ? "bg-red-500" : displayTask?.status === "success" ? "bg-emerald-500" : "bg-blue-600")}
+                className={cn("h-full rounded-full transition-all", taskProgressClass)}
                 style={{ width: `${importResult ? completionRate(importResult) : displayTask ? Math.max(taskStats.percent, displayTask.status === "pending" ? 4 : 8) : 0}%` }}
               />
             </div>

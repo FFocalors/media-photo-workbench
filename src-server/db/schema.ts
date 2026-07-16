@@ -4,6 +4,13 @@
  */
 
 const SCHEMA_SQL = `
+-- Schema 迁移账本：每个迁移只在成功提交后记录
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  id          TEXT PRIMARY KEY,
+  applied_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+  backup_path TEXT NOT NULL DEFAULT ''
+);
+
 -- 活动表
 CREATE TABLE IF NOT EXISTS events (
   id            TEXT PRIMARY KEY,
@@ -95,6 +102,7 @@ CREATE TABLE IF NOT EXISTS camera_ftp_file_receipts (
   file_path   TEXT NOT NULL,
   file_size   INTEGER NOT NULL DEFAULT 0,
   modified_ms INTEGER NOT NULL DEFAULT 0,
+  content_hash TEXT NOT NULL DEFAULT '',
   result      TEXT NOT NULL CHECK (result IN ('imported', 'skipped')),
   updated_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
   PRIMARY KEY (event_id, path_key),

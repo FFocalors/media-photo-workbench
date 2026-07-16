@@ -1,5 +1,6 @@
 import path from "path";
-import { promises as nativeFs, watch, type FSWatcher } from "fs";
+import { createReadStream, promises as nativeFs, watch, type FSWatcher } from "fs";
+import { createHash } from "crypto";
 import fs from "fs-extra";
 import { emitImageCreated } from "../realtime/socket";
 import { safeLog } from "../utils/logger";
@@ -7,8 +8,7 @@ import { getImageDtoById } from "./images";
 import {
   cameraFtpReceiptStore,
   type CameraFtpFileReceipt,
-  type CameraFtpReceiptResult,
-  type CameraFtpReceiptStore
+  type CameraFtpReceiptResult
 } from "./cameraFtpReceipts";
 import {
   importImageFiles,
@@ -16,103 +16,44 @@ import {
   type ImportSourceFile
 } from "./imageImport";
 import { createTask, failTask, finishTask, updateTask } from "./tasks";
+import {
+  classifyCameraFtpCandidate,
+  coalesceCameraFtpWatcherRecords,
+  createCameraFtpFileFingerprint,
+  isSameCameraFtpWatcherContext as sameContext,
+  isTerminalCameraFtpWatcherRecordStatus as isTerminalRecordStatus,
+  normalizeCameraFtpWatcherPath as normalizePath,
+  type CameraFtpWatcherContext,
+  type CameraFtpWatcherPendingFileState as PendingFile,
+  type CameraFtpWatcherRecord,
+  type CameraFtpWatcherRuntimeOptions as RuntimeOptions,
+  type CameraFtpWatcherStableFileState as StableFile,
+  type CameraFtpWatcherStatus,
+  type CameraFtpWatcherTestingOptions,
+  type StartCameraFtpWatcherInput
+} from "./camera-ftp/cameraFtpWatcherModel";
 
-export type CameraFtpWatcherRecordStatus =
-  | "receiving"
-  | "waiting"
-  | "importing"
-  | "imported"
-  | "skipped"
-  | "failed";
+export {
+  classifyCameraFtpCandidate,
+  coalesceCameraFtpWatcherRecords,
+  createCameraFtpFileFingerprint,
+  isSameCameraFtpWatcherContext,
+  isTerminalCameraFtpWatcherRecordStatus,
+  normalizeCameraFtpWatcherPath
+} from "./camera-ftp/cameraFtpWatcherModel";
+export type {
+  CameraFtpCandidateClassification,
+  CameraFtpWatcherContext,
+  CameraFtpWatcherPendingFileState,
+  CameraFtpWatcherRecord,
+  CameraFtpWatcherRecordStatus,
+  CameraFtpWatcherRuntimeOptions,
+  CameraFtpWatcherStableFileState,
+  CameraFtpWatcherStatus,
+  CameraFtpWatcherTestingOptions,
+  StartCameraFtpWatcherInput
+} from "./camera-ftp/cameraFtpWatcherModel";
 
-export interface CameraFtpWatcherRecord {
-  id: string;
-  filename: string;
-  path: string;
-  eventId: string;
-  eventName: string;
-  status: CameraFtpWatcherRecordStatus;
-  size: number;
-  detectedAt: string;
-  receivedAt: string;
-  updatedAt: string;
-  importedAt: string;
-  finishedAt: string;
-  taskId: string;
-  reason: string;
-  error: string;
-}
-
-export interface CameraFtpWatcherStatus {
-  running: boolean;
-  directory: string;
-  eventId: string;
-  eventName: string;
-  pendingCount: number;
-  queuedCount: number;
-  importingCount: number;
-  unstableCount: number;
-  lastReceivedAt: string;
-  lastScanAt: string;
-  lastError: string;
-  recentRecords: CameraFtpWatcherRecord[];
-}
-
-export interface CameraFtpWatcherContext {
-  eventId: string;
-  eventName: string;
-  eventSlug: string;
-  directory: string;
-  cameraName: string;
-  photographer: string;
-  baseUrl: string;
-}
-
-export interface CameraFtpWatcherTestingOptions {
-  stabilityIntervalMs?: number;
-  stabilityChecks?: number;
-  importBatchDelayMs?: number;
-  maxWaitMs?: number;
-  importer?: typeof importImageFiles;
-  receiptStore?: CameraFtpReceiptStore;
-}
-
-export interface StartCameraFtpWatcherInput extends CameraFtpWatcherContext {
-  testing?: CameraFtpWatcherTestingOptions;
-  scanExistingOnStart?: boolean;
-}
-
-interface PendingFile {
-  generation: number;
-  path: string;
-  filename: string;
-  recordId: string;
-  firstSeenAtMs: number;
-  lastSize: number;
-  lastMtimeMs: number;
-  stableChecks: number;
-  timer: NodeJS.Timeout | null;
-}
-
-interface StableFile {
-  path: string;
-  filename: string;
-  size: number;
-  mtimeMs: number;
-  recordId: string;
-}
-
-interface RuntimeOptions {
-  stabilityIntervalMs: number;
-  stabilityChecks: number;
-  importBatchDelayMs: number;
-  maxWaitMs: number;
-  importer: typeof importImageFiles;
-  receiptStore: CameraFtpReceiptStore;
-}
-
-const SUPPORTED_EXTENSIONS = new Set([".jpg", ".jpeg"]);
-const TEMPORARY_EXTENSIONS = new Set([".tmp", ".part", ".crdownload", ".download"]);
 const DEFAULT_STABILITY_INTERVAL_MS = 1500;
 const DEFAULT_STABILITY_CHECKS = 3;
 const DEFAULT_IMPORT_BATCH_DELAY_MS = 500;
@@ -125,55 +66,8 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function normalizePath(filePath: string): string {
-  return path.resolve(filePath);
-}
-
-function isTerminalRecordStatus(status: CameraFtpWatcherRecordStatus): boolean {
-  return status === "imported" || status === "skipped" || status === "failed";
-}
-
-function recordTimestamp(record: CameraFtpWatcherRecord): number {
-  const value = new Date(record.updatedAt || record.finishedAt || record.receivedAt || record.detectedAt).getTime();
-  return Number.isFinite(value) ? value : 0;
-}
-
-export function coalesceCameraFtpWatcherRecords(records: CameraFtpWatcherRecord[]): CameraFtpWatcherRecord[] {
-  const latestByPath = new Map<string, CameraFtpWatcherRecord>();
-  for (const record of records) {
-    const key = `${record.eventId}\u0000${normalizePath(record.path || record.filename).toLowerCase()}`;
-    const current = latestByPath.get(key);
-    if (!current) {
-      latestByPath.set(key, record);
-      continue;
-    }
-    const nextTimestamp = recordTimestamp(record);
-    const currentTimestamp = recordTimestamp(current);
-    if (nextTimestamp > currentTimestamp
-      || (nextTimestamp === currentTimestamp && isTerminalRecordStatus(record.status) && !isTerminalRecordStatus(current.status))) {
-      latestByPath.set(key, record);
-    }
-  }
-  return Array.from(latestByPath.values()).sort((left, right) => recordTimestamp(right) - recordTimestamp(left));
-}
-
 function waitMs(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-export function classifyCameraFtpCandidate(filePath: string): { accepted: boolean; reason: string } {
-  const filename = path.basename(filePath);
-  if (!filename || filename.startsWith(".") || filename.startsWith("~")) {
-    return { accepted: false, reason: "隐藏文件" };
-  }
-  const extension = path.extname(filename).toLowerCase();
-  if (TEMPORARY_EXTENSIONS.has(extension)) {
-    return { accepted: false, reason: "临时文件" };
-  }
-  if (!SUPPORTED_EXTENSIONS.has(extension)) {
-    return { accepted: false, reason: "相机 FTP 自动导入仅支持 JPG/JPEG" };
-  }
-  return { accepted: true, reason: "" };
 }
 
 function createRuntimeOptions(testing?: CameraFtpWatcherTestingOptions): RuntimeOptions {
@@ -187,12 +81,6 @@ function createRuntimeOptions(testing?: CameraFtpWatcherTestingOptions): Runtime
   };
 }
 
-function sameContext(left: CameraFtpWatcherContext | null, right: CameraFtpWatcherContext): boolean {
-  return Boolean(left)
-    && left!.eventId === right.eventId
-    && normalizePath(left!.directory) === normalizePath(right.directory);
-}
-
 export class CameraFtpWatcher {
   private watcher: FSWatcher | null = null;
   private context: CameraFtpWatcherContext | null = null;
@@ -203,6 +91,7 @@ export class CameraFtpWatcher {
   private queuedForImport = new Set<string>();
   private importingFiles = new Set<string>();
   private processedFiles = new Map<string, string>();
+  private processedContentHashes = new Map<string, string>();
   private readyQueue: StableFile[] = [];
   private importBatchTimer: NodeJS.Timeout | null = null;
   private activeImportPromise: Promise<void> | null = null;
@@ -222,6 +111,7 @@ export class CameraFtpWatcher {
   getStatus(limit = 30): CameraFtpWatcherStatus {
     return {
       running: Boolean(this.watcher && this.context),
+      busy: this.isBusy(),
       directory: this.context?.directory ?? "",
       eventId: this.context?.eventId ?? "",
       eventName: this.context?.eventName ?? "",
@@ -260,8 +150,18 @@ export class CameraFtpWatcher {
     if (!nextContext.eventId || !nextContext.directory) {
       throw Object.assign(new Error("相机 FTP watcher 缺少活动或目录。"), { code: "FTP_PATH_INVALID" });
     }
-    await fs.ensureDir(nextContext.directory);
-    const stat = await nativeFs.stat(nextContext.directory);
+    if (input.createDirectory !== false) {
+      await fs.ensureDir(nextContext.directory);
+    }
+    let stat;
+    try {
+      stat = await nativeFs.stat(nextContext.directory);
+    } catch (error: any) {
+      throw Object.assign(new Error("相机 FTP 接收目录不存在或当前不可访问。"), {
+        code: "FTP_PATH_INVALID",
+        cause: error
+      });
+    }
     if (!stat.isDirectory()) {
       throw Object.assign(new Error("相机 FTP 接收路径不是目录。"), { code: "FTP_PATH_INVALID" });
     }
@@ -283,6 +183,7 @@ export class CameraFtpWatcher {
     this.options = createRuntimeOptions(input.testing);
     this.lastError = "";
     this.processedFiles.clear();
+    this.processedContentHashes.clear();
     await this.restoreProcessedFileReceipts(nextContext, generation);
 
     this.watcher = watch(nextContext.directory, { persistent: true }, (_eventType, filename) => {
@@ -348,8 +249,56 @@ export class CameraFtpWatcher {
     }
   }
 
-  shutdown(): void {
-    this.stop({ force: true, reason: "server_closing" });
+  async shutdown(timeoutMs = 15_000): Promise<{ drained: boolean }> {
+    const previous = this.context;
+    const activeImport = this.activeImportPromise;
+    this.generation += 1;
+    try {
+      this.watcher?.close();
+    } catch {
+      // Closing an already-closed fs watcher is harmless.
+    }
+    this.watcher = null;
+    for (const pending of this.pendingFiles.values()) {
+      if (pending.timer) clearTimeout(pending.timer);
+    }
+    this.pendingFiles.clear();
+    this.candidateReservations.clear();
+    this.queuedForImport.clear();
+    this.readyQueue = [];
+    if (this.importBatchTimer) clearTimeout(this.importBatchTimer);
+    this.importBatchTimer = null;
+
+    let drained = true;
+    if (activeImport) {
+      let timeout: NodeJS.Timeout | null = null;
+      try {
+        await Promise.race([
+          activeImport,
+          new Promise<void>((resolve) => {
+            timeout = setTimeout(() => {
+              drained = false;
+              resolve();
+            }, Math.max(0, timeoutMs));
+          })
+        ]);
+      } finally {
+        if (timeout) clearTimeout(timeout);
+      }
+    }
+    this.importingFiles.clear();
+    this.context = null;
+    if (previous) {
+      safeLog(drained ? "info" : "warn", {
+        eventId: previous.eventId,
+        directory: previous.directory,
+        drained,
+        timeoutMs
+      }, drained
+        ? "相机 FTP watcher 已停止，活动导入已安全收尾"
+        : "相机 FTP watcher 已停止，但活动导入未在退出时限内完成；原图将由下次启动补扫");
+    }
+    return { drained };
   }
 
   private pushRecord(input: Omit<CameraFtpWatcherRecord, "id" | "detectedAt" | "receivedAt" | "updatedAt" | "importedAt" | "finishedAt" | "taskId" | "error"> & { taskId?: string; error?: string }): string {
@@ -410,7 +359,7 @@ export class CameraFtpWatcher {
     try {
       const directoryKey = `${normalizePath(context.directory).toLowerCase()}${path.sep}`;
       const receipts = this.options.receiptStore.list(context.eventId);
-      await Promise.all(receipts.map(async (receipt) => {
+      const restoreReceipt = async (receipt: CameraFtpFileReceipt) => {
         if (generation !== this.generation || this.context?.eventId !== context.eventId) return;
         const normalized = normalizePath(receipt.filePath);
         const fileKey = normalized.toLowerCase();
@@ -418,26 +367,26 @@ export class CameraFtpWatcher {
         try {
           const stat = await nativeFs.stat(normalized);
           if (!stat.isFile()) return;
-          const currentFingerprint = this.fileFingerprint(stat.size, stat.mtimeMs);
+          const currentFingerprint = createCameraFtpFileFingerprint(stat.size, stat.mtimeMs);
           const receiptFingerprint = receipt.modifiedMs > 0
-            ? this.fileFingerprint(receipt.fileSize, receipt.modifiedMs)
+            ? createCameraFtpFileFingerprint(receipt.fileSize, receipt.modifiedMs)
             : "";
           const legacyImageMatches = receipt.modifiedMs <= 0 && stat.size === receipt.fileSize;
           if (currentFingerprint === receiptFingerprint || legacyImageMatches) {
-            this.processedFiles.set(normalized, currentFingerprint);
-            if (legacyImageMatches) {
-              this.options.receiptStore.save({
-                ...receipt,
-                filePath: normalized,
-                fileSize: stat.size,
-                modifiedMs: stat.mtimeMs
-              });
+            if (receipt.contentHash) {
+              const currentContentHash = await this.hashFileContent(normalized);
+              if (currentContentHash !== receipt.contentHash) return;
+              this.processedContentHashes.set(normalized, currentContentHash);
             }
+            this.processedFiles.set(normalized, currentFingerprint);
           }
         } catch {
           // Missing historical files do not block watcher startup.
         }
-      }));
+      };
+      for (let index = 0; index < receipts.length; index += 4) {
+        await Promise.all(receipts.slice(index, index + 4).map(restoreReceipt));
+      }
       safeLog("info", {
         eventId: context.eventId,
         restoredCount: this.processedFiles.size
@@ -464,9 +413,13 @@ export class CameraFtpWatcher {
       if (this.pendingFiles.has(normalized)
         || this.queuedForImport.has(normalized)
         || this.importingFiles.has(normalized)) return;
-      const fingerprint = this.fileFingerprint(stat.size, stat.mtimeMs);
-      if (this.processedFiles.get(normalized) === fingerprint) return;
+      const fingerprint = createCameraFtpFileFingerprint(stat.size, stat.mtimeMs);
+      if (this.processedFiles.get(normalized) === fingerprint) {
+        const previousContentHash = this.processedContentHashes.get(normalized);
+        if (!previousContentHash || await this.hashFileContent(normalized) === previousContentHash) return;
+      }
       this.processedFiles.delete(normalized);
+      this.processedContentHashes.delete(normalized);
       const recordId = this.pushRecord({
         filename: path.basename(normalized),
         path: normalized,
@@ -528,16 +481,31 @@ export class CameraFtpWatcher {
       });
 
       if (pending.stableChecks >= this.options.stabilityChecks) {
-        this.pendingFiles.delete(filePath);
         if (!await this.canReadFile(pending.path)) {
           this.failPending(pending, "文件读取失败，可能仍在写入、文件损坏或权限不足。");
           return;
         }
+        const contentHash = await this.hashFileContent(pending.path);
+        const verifiedStat = await nativeFs.stat(pending.path);
+        if (verifiedStat.size !== stat.size || verifiedStat.mtimeMs !== stat.mtimeMs) {
+          pending.lastSize = verifiedStat.size;
+          pending.lastMtimeMs = verifiedStat.mtimeMs;
+          pending.stableChecks = 0;
+          this.updateRecord(pending.recordId, {
+            size: verifiedStat.size,
+            status: "receiving",
+            reason: "文件在内容校验期间继续变化，重新等待稳定"
+          });
+          this.schedulePendingCheck(filePath);
+          return;
+        }
+        this.pendingFiles.delete(filePath);
         this.queueStableFile({
           path: pending.path,
           filename: pending.filename,
           size: stat.size,
           mtimeMs: stat.mtimeMs,
+          contentHash,
           recordId: pending.recordId
         });
         return;
@@ -561,7 +529,6 @@ export class CameraFtpWatcher {
     this.pendingFiles.delete(pending.path);
     this.lastError = reason;
     this.updateRecord(pending.recordId, { status: "failed", reason, error: reason });
-    this.processedFiles.set(pending.path, this.fileFingerprint(pending.lastSize, pending.lastMtimeMs));
   }
 
   private async canReadFile(filePath: string): Promise<boolean> {
@@ -602,12 +569,25 @@ export class CameraFtpWatcher {
     const context = this.context;
     const generation = this.generation;
     if (!context || files.length === 0) return;
-    const task = createTask({
-      type: "camera_ftp_import",
-      eventId: context.eventId,
-      title: `相机 FTP 自动导入 ${files.length} 张图片`,
-      total: files.length
-    });
+    let taskId = "";
+    try {
+      taskId = createTask({
+        type: "camera_ftp_import",
+        eventId: context.eventId,
+        title: `相机 FTP 自动导入 ${files.length} 张图片`,
+        total: files.length
+      }).id;
+    } catch (error) {
+      safeLog("warn", { error, eventId: context.eventId }, "相机 FTP 任务中心记录创建失败，图片导入继续");
+    }
+    const updateTaskSafely = (operation: () => void, stage: string) => {
+      if (!taskId) return;
+      try {
+        operation();
+      } catch (error) {
+        safeLog("warn", { error, eventId: context.eventId, taskId, stage }, "相机 FTP 任务中心记录失败，核心图片结果不回滚");
+      }
+    };
     const startedAtMs = Date.now();
     const startedAt = new Date(startedAtMs).toISOString();
     const sourceFiles: ImportSourceFile[] = files.map((file) => ({
@@ -619,11 +599,11 @@ export class CameraFtpWatcher {
       const normalized = normalizePath(file.path);
       this.queuedForImport.delete(normalized);
       this.importingFiles.add(normalized);
-      this.updateRecord(file.recordId, { status: "importing", taskId: task.id, reason: "正在自动导入" });
+      this.updateRecord(file.recordId, { status: "importing", taskId, reason: "正在自动导入" });
     }
 
     const applyProgress = (snapshot: ImportProgressSnapshot) => {
-      updateTask(task.id, {
+      updateTaskSafely(() => updateTask(taskId, {
         status: "running",
         startedAt,
         total: snapshot.total,
@@ -635,11 +615,11 @@ export class CameraFtpWatcher {
         elapsedMs: Date.now() - startedAtMs,
         estimatedRemainingMs: null,
         currentFileName: snapshot.currentFileName
-      });
+      }), "progress");
     };
 
     try {
-      updateTask(task.id, { status: "running", startedAt, total: files.length });
+      updateTaskSafely(() => updateTask(taskId, { status: "running", startedAt, total: files.length }), "start");
       const result = await this.options.importer({
         eventId: context.eventId,
         files: sourceFiles,
@@ -654,20 +634,24 @@ export class CameraFtpWatcher {
           onImageImported: (image) => {
             // Socket.IO payloads are shared by host and LAN clients, so media
             // URLs must stay same-origin instead of inheriting a request Host.
-            const dto = getImageDtoById(image.id, "");
-            emitImageCreated({
-              eventId: dto.event_id,
-              imageId: dto.id,
-              image: dto,
-              action: "image_created",
-              actor: { type: "camera", id: "camera_ftp", name: context.cameraName },
-              updatedAt: nowIso()
-            });
+            try {
+              const dto = getImageDtoById(image.id, "");
+              emitImageCreated({
+                eventId: dto.event_id,
+                imageId: dto.id,
+                image: dto,
+                action: "image_created",
+                actor: { type: "camera", id: "camera_ftp", name: context.cameraName },
+                updatedAt: nowIso()
+              });
+            } catch (error) {
+              safeLog("warn", { error, eventId: context.eventId, imageId: image.id }, "图片已安全入库，但 Socket.IO 广播失败");
+            }
           }
         }
       });
       this.updateRecordsAfterImport(context.eventId, files, result);
-      updateTask(task.id, {
+      updateTaskSafely(() => updateTask(taskId, {
         total: result.total,
         finished: result.success + result.failed + result.skipped,
         successCount: result.success,
@@ -687,8 +671,8 @@ export class CameraFtpWatcher {
           directory: context.directory,
           errors: result.errors
         }
-      });
-      finishTask(task.id, {
+      }), "result");
+      updateTaskSafely(() => finishTask(taskId, {
         total: result.total,
         success: result.success,
         failed: result.failed,
@@ -697,20 +681,19 @@ export class CameraFtpWatcher {
         sourceType: "camera_ftp",
         directory: context.directory,
         errors: result.errors
-      });
+      }), "finish");
     } catch (error: any) {
       const reason = error?.message || "相机 FTP 自动导入失败";
       this.lastError = reason;
       for (const file of files) {
-        this.updateRecord(file.recordId, { status: "failed", taskId: task.id, reason, error: reason });
+        this.updateRecord(file.recordId, { status: "failed", taskId, reason, error: reason });
       }
-      failTask(task.id, [{ reason }]);
+      updateTaskSafely(() => failTask(taskId, [{ reason }]), "fail");
       safeLog("error", { error, eventId: context.eventId, directory: context.directory }, "相机 FTP 自动导入任务失败");
     } finally {
       for (const file of files) {
         const normalized = normalizePath(file.path);
         this.importingFiles.delete(normalized);
-        this.processedFiles.set(normalized, this.fileFingerprint(file.size, file.mtimeMs));
       }
       if (generation !== this.generation) {
         safeLog("warn", { eventId: context.eventId }, "相机 FTP watcher generation 已变化，旧导入批次刚刚结束");
@@ -740,9 +723,13 @@ export class CameraFtpWatcher {
         importedCounts.set(file.filename, importedCount - 1);
         this.updateRecord(file.recordId, { status: "imported", reason: "自动导入成功" });
         this.saveFileReceipt(eventId, file, "imported");
+        this.processedFiles.set(normalizePath(file.path), createCameraFtpFileFingerprint(file.size, file.mtimeMs));
+        this.processedContentHashes.set(normalizePath(file.path), file.contentHash);
       } else {
         this.updateRecord(file.recordId, { status: "skipped", reason: "已跳过同活动重复图片" });
         this.saveFileReceipt(eventId, file, "skipped");
+        this.processedFiles.set(normalizePath(file.path), createCameraFtpFileFingerprint(file.size, file.mtimeMs));
+        this.processedContentHashes.set(normalizePath(file.path), file.contentHash);
       }
     }
   }
@@ -753,6 +740,7 @@ export class CameraFtpWatcher {
       filePath: normalizePath(file.path),
       fileSize: file.size,
       modifiedMs: file.mtimeMs,
+      contentHash: file.contentHash,
       result
     };
     try {
@@ -762,8 +750,14 @@ export class CameraFtpWatcher {
     }
   }
 
-  private fileFingerprint(size: number, mtimeMs: number): string {
-    return `${size}:${Math.trunc(mtimeMs)}`;
+  private hashFileContent(filePath: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const hash = createHash("sha256");
+      const stream = createReadStream(filePath);
+      stream.on("data", (chunk) => hash.update(chunk));
+      stream.on("error", reject);
+      stream.on("end", () => resolve(hash.digest("hex")));
+    });
   }
 }
 
@@ -797,6 +791,6 @@ export function stopCameraFtpWatcher(options?: { force?: boolean; reason?: strin
   cameraFtpWatcher.stop(options);
 }
 
-export function shutdownCameraFtpWatcher(): void {
-  cameraFtpWatcher.shutdown();
+export function shutdownCameraFtpWatcher(timeoutMs?: number): Promise<{ drained: boolean }> {
+  return cameraFtpWatcher.shutdown(timeoutMs);
 }

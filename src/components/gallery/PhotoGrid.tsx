@@ -2,6 +2,7 @@ import { AlertTriangle, Check, Download, ImageOff, Star } from "lucide-react";
 import { EmptyState } from "../ui/States";
 import { EventImageData, imageStatusLabels } from "../../lib/api";
 import { cn } from "../../lib/cn";
+import { getImageWorkflowStatusSemantic } from "../../lib/statusSemantics";
 import { RetryableImage } from "./RetryableImage";
 
 export function PhotoGrid({
@@ -73,7 +74,7 @@ function PhotoCard({
   return (
     <div
       className={cn(
-        "group relative aspect-[3/2] cursor-pointer overflow-hidden rounded-xl border-2 text-left transition-all",
+        "group relative isolate aspect-[3/2] cursor-pointer overflow-hidden rounded-xl border-2 text-left transition-all",
         selected ? "border-blue-500 shadow-md" : active ? "border-blue-200 shadow-sm" : "border-transparent hover:border-blue-200"
       )}
       onClick={() => {
@@ -136,7 +137,7 @@ function PhotoCard({
               原图缺失
             </span>
           )}
-          <span className={cn("max-w-20 shrink truncate whitespace-nowrap rounded-md px-2 py-1 text-[11px] font-medium leading-none shadow-sm", statusClass(photo.status))}>
+          <span className={cn("max-w-20 shrink truncate whitespace-nowrap rounded-md border px-2 py-1 text-[11px] font-medium leading-none shadow-sm", statusClass(photo.status))}>
             {imageStatusLabels[photo.status]}
           </span>
         </div>
@@ -154,10 +155,5 @@ function PhotoCard({
 }
 
 function statusClass(status: EventImageData["status"]) {
-  if (status === "edit") return "bg-amber-500 text-white";
-  if (status === "edited") return "bg-emerald-500 text-white";
-  if (status === "publish") return "bg-blue-500 text-white";
-  if (status === "published") return "bg-indigo-500 text-white";
-  if (status === "rejected") return "bg-red-500 text-white";
-  return "bg-slate-500/80 text-white";
+  return getImageWorkflowStatusSemantic(status).badgeClass;
 }

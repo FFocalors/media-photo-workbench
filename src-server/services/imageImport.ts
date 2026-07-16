@@ -37,6 +37,54 @@ export interface ImportErrorItem {
   filename: string;
   path: string;
   reason: string;
+  code?: string;
+  stage?: ImportFailureStage;
+  retryable?: boolean;
+}
+
+export type ImportFailureStage = "validation" | "hash" | "original" | "thumbnail" | "preview" | "database" | "unknown";
+
+export interface ImportFailureClassification {
+  code: string;
+  stage: ImportFailureStage;
+  message: string;
+  retryable: boolean;
+  continueBatch: true;
+}
+
+export function classifyImageImportFailure(error: any, stage: ImportFailureStage): ImportFailureClassification {
+  const code = typeof error?.code === "string" ? error.code : "";
+  if (stage === "database" || code.startsWith("SQLITE_")) {
+    return {
+      code: "IMAGE_DATABASE_WRITE_FAILED",
+      stage: "database",
+      message: "数据库写入失败，原图已保留，可稍后安全重试。",
+      retryable: true,
+      continueBatch: true
+    };
+  }
+  if (stage === "thumbnail" || stage === "preview") {
+    return {
+      code: stage === "thumbnail" ? "IMAGE_THUMBNAIL_FAILED" : "IMAGE_PREVIEW_FAILED",
+      stage,
+      message: `${stage === "thumbnail" ? "缩略图" : "预览图"}生成失败，原图已保留，可稍后重试。`,
+      retryable: true,
+      continueBatch: true
+    };
+  }
+  if (stage === "hash") {
+    return { code: "IMAGE_HASH_FAILED", stage, message: "读取图片内容失败，未写入数据库。", retryable: true, continueBatch: true };
+  }
+  if (stage === "original") {
+    return { code: "IMAGE_ORIGINAL_UNAVAILABLE", stage, message: "原图当前不可读取或保存，未写入数据库。", retryable: true, continueBatch: true };
+  }
+  return {
+    code: code || "IMAGE_IMPORT_FAILED",
+    stage,
+    message: typeof error?.message === "string" && error.message ? error.message : "图片导入失败。",
+    retryable: true,
+    continueBatch: true
+  };
 }
 
 export interface ImportedImageSummary {
@@ -565,13 +613,14 @@ export async function importImageFiles(input: {
   `);
   const seenHashes = new Set<string>();
 
-  const addError = (file: ImportSourceFile, reason: string) => {
+  const addError = (file: ImportSourceFile, reason: string, failure?: ImportFailureClassification) => {
     result.failed += 1;
     if (result.errors.length < maxErrors) {
       result.errors.push({
         filename: file.filename,
         path: file.path,
-        reason
+        reason,
+        ...(failure ? { code: failure.code, stage: failure.stage, retryable: failure.retryable } : {})
       });
     }
   };
@@ -581,13 +630,20 @@ export async function importImageFiles(input: {
   };
 
   const reportProgress = (currentFileName = "") => {
-    input.options?.onProgress?.(createProgressSnapshot(result, currentFileName, totalBytes, processedBytes));
+    try {
+      input.options?.onProgress?.(createProgressSnapshot(result, currentFileName, totalBytes, processedBytes));
+    } catch (error) {
+      // Task-center bookkeeping is observational. Its failure must not turn a
+      // safely imported image into a false database failure.
+      safeLog("warn", { error, eventId: event.id, currentFileName }, "导入进度记录失败，核心图片处理继续");
+    }
   };
 
   const processFile = async (file: ImportSourceFile) => {
     let originalTarget = "";
     let thumbPath = "";
     let previewPath = "";
+    let stage: ImportFailureStage = "validation";
 
     try {
       if (input.options?.isCancelled?.()) {
@@ -602,6 +658,7 @@ export async function importImageFiles(input: {
         return;
       }
 
+      stage = "hash";
       const fileHash = await hashFile(file.path);
       if (input.options?.isCancelled?.()) {
         return;
@@ -630,16 +687,19 @@ export async function importImageFiles(input: {
       thumbPath = path.join(workspace.thumbsDir, `${imageId}.webp`);
       previewPath = path.join(workspace.previewsDir, `${imageId}.webp`);
 
+      stage = "original";
       if (placement.copyRequired) {
         await fs.copy(file.path, originalTarget, { overwrite: false, errorOnExist: true });
       }
 
+      stage = "thumbnail";
       const metadata = await sharp(originalTarget).metadata();
       await sharp(originalTarget)
         .rotate()
         .resize({ width: 400, height: 400, fit: "inside", withoutEnlargement: true })
         .webp({ quality: 82 })
         .toFile(thumbPath);
+      stage = "preview";
       await sharp(originalTarget)
         .rotate()
         .resize({ width: 1600, height: 1600, fit: "inside", withoutEnlargement: true })
@@ -650,42 +710,45 @@ export async function importImageFiles(input: {
       const now = nowTimestamp();
       const uploadColumns = getUploadColumns({ sourceType, actor, device });
 
-      insertImageStmt.run(
-        imageId,
-        event.id,
-        file.filename,
-        storedFilename,
-        thumbPath,
-        previewPath,
-        originalTarget,
-        photographer,
-        exif.cameraModel,
-        exif.lensModel,
-        exif.shotAt,
-        remark,
-        sourceType,
-        uploadColumns.uploadedByClientId,
-        uploadColumns.uploadedByName,
-        uploadColumns.uploadedByRole,
-        now,
-        file.size,
-        fileHash,
-        exif.shotAt,
-        metadata.width ?? 0,
-        metadata.height ?? 0,
-        now,
-        now
-      );
-      writeImportLog({
-        imageId,
-        eventId: event.id,
-        sourceType,
-        photographer,
-        device,
-        originalFilename: file.filename,
-        storedFilename,
-        actor
-      });
+      stage = "database";
+      db.transaction(() => {
+        insertImageStmt.run(
+          imageId,
+          event.id,
+          file.filename,
+          storedFilename,
+          thumbPath,
+          previewPath,
+          originalTarget,
+          photographer,
+          exif.cameraModel,
+          exif.lensModel,
+          exif.shotAt,
+          remark,
+          sourceType,
+          uploadColumns.uploadedByClientId,
+          uploadColumns.uploadedByName,
+          uploadColumns.uploadedByRole,
+          now,
+          file.size,
+          fileHash,
+          exif.shotAt,
+          metadata.width ?? 0,
+          metadata.height ?? 0,
+          now,
+          now
+        );
+        writeImportLog({
+          imageId,
+          eventId: event.id,
+          sourceType,
+          photographer,
+          device,
+          originalFilename: file.filename,
+          storedFilename,
+          actor
+        });
+      })();
 
       const imported: ImportedImageSummary = {
         id: imageId,
@@ -699,13 +762,26 @@ export async function importImageFiles(input: {
       result.imported.push(imported);
       try {
         await input.options?.onImageImported?.(imported);
-      } catch {
+      } catch (error) {
         // Realtime broadcast failure should not fail the import.
+        safeLog("warn", { error, eventId: event.id, imageId }, "图片已安全入库，但实时广播失败");
       }
       markProcessed(file);
       reportProgress(file.filename);
     } catch (err: any) {
-      addError(file, err?.message || "导入失败");
+      const failure = classifyImageImportFailure(err, stage);
+      await Promise.allSettled([thumbPath, previewPath]
+        .filter(Boolean)
+        .map((derivedPath) => fs.remove(derivedPath)));
+      addError(file, failure.message, failure);
+      safeLog("warn", {
+        error: err,
+        eventId: event.id,
+        filename: file.filename,
+        code: failure.code,
+        stage: failure.stage,
+        retryable: failure.retryable
+      }, "单张图片导入失败，已保留原图并继续处理批次");
       markProcessed(file);
       reportProgress(file.filename);
     }

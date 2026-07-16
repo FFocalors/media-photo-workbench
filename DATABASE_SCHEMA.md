@@ -2,8 +2,8 @@
 
 ## 数据库设计原则
 
-- **当前版本**：`v1.1.0-alpha.3`。
-- **当前状态**：相机 FTP 全面转向 Windows IIS FTP；页面入口仍在“导入图片 > 相机 FTP”，不新增 SQLite 表或字段。
+- **当前版本**：`v1.2.0-alpha.1`。
+- **当前状态**：相机 FTP 继续使用 Windows IIS FTP 单一架构；页面入口仍在“导入图片 > 相机 FTP”。现有 schema 已包含 `camera_ftp_file_receipts`；v1.2.0 第三阶段为同名覆盖识别兼容增加 `content_hash`，第六阶段新增显式迁移账本与高风险迁移备份，不改变现有业务枚举含义。所有后续迁移必须幂等、可诊断、失败关闭。
 - **技术选型**：使用 SQLite 关系型数据库。
 - **文件位置**：数据库文件默认位于软件目录 `data/app.db`。
 - **分离存储**：真正的图片文件（如原始 JPG、WebP 缩略图）**绝不**存入数据库，数据库只存储元数据、文件路径、状态和操作日志。
@@ -16,12 +16,13 @@
 
 ## 迁移与更新策略
 
-- 后续如需修改或扩展表结构，应在项目 `migrations/` 目录下创建标准的 SQL 迁移脚本文件，随应用升级按顺序执行。
+- 当前启动迁移由 `src-server/db/database.ts` 的有序迁移注册表管理，并在 `schema_migrations` 中记录成功版本；迁移 ID 不得复用或改写。后续如拆出 SQL 文件，仍必须通过同一账本按顺序执行。
 - **绝对不允许**在生产环境中直接手动修改 SQLite 数据库的表结构。
 - v0.17.0 开发阶段 17.1 允许轻量兼容迁移：启动时通过 `PRAGMA table_info` 检查字段，缺失时才为 `images` 增加上传来源追踪字段、为 `operation_logs` 增加 actor 字段；字段已存在则跳过，不要求重新初始化旧库。
 - v0.17.0 开发阶段 17.2 不新增 SQLite 字段或表。批量操作后选择行为保存在本地 `config.json` 的 `gallery` 配置中。
 - v1.1.0-alpha.1 为支持 `source = camera_ftp` 扩展 `images.source` CHECK 枚举；v1.1.0-alpha.4 新增轻量 `camera_ftp_file_receipts` 表，持久化已处理 FTP 文件的路径、大小、修改时间和结果，避免工作台重启后重复导入。两项均由启动时 schema/migration 自动完成，不要求重新初始化数据库。
-- v1.1.0-alpha.3 不新增 SQLite 表、字段、索引或迁移逻辑；本地 `config/config.json` 只保存 IIS 站点、非敏感账户状态、`activeEventId`、固定端口和防火墙规则名。旧明文 FTP 密码会被清理，不迁移到 IIS 配置。
+- v1.1.0-alpha.3 当时不新增 SQLite 表、字段、索引或迁移逻辑；现行本地 `config/config.json` 只保存 IIS 站点、非敏感账户状态、`activeEventId`、可配置控制端口、被动端口范围和防火墙规则名。控制端口默认 `21`，允许 `1-65535` 且不得落入被动端口范围。旧明文 FTP 密码会被清理，不迁移到 IIS 配置。
+- v1.2.0-alpha.1 第六阶段将现有兼容步骤登记为四项幂等迁移。轻量变更在事务内执行；`images` CHECK 表重建前使用 `VACUUM INTO` 写入 `.migration-backups/` 唯一备份并执行 `quick_check`，失败重试最多保留 3 份已验证备份。只有迁移事务提交后才写账本；启动还会复核已登记迁移对应的表/列/索引，账本与实际 schema 漂移或迁移失败时关闭连接、清空运行时数据库状态，不以“数据库正常”继续启动。
 
 ---
 
@@ -31,6 +32,7 @@
 
 ```json
 {
+  "schemaVersion": 1,
   "gallery": {
     "batchSelectionBehavior": "clear"
   },
@@ -51,11 +53,22 @@
 }
 ```
 
-`batchSelectionBehavior` 支持 `clear | keep`，默认 `clear`。`cameraFtp` 不保存密码；`passwordResetRequired` 仅表示旧配置已清除明文密码、需要用户重新设置。`managedSiteId` 在成功创建或显式接管站点后保存真实 IIS Site ID，`0` 表示尚未建立可信站点绑定。密码不写入 SQLite、`operation_logs` 或配置文件。
+`schemaVersion` 当前为 `1`。加载时迁移必须幂等，并在归一化前递归清理旧 FTP 明文密码字段；损坏 JSON、旧/当前 schema 已知字段类型错误、非法/未来版本或迁移写入失败会停止启动并保留原文件。保存先写同目录临时文件再原子替换，失败时磁盘与内存中的旧有效配置不变。`batchSelectionBehavior` 支持 `clear | keep`，默认 `clear`。`cameraFtp` 不保存密码；`passwordResetRequired` 仅表示旧配置已清除明文密码、需要用户重新设置。`managedSiteId` 在成功创建或显式接管站点后保存真实 IIS Site ID，`0` 表示尚未建立可信站点绑定。密码不写入 SQLite、`operation_logs`、迁移备份或配置文件。
 
 ---
 
 ## 核心数据表
+
+### 0. `schema_migrations`（Schema 迁移账本）
+**用途**：只记录已经成功提交的数据库迁移，保证应用重启和重复打开时幂等。
+
+| 字段名 | 类型 | 含义 | 约束 |
+|---|---|---|---|
+| `id` | TEXT | 不可复用的迁移 ID | PRIMARY KEY |
+| `applied_at` | TEXT | 成功提交时间 | NOT NULL, DEFAULT `now` |
+| `backup_path` | TEXT | 高风险迁移前受控备份路径；轻量迁移为空 | NOT NULL, DEFAULT '' |
+
+当前登记项为 legacy columns、`images.source` camera_ftp CHECK、receipt `content_hash` 和当前索引。账本不记录失败迁移；备份只包含 SQLite 数据，不包含 FTP 密码。
 
 ### 1. `events` (活动表)
 **用途**：记录所有的拍摄活动。
@@ -154,7 +167,7 @@
 | `created_at`| TEXT | 记录时间 | NOT NULL, DEFAULT `now` |
 
 ### 6.1 `camera_ftp_file_receipts`（相机 FTP 文件处理回执）
-**用途**：记录已经成功导入或确认重复跳过的相机 FTP 文件指纹。watcher 重启时只跳过路径、大小和修改时间完全一致的历史文件；发生变化或停机期间新上传的文件仍会进入稳定检测。
+**用途**：记录已经成功导入或确认重复跳过的相机 FTP 文件指纹。watcher 重启时以路径、大小、修改时间和内容 SHA-256 共同确认未变化历史文件；发生变化、同名覆盖或停机期间新上传的文件仍会进入稳定检测。
 
 | 字段名 | 类型 | 含义 | 约束 |
 |---|---|---|---|
@@ -163,10 +176,11 @@
 | `file_path` | TEXT | 文件绝对路径 | NOT NULL |
 | `file_size` | INTEGER | 完成处理时文件大小 | NOT NULL, DEFAULT 0 |
 | `modified_ms` | INTEGER | 完成处理时文件修改时间戳 | NOT NULL, DEFAULT 0 |
+| `content_hash` | TEXT | 文件内容 SHA-256；用于识别同路径、同大小/mtime 的相机覆盖 | NOT NULL, DEFAULT '' |
 | `result` | TEXT | `imported` 或 `skipped` | NOT NULL |
 | `updated_at` | TEXT | 最近处理时间 | NOT NULL, DEFAULT `now` |
 
-联合主键为 `(event_id, path_key)`。表中不保存 FTP 密码、图片内容、EXIF 或文件哈希。
+联合主键为 `(event_id, path_key)`。表中不保存 FTP 密码、图片内容或 EXIF；`content_hash` 仅保存不可逆的内容指纹。旧回执在恢复时可从对应 `images.file_hash` 安全补齐，仍为空时 watcher 会分批计算实际文件 hash 后再决定是否跳过。回执不按时间删除：活动存在、逻辑删除或按现有策略归档时继续保留；活动永久删除时在同一事务显式清理，并由 `ON DELETE CASCADE` 兜底，避免历史文件因回执过早消失而被重新导入。
 
 ### 7. `export_jobs` (导出任务表)
 **用途**：记录正式发布、待修包、批量打包等后台长耗时任务或生成物状态信息。
@@ -236,7 +250,7 @@
 - `host_import`：主机端直接扫描本地文件夹导入
 - `client_upload`：客户端通过局域网网页/软件主动上传
 - `camera_ftp`：相机通过 Windows IIS FTP 直接上传到当前活动 `working/{event_slug}/原图/相机FTP/`；稳定后原地写入图片记录，`original_path` 指向该文件，不复制第二份原图
-- `remote_import`：远程传输预留来源值，v1.1.0 当前未实现远程传输
+- `remote_import`：远程传输预留来源值，当前版本仍未实现远程传输
 - `manual_import`：其他零星手动导入方式
 
 ### 17.1 协作追踪字段说明
@@ -257,7 +271,7 @@
 
 > 图片删除不复用 `images.status`，而是通过 `is_deleted/deleted_at` 表达生命周期。图片墙删除为逻辑删除，只隐藏记录，不删除原图、缩略图、预览图或已修图文件；图片回收站可恢复，也可在二次确认后永久删除图片记录及其关联文件。
 
-> 活动删除通过 `events.status = deleted` 表达。活动回收站可恢复活动；永久删除仅允许对 `deleted` 活动执行，默认清理 working 工作区、对应 archive 归档目录、活动图片记录、图片标签关联、下载日志、导出任务、操作日志、归档摘要和活动记录。
+> 活动删除通过 `events.status = deleted` 表达。活动回收站可恢复活动；永久删除仅允许对 `deleted` 活动执行。working/archive 目标必须严格位于仓库受控根目录且不得相互嵌套。首次移动前先在仓库 `.mpw-purge-journal/` 原子写入不含密码的不可变恢复日志，再于同一父目录原子隔离；数据库记录在单一事务中清理，失败时恢复隔离目录。数据库提交后才删除隔离目录；若此步失败则返回部分成功和保留路径。进程重启时以 SQLite 中活动记录是否仍存在为真相，分别恢复隔离目录或继续清理，不伪报文件已清理。
 
 ### `download_logs.download_type` (对应 `download_logs.type`)
 - `original`：获取单张或多张原图

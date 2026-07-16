@@ -4,6 +4,7 @@ import os from "os";
 import path from "path";
 import fs from "fs-extra";
 import { safeLog } from "./logger";
+import { getCurrentOperationId } from "./operationContext";
 
 export interface PowerShellJsonOptions {
   timeoutMs?: number;
@@ -12,6 +13,7 @@ export interface PowerShellJsonOptions {
 
 export interface PowerShellJsonDiagnostics {
   operationId?: string;
+  parentOperationId?: string;
   operation?: string;
   scriptName?: string;
   stage?: string;
@@ -28,6 +30,7 @@ export interface PowerShellJsonDiagnostics {
   exitCode?: number;
   details?: Record<string, unknown>;
   data?: unknown;
+  systemStateUnknown?: boolean;
 }
 
 export interface PowerShellJsonEnvelope<T> extends PowerShellJsonDiagnostics {
@@ -52,6 +55,7 @@ interface ProcessResult {
 
 interface OperationFiles {
   operationId: string;
+  parentOperationId?: string;
   operationDir: string;
   inputPath: string;
   outputPath: string;
@@ -79,11 +83,17 @@ const MAX_CAPTURE_LENGTH = 1024 * 1024;
 const MAX_DIAGNOSTIC_PREVIEW_LENGTH = 4096;
 const APP_TEMP_FOLDER = "MediaPhotoWorkbench";
 const STALE_OPERATION_AGE_MS = 15 * 60 * 1000;
+const ACTIVE_OPERATION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const CLEANUP_RETRY_DELAYS_MS = [10_000, 30_000, 120_000, 600_000];
 const STABLE_FILE_INTERVAL_MS = 60;
 const STABLE_FILE_READS = 5;
 
 let elevatedQueue: Promise<void> = Promise.resolve();
+let uncertainElevatedOperation: OperationFiles | null = null;
+
+function getUncertainElevatedOperation(): OperationFiles | null {
+  return uncertainElevatedOperation;
+}
 
 function createServiceError(
   code: string,
@@ -217,6 +227,7 @@ async function writeStatus(statusPath: string, value: StatusFile): Promise<void>
 
 async function createOperationFiles(input: unknown): Promise<OperationFiles> {
   const operationId = crypto.randomUUID();
+  const parentOperationId = getCurrentOperationId();
   const operationDir = path.join(os.tmpdir(), APP_TEMP_FOLDER, "elevated", operationId);
   try {
     await fs.ensureDir(operationDir);
@@ -230,7 +241,7 @@ async function createOperationFiles(input: unknown): Promise<OperationFiles> {
       operation: operationName(input),
       stage: "request_created"
     });
-    return { operationId, operationDir, inputPath, outputPath, statusPath };
+    return { operationId, parentOperationId, operationDir, inputPath, outputPath, statusPath };
   } catch (error) {
     await fs.remove(operationDir).catch(() => undefined);
     throw error;
@@ -259,7 +270,13 @@ export async function cleanupStaleElevatedOperationDirs(now = Date.now()): Promi
     const directory = path.join(root, entry.name);
     try {
       const stat = await fs.stat(directory);
-      if (now - stat.mtimeMs >= STALE_OPERATION_AGE_MS) await fs.remove(directory);
+      const ageMs = now - stat.mtimeMs;
+      if (ageMs < STALE_OPERATION_AGE_MS) return;
+      const statusEntry = (await fs.readdir(directory)).find((name) => name.endsWith(".status.json"));
+      const status = statusEntry ? await readStatusFile(path.join(directory, statusEntry)) : null;
+      const mayStillBeRunning = ["uac_accepted", "process_starting", "process_started"].includes(status?.stage || "");
+      if (mayStillBeRunning && ageMs < ACTIVE_OPERATION_MAX_AGE_MS) return;
+      await fs.remove(directory);
     } catch {
       // Best effort only; never inspect or log secret-bearing input contents.
     }
@@ -292,8 +309,38 @@ function envelopeDiagnostics<T>(envelope: PowerShellJsonEnvelope<T>): PowerShell
 }
 
 export function parsePowerShellJsonEnvelope<T>(raw: unknown): T {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw createServiceError("ELEVATED_RESULT_INVALID_SCHEMA", "IIS FTP 管理脚本返回结果缺少必要字段。", {
+      stage: "parse_result",
+      details: { invalidFields: ["envelope"] }
+    });
+  }
   const envelope = raw as PowerShellJsonEnvelope<T>;
-  if (envelope && typeof envelope === "object" && envelope.ok === false) {
+  const invalidFields: string[] = [];
+  if (typeof envelope.ok !== "boolean") invalidFields.push("ok");
+  if (typeof (envelope.operation || envelope.action) !== "string" || !(envelope.operation || envelope.action)) {
+    invalidFields.push("operation");
+  }
+  if (typeof envelope.stage !== "string" || !envelope.stage) invalidFields.push("stage");
+  if (typeof envelope.timestamp !== "string" || !envelope.timestamp) invalidFields.push("timestamp");
+  if (!Object.prototype.hasOwnProperty.call(envelope, "data")) invalidFields.push("data");
+  if (envelope.ok === false) {
+    if (typeof (envelope.code || envelope.error?.code) !== "string" || !(envelope.code || envelope.error?.code)) {
+      invalidFields.push("code");
+    }
+    if (typeof (envelope.message || envelope.error?.message) !== "string" || !(envelope.message || envelope.error?.message)) {
+      invalidFields.push("message");
+    }
+  }
+  if (invalidFields.length > 0) {
+    throw createServiceError("ELEVATED_RESULT_INVALID_SCHEMA", "IIS FTP 管理脚本返回结果缺少必要字段。", {
+      operation: envelope.operation || envelope.action,
+      stage: typeof envelope.stage === "string" && envelope.stage ? envelope.stage : "parse_result",
+      code: "ELEVATED_RESULT_INVALID_SCHEMA",
+      details: { invalidFields }
+    });
+  }
+  if (envelope.ok === false) {
     const diagnostics = envelopeDiagnostics(envelope);
     throw createServiceError(
       diagnostics.code || "IIS_CONFIG_FAILED",
@@ -301,10 +348,7 @@ export function parsePowerShellJsonEnvelope<T>(raw: unknown): T {
       diagnostics
     );
   }
-  if (envelope && typeof envelope === "object" && Object.prototype.hasOwnProperty.call(envelope, "data")) {
-    return envelope.data as T;
-  }
-  return raw as T;
+  return envelope.data as T;
 }
 
 function delay(milliseconds: number): Promise<void> {
@@ -356,10 +400,34 @@ function uacStatusFor(
   return "unknown";
 }
 
+function monitorUncertainElevatedOperation(operation: OperationFiles, scriptName: string): void {
+  const poll = async (): Promise<void> => {
+    if (uncertainElevatedOperation?.operationId !== operation.operationId) return;
+    const status = await readStatusFile(operation.statusPath);
+    const terminal = ["process_completed", "launch_failed", "uac_cancelled"].includes(status?.stage || "");
+    if (!terminal) {
+      const timer = setTimeout(() => { void poll(); }, 1000);
+      timer.unref?.();
+      return;
+    }
+    safeLog("warn", {
+      operationId: operation.operationId,
+      operation: status?.operation,
+      scriptName,
+      stage: status?.stage,
+      exitCode: status?.exitCode,
+      resultFileCreated: await fs.pathExists(operation.outputPath)
+    }, "超时后的管理员进程已结束；后续操作可重新读取 IIS 实际状态");
+    uncertainElevatedOperation = null;
+    await cleanupOperationDir(operation.operationDir);
+  };
+  void poll();
+}
+
 export function redactDiagnosticText(value: string): string {
   return value
-    .replace(/("(?:password|newPassword|confirmPassword|oldPassword|currentPassword|secret|token)"\s*:\s*")[^"]*(")/gi, "$1[redacted]$2")
-    .replace(/((?:password|newPassword|confirmPassword|oldPassword|currentPassword|secret|token)\s*[=:]\s*)[^\s,;]+/gi, "$1[redacted]")
+    .replace(/("[^"\r\n]*(?:password|passphrase|secret|token|securestring|credential)[^"\r\n]*"\s*:\s*)"(?:\\.|[^"\\])*"/gi, '$1"[redacted]"')
+    .replace(/("?[\w.-]*(?:password|passphrase|secret|token|securestring|credential)[\w.-]*"?\s*[=:]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;}]+)/gi, "$1[redacted]")
     .slice(0, MAX_DIAGNOSTIC_PREVIEW_LENGTH);
 }
 
@@ -538,9 +606,11 @@ async function executeJsonScript<T>(
   const operation = await createOperationFiles(input);
   const operationLabel = operationName(input);
   const requestedAt = Date.now();
+  let preserveOperationDir = false;
 
   safeLog("info", {
     operationId: operation.operationId,
+    parentOperationId: operation.parentOperationId,
     operation: operationLabel,
     scriptName,
     requestTime: new Date(requestedAt).toISOString(),
@@ -626,6 +696,9 @@ async function executeJsonScript<T>(
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       const record = parsed as Record<string, unknown>;
       if (typeof record.operationId !== "string") record.operationId = operation.operationId;
+      if (operation.parentOperationId && typeof record.parentOperationId !== "string") {
+        record.parentOperationId = operation.parentOperationId;
+      }
     }
     const status = await readStatusFile(operation.statusPath);
     safeLog("info", {
@@ -645,16 +718,38 @@ async function executeJsonScript<T>(
     const status = await readStatusFile(operation.statusPath);
     const resultFileCreated = await fs.pathExists(operation.outputPath);
     if (serviceError.code === "ELEVATED_SCRIPT_TIMEOUT") {
+      const uacStatus = uacStatusFor(options.elevated === true, status, serviceError.code);
+      const processStarted = options.elevated === true && ((status?.processId ?? 0) > 0
+        || ["uac_accepted", "process_starting", "process_started"].includes(status?.stage || ""));
       serviceError.diagnostics = {
         operationId: operation.operationId,
+        parentOperationId: operation.parentOperationId,
         operation: operationLabel,
         scriptName,
         stage: status?.stage || "timeout",
         code: serviceError.code,
         message: serviceError.message,
-        timestamp: status?.timestamp
+        timestamp: status?.timestamp,
+        rollbackAttempted: false,
+        rollbackSucceeded: null,
+        systemStateUnknown: processStarted,
+        details: {
+          systemStateUnknown: processStarted,
+          uacStatus,
+          processStarted
+        }
       };
+      if (processStarted) {
+        preserveOperationDir = true;
+        uncertainElevatedOperation = operation;
+        monitorUncertainElevatedOperation(operation, scriptName);
+      }
     }
+    serviceError.diagnostics = {
+      ...(serviceError.diagnostics || {}),
+      operationId: serviceError.diagnostics?.operationId || operation.operationId,
+      parentOperationId: serviceError.diagnostics?.parentOperationId || operation.parentOperationId
+    };
     safeLog("error", {
       operationId: operation.operationId,
       operation: operationLabel,
@@ -678,7 +773,7 @@ async function executeJsonScript<T>(
     }, "IIS FTP PowerShell 操作失败");
     throw serviceError;
   } finally {
-    await cleanupOperationDir(operation.operationDir);
+    if (!preserveOperationDir) await cleanupOperationDir(operation.operationDir);
   }
 }
 
@@ -695,6 +790,17 @@ export async function runElevatedPowerShellJsonScript<T>(
   input: unknown = {},
   options: Omit<PowerShellJsonOptions, "elevated"> = {}
 ): Promise<T> {
+  const pendingOperation = getUncertainElevatedOperation();
+  if (pendingOperation) {
+    throw createServiceError("ELEVATED_STATE_UNKNOWN", "上一项管理员操作超时且仍可能在执行。请等待其结束后重新检测 IIS 状态。", {
+      operationId: pendingOperation.operationId,
+      stage: "previous_operation_still_running",
+      code: "ELEVATED_STATE_UNKNOWN",
+      systemStateUnknown: true,
+      rollbackAttempted: false,
+      rollbackSucceeded: null
+    });
+  }
   const previous = elevatedQueue;
   let release!: () => void;
   elevatedQueue = new Promise<void>((resolve) => {
@@ -702,6 +808,17 @@ export async function runElevatedPowerShellJsonScript<T>(
   });
   await previous;
   try {
+    const pendingAfterQueue = getUncertainElevatedOperation();
+    if (pendingAfterQueue) {
+      throw createServiceError("ELEVATED_STATE_UNKNOWN", "上一项管理员操作超时且仍可能在执行。请等待其结束后重新检测 IIS 状态。", {
+        operationId: pendingAfterQueue.operationId,
+        stage: "previous_operation_still_running",
+        code: "ELEVATED_STATE_UNKNOWN",
+        systemStateUnknown: true,
+        rollbackAttempted: false,
+        rollbackSucceeded: null
+      });
+    }
     return await executeJsonScript<T>(scriptName, input, { ...options, elevated: true });
   } finally {
     release();
