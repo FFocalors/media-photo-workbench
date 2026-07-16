@@ -1,4 +1,3 @@
-import { randomUUID } from "crypto";
 import { spawn } from "child_process";
 import fs from "fs-extra";
 import path from "path";
@@ -6,6 +5,7 @@ import { getConfig, saveConfig, type CameraFtpConfig } from "../config/config";
 import { getDatabase } from "../db/database";
 import { getWindowsNetworkAddresses, type WindowsNetworkAddresses } from "../utils/windowsNetworkAddresses";
 import { safeLog } from "../utils/logger";
+import { getOrCreateOperationId } from "../utils/operationContext";
 import {
   getCameraFtpWatcher,
   getCameraFtpWatcherStatus,
@@ -20,7 +20,19 @@ import {
 } from "./cameraFtpWatcher";
 import { ensureEventWorkingDirs, getEventWorkspacePaths } from "./eventWorkspace";
 import { getEventById, type EventRow } from "./events";
+import { checkRepository } from "./repository";
 import { clearPendingCameraFtpEventId, setPendingCameraFtpEventId } from "./cameraFtpRuntimeState";
+import {
+  runCameraFtpStartupRecovery,
+  sameCameraFtpWindowsPath,
+  type CameraFtpStartupInspectionLevel,
+  type CameraFtpStartupRecoveryResult
+} from "./cameraFtpStartupRecovery";
+import {
+  runCameraFtpEventSwitchTransaction,
+  type CameraFtpSwitchRollbackItem,
+  type CameraFtpSwitchStage
+} from "./camera-ftp/cameraFtpSwitchTransaction";
 import {
   getIisFtpManager,
   validateCameraFtpCredentials,
@@ -36,6 +48,13 @@ import {
   type CameraFtpProvisioningPlan
 } from "./cameraFtpProvisioner";
 
+export { runCameraFtpEventSwitchTransaction };
+export type {
+  CameraFtpEventSwitchTransactionHooks,
+  CameraFtpSwitchRollbackItem,
+  CameraFtpSwitchStage
+} from "./camera-ftp/cameraFtpSwitchTransaction";
+
 export interface CameraFtpActiveEventStatus {
   id: string;
   name: string;
@@ -48,6 +67,9 @@ export interface CameraFtpActiveEventStatus {
 export interface CameraFtpStatus {
   provider: "iis";
   inspectionLevel: "full" | "partial";
+  inspectionOutcome: "confirmed" | "partial" | "unknown" | "admin_required";
+  inspectionSource: "ordinary" | "administrator";
+  inspectedAt: string;
   requiresAdminForFullInspection: boolean;
   requiresAdminForSystemChanges: boolean;
   platform: IisFtpSystemStatus["platform"];
@@ -76,6 +98,7 @@ export interface CameraFtpStatus {
   repairable: boolean;
   missingItems: string[];
   lastError: IisFtpLastError | null;
+  startupRecovery: CameraFtpStartupRecoveryResult | null;
 }
 
 export interface CameraFtpOperation {
@@ -147,7 +170,8 @@ export class CameraFtpSwitchLock {
 }
 
 export function assertCameraFtpSwitchAllowed(status: CameraFtpWatcherStatus): void {
-  if (status.pendingCount > 0
+  if (status.busy === true
+    || status.pendingCount > 0
     || status.queuedCount > 0
     || status.importingCount > 0
     || status.unstableCount > 0) {
@@ -176,14 +200,21 @@ export function assertCameraFtpUnlinkAllowed(
 
 export function getCameraFtpInspectionState(system: IisFtpSystemStatus): {
   inspectionLevel: "full" | "partial";
+  inspectionOutcome: "confirmed" | "partial" | "unknown" | "admin_required";
   requiresAdminForFullInspection: boolean;
   requiresAdminForSystemChanges: boolean;
   lastError: IisFtpLastError | null;
 } {
   const partial = system.requiresAdmin === true;
   const permissionLimitedError = partial && ["ADMIN_REQUIRED", "IIS_STATUS_CHECK_FAILED"].includes(system.lastError?.code || "");
+  const inspectionOutcome = partial
+    ? (system.site.exists === true && Boolean(system.site.physicalPath) ? "partial" : "admin_required")
+    : system.lastError
+      ? "unknown"
+      : "confirmed";
   return {
     inspectionLevel: partial ? "partial" : "full",
+    inspectionOutcome,
     requiresAdminForFullInspection: partial,
     requiresAdminForSystemChanges: system.platform.isWindows && system.platform.supported,
     lastError: permissionLimitedError ? null : system.lastError
@@ -361,8 +392,7 @@ function simpleOperation(action: ApiOperationAction, message: string): CameraFtp
 }
 
 function sameWindowsPath(left: string, right: string): boolean {
-  if (!left || !right) return false;
-  return path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase();
+  return sameCameraFtpWindowsPath(left, right);
 }
 
 interface CameraFtpWatcherSnapshot {
@@ -447,214 +477,6 @@ async function restoreCameraFtpWatcherSnapshot(snapshot: CameraFtpWatcherSnapsho
   }
 }
 
-export type CameraFtpSwitchStage =
-  | "validate_target_event"
-  | "check_pending_uploads"
-  | "snapshot_current_state"
-  | "prepare_target_directory"
-  | "update_iis_physical_path"
-  | "switch_watcher"
-  | "verify_switched_state"
-  | "commit_active_event";
-
-export interface CameraFtpSwitchRollbackItem {
-  stage: "rollback_physical_path" | "rollback_watcher" | "rollback_site_state" | "rollback_active_event";
-  status: "success" | "failed" | "not_required";
-  code?: string;
-  message: string;
-}
-
-export interface CameraFtpEventSwitchTransactionHooks<TSnapshot, TSystemStatus> {
-  operationId: string;
-  fromEventId: string;
-  toEventId: string;
-  validateTargetEvent: () => void | Promise<void>;
-  checkPendingUploads: () => void | Promise<void>;
-  snapshotCurrentState: () => TSnapshot | Promise<TSnapshot>;
-  prepareTargetDirectory: () => void | Promise<void>;
-  updateIisPhysicalPath: (snapshot: TSnapshot) => TSystemStatus | Promise<TSystemStatus>;
-  switchWatcher: (snapshot: TSnapshot) => void | Promise<void>;
-  verifySwitchedState: (snapshot: TSnapshot, systemStatus: TSystemStatus) => void | Promise<void>;
-  commitActiveEvent: (snapshot: TSnapshot) => void | Promise<void>;
-  rollbackSystem: (snapshot: TSnapshot) => TSystemStatus | void | Promise<TSystemStatus | void>;
-  rollbackWatcher: (snapshot: TSnapshot) => void | Promise<void>;
-  rollbackActiveEvent: (snapshot: TSnapshot) => void | Promise<void>;
-  verifyRollback: (snapshot: TSnapshot, systemStatus?: TSystemStatus) => void | Promise<void>;
-  onStage?: (entry: { stage: string; status: "running" | "success" | "failed"; code?: string }) => void;
-}
-
-function switchFailureCode(stage: string, originalCode: string): string {
-  if ([
-    "FTP_EVENT_SWITCH_FAILED",
-    "FTP_SITE_STOP_FAILED",
-    "FTP_TARGET_ACL_UPDATE_FAILED",
-    "FTP_PHYSICAL_PATH_UPDATE_FAILED",
-    "FTP_WATCHER_SWITCH_FAILED",
-    "FTP_SITE_RESTART_FAILED",
-    "FTP_SWITCH_VERIFY_FAILED",
-    "FTP_SWITCH_ROLLBACK_FAILED",
-    "FTP_ACTIVE_EVENT_STATE_MISMATCH"
-  ].includes(originalCode)) return originalCode;
-  if (originalCode === "IIS_FTP_SITE_STOP_FAILED") return "FTP_SITE_STOP_FAILED";
-  if (originalCode === "IIS_FTP_SITE_START_FAILED" || stage === "restart_ftp_site") return "FTP_SITE_RESTART_FAILED";
-  if (stage === "update_target_acl" || stage === "configure_directory_acl") return "FTP_TARGET_ACL_UPDATE_FAILED";
-  if (stage === "update_iis_physical_path" || stage === "configure_physical_path") return "FTP_PHYSICAL_PATH_UPDATE_FAILED";
-  if (stage === "switch_watcher") return "FTP_WATCHER_SWITCH_FAILED";
-  if (stage === "verify_switched_state" || originalCode === "CAMERA_FTP_CONFIG_MISMATCH") return "FTP_SWITCH_VERIFY_FAILED";
-  if (stage === "commit_active_event") return "FTP_ACTIVE_EVENT_STATE_MISMATCH";
-  return originalCode || "FTP_EVENT_SWITCH_FAILED";
-}
-
-export async function runCameraFtpEventSwitchTransaction<TSnapshot, TSystemStatus>(
-  hooks: CameraFtpEventSwitchTransactionHooks<TSnapshot, TSystemStatus>
-): Promise<{ operationId: string; systemStatus: TSystemStatus; completedStages: CameraFtpSwitchStage[] }> {
-  let currentStage: CameraFtpSwitchStage = "validate_target_event";
-  let snapshot: TSnapshot | undefined;
-  let systemStatus: TSystemStatus | undefined;
-  let systemChanged = false;
-  let systemChangeAttempted = false;
-  let watcherSwitchAttempted = false;
-  let activeEventCommitAttempted = false;
-  const completedStages: CameraFtpSwitchStage[] = [];
-
-  const runStage = async <T>(stage: CameraFtpSwitchStage, operation: () => T | Promise<T>): Promise<T> => {
-    currentStage = stage;
-    hooks.onStage?.({ stage, status: "running" });
-    try {
-      const result = await operation();
-      completedStages.push(stage);
-      hooks.onStage?.({ stage, status: "success" });
-      return result;
-    } catch (error: any) {
-      hooks.onStage?.({ stage, status: "failed", code: switchFailureCode(error?.diagnostics?.stage || stage, error?.code || "") });
-      throw error;
-    }
-  };
-
-  try {
-    await runStage("validate_target_event", hooks.validateTargetEvent);
-    await runStage("check_pending_uploads", hooks.checkPendingUploads);
-    snapshot = await runStage("snapshot_current_state", hooks.snapshotCurrentState);
-    await runStage("prepare_target_directory", hooks.prepareTargetDirectory);
-    systemStatus = await runStage("update_iis_physical_path", async () => {
-      systemChangeAttempted = true;
-      const result = await hooks.updateIisPhysicalPath(snapshot as TSnapshot);
-      systemChanged = true;
-      return result;
-    });
-    await runStage("switch_watcher", async () => {
-      watcherSwitchAttempted = true;
-      await hooks.switchWatcher(snapshot as TSnapshot);
-    });
-    await runStage("verify_switched_state", () => hooks.verifySwitchedState(snapshot as TSnapshot, systemStatus as TSystemStatus));
-    await runStage("commit_active_event", async () => {
-      activeEventCommitAttempted = true;
-      await hooks.commitActiveEvent(snapshot as TSnapshot);
-    });
-    return { operationId: hooks.operationId, systemStatus, completedStages };
-  } catch (error: any) {
-    const failedStage = error?.diagnostics?.stage || currentStage;
-    const code = switchFailureCode(failedStage, error?.code || "");
-    const originalDetails = error?.diagnostics?.details && typeof error.diagnostics.details === "object"
-      ? error.diagnostics.details
-      : {};
-    const scriptRollbackSucceeded = error?.diagnostics?.rollbackSucceeded === true
-      || error?.diagnostics?.data?.rollback?.succeeded === true;
-    const shouldRestoreSystem = systemChanged
-      || (systemChangeAttempted && error?.code !== "UAC_CANCELLED" && !scriptRollbackSucceeded);
-    const rollback: CameraFtpSwitchRollbackItem[] = [];
-    let rollbackSystemStatus: TSystemStatus | undefined;
-
-    const rollbackStep = async (
-      stage: CameraFtpSwitchRollbackItem["stage"],
-      required: boolean,
-      operation: () => void | TSystemStatus | Promise<void | TSystemStatus>
-    ): Promise<void> => {
-      if (!required) {
-        rollback.push({ stage, status: "not_required", message: "本阶段尚未修改，无需恢复。" });
-        return;
-      }
-      hooks.onStage?.({ stage, status: "running" });
-      try {
-        const result = await operation();
-        if (result !== undefined) rollbackSystemStatus = result as TSystemStatus;
-        rollback.push({ stage, status: "success", message: "已恢复并进入回滚验证。" });
-        hooks.onStage?.({ stage, status: "success" });
-      } catch (rollbackError: any) {
-        rollback.push({
-          stage,
-          status: "failed",
-          code: rollbackError?.code || "FTP_SWITCH_ROLLBACK_FAILED",
-          message: rollbackError?.message || "回滚失败。"
-        });
-        hooks.onStage?.({ stage, status: "failed", code: rollbackError?.code || "FTP_SWITCH_ROLLBACK_FAILED" });
-      }
-    };
-
-    if (snapshot !== undefined) {
-      await rollbackStep("rollback_physical_path", shouldRestoreSystem, () => hooks.rollbackSystem(snapshot as TSnapshot));
-      const physicalRollback = rollback[rollback.length - 1];
-      rollback.push({
-        stage: "rollback_site_state",
-        status: physicalRollback.status,
-        ...(physicalRollback.code ? { code: physicalRollback.code } : {}),
-        message: shouldRestoreSystem ? "站点运行状态与 physicalPath 使用同一 IIS 快照恢复。" : "站点状态未修改，或管理员脚本已验证完成内部回滚。"
-      });
-      await rollbackStep("rollback_watcher", watcherSwitchAttempted, () => hooks.rollbackWatcher(snapshot as TSnapshot));
-      await rollbackStep("rollback_active_event", activeEventCommitAttempted, () => hooks.rollbackActiveEvent(snapshot as TSnapshot));
-      try {
-        await hooks.verifyRollback(snapshot as TSnapshot, rollbackSystemStatus);
-      } catch (rollbackError: any) {
-        rollback.push({
-          stage: "rollback_active_event",
-          status: "failed",
-          code: rollbackError?.code || "FTP_SWITCH_ROLLBACK_FAILED",
-          message: rollbackError?.message || "回滚后的真实状态验证失败。"
-        });
-      }
-    }
-
-    const rollbackFailures = rollback.filter((item) => item.status === "failed");
-    const rollbackSucceeded = rollbackFailures.length === 0;
-    const diagnostics = {
-      operationId: hooks.operationId,
-      operation: "active-event",
-      stage: failedStage,
-      rollbackAttempted: snapshot !== undefined,
-      rollbackSucceeded,
-      details: {
-        ...originalDetails,
-        fromEventId: hooks.fromEventId,
-        toEventId: hooks.toEventId,
-        failedStage,
-        failedCode: code,
-        originalCode: error?.code || "",
-        childOperationId: error?.diagnostics?.operationId,
-        scriptRollback: error?.diagnostics?.data?.rollback,
-        completedStages,
-        rollback
-      },
-      data: {
-        completedSteps: completedStages.map((stage) => ({ name: stage, status: "success" })),
-        failedStep: { name: failedStage, status: "failed", code },
-        rollback: {
-          attempted: snapshot !== undefined,
-          status: rollbackSucceeded ? "success" : "partial",
-          succeeded: rollbackSucceeded,
-          items: rollback
-        }
-      }
-    };
-    const message = rollbackSucceeded
-      ? error?.message || "切换 FTP 接收活动失败，已完整恢复原状态。"
-      : `${error?.message || "切换 FTP 接收活动失败"}；回滚未完全恢复：${rollbackFailures[0]?.message}`;
-    throw Object.assign(new Error(message), {
-      code: rollbackSucceeded ? code : "FTP_SWITCH_ROLLBACK_FAILED",
-      cause: error,
-      diagnostics
-    });
-  }
-}
 
 export function verifySwitchedSite(
   status: IisFtpSystemStatus,
@@ -687,6 +509,7 @@ export class CameraFtpOrchestrator {
   private readonly switchLock = new CameraFtpSwitchLock();
   private baseUrl = "";
   private lastKnownManagedSiteStarted: boolean | null = null;
+  private startupRecovery: CameraFtpStartupRecoveryResult | null = null;
 
   getSwitchLock(): CameraFtpSwitchLock {
     return this.switchLock;
@@ -812,6 +635,7 @@ export class CameraFtpOrchestrator {
    * Apply so a stale ordinary-permission plan can never authorize mutation.
    */
   async prepareProvisioningPlan(input: CameraFtpProvisioningPlanRequest): Promise<CameraFtpProvisioningPlan> {
+    const operationId = getOrCreateOperationId();
     validateCameraFtpPorts(input.controlPort, input.passivePortStart, input.passivePortEnd);
     const savedConfig = getConfig().cameraFtp;
     const eventId = (input.eventId || savedConfig.activeEventId).trim();
@@ -839,35 +663,39 @@ export class CameraFtpOrchestrator {
       workspace ? fs.pathExists(path.join(workspace.eventDir, "ftp")) : Promise.resolve(false)
     ]);
     const watcher = getCameraFtpWatcherStatus();
-    const plan = buildCameraFtpProvisioningPlan({
-      goal: input.goal,
-      eventId,
-      eventExists: Boolean(event),
-      eventValid: Boolean(event && ["draft", "active", "reviewing"].includes(event.status)),
-      eventStatus: event?.status || "not_found",
-      username,
-      physicalPath,
-      directoryExists,
-      legacyDirectoryExists,
-      controlPort: input.controlPort,
-      passivePortStart: input.passivePortStart,
-      passivePortEnd: input.passivePortEnd,
-      targetSiteName: input.targetSiteName,
-      targetSiteId: input.targetSiteId,
-      configMatches: savedConfig.activeEventId === eventId
-        && savedConfig.username === username
-        && savedConfig.controlPort === input.controlPort
-        && savedConfig.passivePortStart === input.passivePortStart
-        && savedConfig.passivePortEnd === input.passivePortEnd,
-      watcher: {
-        running: watcher.running && (!eventId || watcher.eventId === eventId),
-        unstableCount: watcher.unstableCount,
-        pendingCount: watcher.pendingCount + watcher.queuedCount,
-        importingCount: watcher.importingCount
-      },
-      system
-    });
+    const plan: CameraFtpProvisioningPlan = {
+      ...buildCameraFtpProvisioningPlan({
+        goal: input.goal,
+        eventId,
+        eventExists: Boolean(event),
+        eventValid: Boolean(event && ["draft", "active", "reviewing"].includes(event.status)),
+        eventStatus: event?.status || "not_found",
+        username,
+        physicalPath,
+        directoryExists,
+        legacyDirectoryExists,
+        controlPort: input.controlPort,
+        passivePortStart: input.passivePortStart,
+        passivePortEnd: input.passivePortEnd,
+        targetSiteName: input.targetSiteName,
+        targetSiteId: input.targetSiteId,
+        configMatches: savedConfig.activeEventId === eventId
+          && savedConfig.username === username
+          && savedConfig.controlPort === input.controlPort
+          && savedConfig.passivePortStart === input.passivePortStart
+          && savedConfig.passivePortEnd === input.passivePortEnd,
+        watcher: {
+          running: watcher.running && (!eventId || watcher.eventId === eventId),
+          unstableCount: watcher.unstableCount,
+          pendingCount: watcher.pendingCount + watcher.queuedCount,
+          importingCount: watcher.importingCount
+        },
+        system
+      }),
+      operationId
+    };
     safeLog("info", {
+      operationId,
       planId: plan.planId,
       goal: plan.target,
       eventId,
@@ -884,8 +712,13 @@ export class CameraFtpOrchestrator {
 
   private async buildStatus(
     config: CameraFtpConfig,
-    options: { forceSystemRefresh?: boolean; systemStatus?: IisFtpSystemStatus } = {}
+    options: {
+      forceSystemRefresh?: boolean;
+      systemStatus?: IisFtpSystemStatus;
+      inspectionSource?: "ordinary" | "administrator";
+    } = {}
   ): Promise<CameraFtpStatus> {
+    const inspectedAt = new Date().toISOString();
     const activeEvent = config.activeEventId ? getEventById(config.activeEventId) : undefined;
     let ftpPath = "";
     if (activeEvent && getConfig().repository.path) {
@@ -900,17 +733,11 @@ export class CameraFtpOrchestrator {
     if (system.site.started !== null) {
       this.lastKnownManagedSiteStarted = system.site.started;
     }
-    const site = system.site.started === null && this.lastKnownManagedSiteStarted !== null
-      ? {
-          ...system.site,
-          started: this.lastKnownManagedSiteStarted,
-          status: this.lastKnownManagedSiteStarted ? "started" : "stopped"
-        }
-      : system.site;
     const inspection = getCameraFtpInspectionState(system);
     const watcher = getCameraFtpWatcherStatus();
     const warnings = Array.from(new Set([
       ...system.warnings.map(localizeCameraFtpWarning),
+      ...(this.startupRecovery?.warnings.map((entry) => entry.message) || []),
       ...networkAddresses.warnings,
       ...(config.activeEventId && !activeEvent ? ["保存的 FTP 接收活动已不存在，请重新选择。"] : []),
       ...(activeEvent && !["draft", "active", "reviewing"].includes(activeEvent.status)
@@ -924,12 +751,15 @@ export class CameraFtpOrchestrator {
     return {
       provider: "iis",
       inspectionLevel: inspection.inspectionLevel,
+      inspectionOutcome: inspection.inspectionOutcome,
+      inspectionSource: options.inspectionSource || (options.systemStatus ? "administrator" : "ordinary"),
+      inspectedAt,
       requiresAdminForFullInspection: inspection.requiresAdminForFullInspection,
       requiresAdminForSystemChanges: inspection.requiresAdminForSystemChanges,
       platform: system.platform,
       windowsFeatures: system.windowsFeatures,
       service: system.service,
-      site,
+      site: system.site,
       binding: system.binding,
       authentication: system.authentication,
       authorization: system.authorization,
@@ -953,25 +783,57 @@ export class CameraFtpOrchestrator {
       missingItems: system.missingItems,
       lastError: inspection.lastError || (watcher.lastError
         ? { code: "CAMERA_FTP_WATCHER_FAILED", message: watcher.lastError }
-        : null)
+        : null),
+      startupRecovery: this.startupRecovery
     };
   }
 
   async restoreWatcher(input: { baseUrl: string }): Promise<CameraFtpWatcherStatus> {
     this.setBaseUrl(input.baseUrl);
-    const config = getConfig().cameraFtp;
-    if (!config.activeEventId) return getCameraFtpWatcherStatus();
-    let event: EventRow;
-    try {
-      event = allowedEvent(config.activeEventId);
-    } catch (error: any) {
-      safeLog("warn", { code: error?.code, eventId: config.activeEventId }, "未恢复相机 FTP watcher");
-      return getCameraFtpWatcherStatus();
-    }
-    ensureEventWorkingDirs(event.slug);
-    const ftpPath = eventFtpPath(event);
-    await fs.ensureDir(ftpPath);
-    return startCameraFtpWatcher(watcherContext(event, ftpPath, this.baseUrl));
+    this.startupRecovery = await runCameraFtpStartupRecovery(input, {
+      getConfig,
+      getEvent: getEventById,
+      inspectRepository: async (repositoryPath) => {
+        const repository = checkRepository(repositoryPath);
+        return {
+          configured: Boolean(repository.path),
+          available: repository.exists && repository.readable && repository.writable
+        };
+      },
+      inspectReceiveDirectory: async (receivePath) => {
+        try {
+          const stat = await fs.stat(receivePath);
+          if (!stat.isDirectory()) return { exists: true, accessible: false, isDirectory: false };
+          await fs.access(receivePath, fs.constants.R_OK | fs.constants.W_OK);
+          return { exists: true, accessible: true, isDirectory: true };
+        } catch {
+          return { exists: false, accessible: false, isDirectory: false };
+        }
+      },
+      inspectCurrent: async ({ config, physicalPath }) => {
+        const system = await this.manager.getStatus({
+          config: config as unknown as CameraFtpConfig,
+          physicalPath
+        }, { force: true });
+        const inspection = getCameraFtpInspectionState(system);
+        const currentInspectionLevel: CameraFtpStartupInspectionLevel = inspection.inspectionOutcome === "confirmed"
+          ? "full"
+          : inspection.inspectionOutcome;
+        return {
+          currentInspectionLevel,
+          site: {
+            exists: system.site.exists,
+            started: system.site.started,
+            physicalPath: system.site.physicalPath
+          }
+        };
+      },
+      getWatcherStatus: () => getCameraFtpWatcherStatus(),
+      startWatcher: (watcherInput) => startCameraFtpWatcher(watcherInput),
+      scanWatcher: () => scanCameraFtpWatcher(),
+      log: (level, data, message) => safeLog(level, data, message)
+    });
+    return getCameraFtpWatcherStatus();
   }
 
   async setup(input: {
@@ -1434,7 +1296,7 @@ export class CameraFtpOrchestrator {
   }
 
   private async switchActiveEventUnlocked(input: { eventId: string; baseUrl: string }): Promise<CameraFtpOperationResponse> {
-    const operationId = randomUUID();
+    const operationId = getOrCreateOperationId();
     const targetEvent = allowedEvent(input.eventId);
     setPendingCameraFtpEventId(targetEvent.id);
     try {
@@ -1673,6 +1535,7 @@ export class CameraFtpOrchestrator {
   async clearActiveEvent(input: { baseUrl: string }): Promise<CameraFtpOperationResponse> {
     this.setBaseUrl(input.baseUrl);
     return this.switchLock.runExclusive(async () => {
+      const operationId = getOrCreateOperationId();
       const config = getConfig().cameraFtp;
       if (!config.activeEventId) {
         return {
@@ -1715,21 +1578,61 @@ export class CameraFtpOrchestrator {
           operation: simpleOperation("active-event", "已解除 FTP 接收活动关联；FTP 站点保持停止，原目录和文件均已保留。"),
           status: responseStatus
         };
-      } catch (error) {
+      } catch (error: any) {
         const rollbackErrors: string[] = [];
+        const rollbackItems: CameraFtpSwitchRollbackItem[] = [];
         if (watcherStopped && oldWatcherContext) {
           try {
             await startCameraFtpWatcher(oldWatcherContext);
+            rollbackItems.push({
+              stage: "rollback_watcher",
+              status: "success",
+              message: "已恢复解除关联前的 watcher。"
+            });
           } catch (rollbackError: any) {
             rollbackErrors.push(rollbackError?.message || "恢复旧 watcher 失败");
+            rollbackItems.push({
+              stage: "rollback_watcher",
+              status: "failed",
+              code: rollbackError?.code || "FTP_UNLINK_ROLLBACK_FAILED",
+              message: rollbackError?.message || "恢复旧 watcher 失败"
+            });
           }
-        }
-        if (rollbackErrors.length > 0) {
-          throw Object.assign(new Error(`${(error as any)?.message || "解除 FTP 活动关联失败"}；部分回滚失败：${rollbackErrors[0]}`), {
-            code: (error as any)?.code || "IIS_CONFIG_FAILED"
+        } else {
+          rollbackItems.push({
+            stage: "rollback_watcher",
+            status: "not_required",
+            message: "watcher 尚未停止，无需恢复。"
           });
         }
-        throw error;
+        const rollbackSucceeded = rollbackErrors.length === 0;
+        const diagnostics = {
+          operationId,
+          operation: "active-event-unlink",
+          stage: error?.diagnostics?.stage || "unlink_active_event",
+          rollbackAttempted: watcherStopped,
+          rollbackSucceeded,
+          details: {
+            childOperationId: error?.diagnostics?.operationId,
+            originalCode: error?.code || "IIS_CONFIG_FAILED",
+            rollback: rollbackItems
+          },
+          data: {
+            rollback: {
+              attempted: watcherStopped,
+              status: rollbackSucceeded ? "success" : "partial",
+              succeeded: rollbackSucceeded,
+              items: rollbackItems
+            }
+          }
+        };
+        throw Object.assign(new Error(rollbackSucceeded
+          ? error?.message || "解除 FTP 活动关联失败，运行状态未发生未恢复的变化。"
+          : `${error?.message || "解除 FTP 活动关联失败"}；部分回滚失败：${rollbackErrors[0]}`), {
+          code: rollbackSucceeded ? (error?.code || "IIS_CONFIG_FAILED") : "FTP_UNLINK_ROLLBACK_FAILED",
+          cause: error,
+          diagnostics
+        });
       }
     });
   }
@@ -1756,8 +1659,8 @@ export class CameraFtpOrchestrator {
     };
   }
 
-  shutdown(): void {
-    shutdownCameraFtpWatcher();
+  async shutdown(): Promise<{ drained: boolean }> {
+    return shutdownCameraFtpWatcher();
   }
 
   private async prepareEventDirectory(event: EventRow): Promise<string> {
@@ -1784,6 +1687,6 @@ export async function restoreCameraFtpWatcher(input: { baseUrl: string }): Promi
   return cameraFtpOrchestrator.restoreWatcher(input);
 }
 
-export function shutdownCameraFtpOrchestrator(): void {
-  cameraFtpOrchestrator.shutdown();
+export function shutdownCameraFtpOrchestrator(): Promise<{ drained: boolean }> {
+  return cameraFtpOrchestrator.shutdown();
 }

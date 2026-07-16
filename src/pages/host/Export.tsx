@@ -1,7 +1,7 @@
 import { Download, ExternalLink, Info, PackageCheck, UploadCloud } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation } from "react-router-dom";
-import { Notice } from "../../components/ui/States";
+import { TransientNotice } from "../../components/ui/States";
 import {
   createPublishExport,
   downloadPublishExport,
@@ -204,7 +204,7 @@ export function ExportPage() {
         </label>
       </div>
 
-      {message && <Notice className="mb-6" tone={message.tone} title={message.title}>{message.body}</Notice>}
+      <TransientNotice className="mb-6" message={message} onDismiss={() => setMessage(null)} />
 
       <div className="grid min-h-0 flex-1 gap-6 xl:grid-cols-[1fr_360px]">
         <main className="space-y-6">

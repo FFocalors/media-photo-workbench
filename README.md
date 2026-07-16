@@ -10,20 +10,21 @@ Media Photo Workbench / 融媒体图片工作台 是面向校园融媒体中心�
 
 ## 当前版本
 
-- 当前版本：`v1.1.0-alpha.4`
-- 发布类型：开发阶段 alpha，暂不发布
-- 本轮不打 tag、不创建 Release、不打包 ZIP
+- 当前版本：`v1.2.0-alpha.1`
+- 版本主题：现场传图稳定性与使用体验重构
+- `v1.1.0` 仅作为内部开发节点，不创建正式发布；项目从 `v1.1.0-alpha.4` 直接进入本版本线
+- 本轮不打 Tag、不创建 Release、不打包 ZIP、不生成安装包
 - 后续稳定版仍以 Windows ZIP 便携包作为主要交付方式
 
-## 推荐下载方式
+## 当前交付状态
 
-推荐使用 Windows ZIP 便携包：
+`v1.2.0-alpha.1` 是源码开发基线，本轮没有对应的 ZIP、安装包或 Release。最近的公开预发布验证版本仍为 `v1.0.0-rc.1`。后续进入稳定发布流程后，仍推荐使用 Windows ZIP 便携包，文件名将由实际发布版本决定，例如：
 
 ```text
-MediaPhotoWorkbench-v1.1.0-alpha.4-x64.zip
+MediaPhotoWorkbench-v{version}-x64.zip
 ```
 
-当前 alpha.4 不发布安装包。后续正式发布仍优先使用 Windows ZIP 便携包；当前不推荐 NSIS 安装包，也不提供 Web Installer。
+当前不推荐 NSIS 安装包，也不提供 Web Installer。
 
 ## 使用方式
 
@@ -63,9 +64,9 @@ MediaPhotoWorkbench-v1.1.0-alpha.4-x64.zip
 - Windows 热点常见主机地址候选为 `192.168.137.1`，实际地址和端口以主机首页 / 相机 FTP 页面检测结果为准。
 - 必要时检查 Windows 防火墙是否允许本软件访问专用网络。
 
-## 相机 FTP 传输（v1.1.0-alpha.4）
+## 相机 FTP 传输（v1.2.0-alpha.1）
 
-v1.1.0-alpha 使用 Windows IIS FTP 单一架构。工作台负责检测、初始化、修复、启停和显式接管 IIS FTP 站点；普通启动不要求管理员权限，只有修改 Windows 功能、IIS、本地账户、ACL 或防火墙时才会显示 UAC。
+v1.2.0-alpha.1 延续 Windows IIS FTP 单一架构。工作台负责检测、初始化、修复、启停和显式接管 IIS FTP 站点；普通启动不要求管理员权限，只有修改 Windows 功能、IIS、本地账户、ACL 或防火墙时才会显示 UAC。
 
 当前自动配置统一采用 `Preflight（只读）→ Plan → Apply（一次 UAC）→ Verify → Commit / Rollback`。setup、repair、start、restart 和 adopt-site 只改变目标意图，底层都由同一 IIS reconciliation 事务完成；start 发现配置缺失时会先修复再启动。Plan 会把项目分成“已符合 / 将创建 / 将更新 / 将修复 / 需要确认 / 阻塞”，只有无关 IIS 站点、外部程序、非工作台账户等不能安全处理的资源才阻止执行。高风险 ACL 收紧、服务器级 PASV 和显式接管会在计划确认弹窗中逐项说明。
 
@@ -74,6 +75,8 @@ v1.1.0-alpha 使用 Windows IIS FTP 单一架构。工作台负责检测、初�
 相机 FTP 页在服务运行时优先显示“相机 FTP 已启动”、当前活动、连接参数、近期相机活动和最近接收文件；账户、端口、IIS 深度检测与高级管理按需展开。最近文件按同一落盘路径只展示最新有效状态，用绿色表示导入成功、蓝色表示接收或处理中、黄色/灰色表示跳过，只有真实失败使用红色；零值统计和重复说明默认隐藏。应用内管理确认框在较小窗口和 Windows 缩放下固定标题与底部操作，中间内容独立滚动；Windows 系统 UAC 窗口不受应用控制。
 
 已配置 FTP 账户会显示“密码已设置”，刷新页面不会再用空密码框造成“是否设置成功”的歧义；真实密码仍不会被读取、回显或保存。watcher 会持久化已成功处理文件的非敏感指纹，并从旧版本已有相机 FTP 图片记录引导首次回执；工作台重启时不重复导入未变化的历史文件，停机期间新增或内容发生变化的文件仍会正常处理。
+
+配置和数据库启动现已采用显式版本账本与 fail-closed 策略：损坏或未来版本的 `config.json` 不会被空配置覆盖，已知字段类型损坏和保存失败会保留旧文件；SQLite 迁移会核对账本与实际 schema，高风险表重建前生成并校验受控备份，迁移失败不发布数据库连接。活动永久删除在首次目录移动前先落盘不可变恢复日志，再隔离受控目录；数据库失败恢复原路径，提交后清理失败明确显示部分成功，进程异常退出后由启动恢复按 SQLite 中活动是否存在决定恢复目录或继续清理。`server.log` 在打开前按大小轮转且不触碰当前写入文件。设置页“一键复制诊断”只收集白名单状态，并用父子 `operationId` 关联 API、orchestrator、PowerShell、回滚和前端错误，不包含 FTP 密码、图片路径/内容、提权输入或其他 IIS 站点配置。
 
 - 当前仅支持 Windows 11 和局域网普通 FTP；不支持 FTPS、SFTP、公网远传、RAW 或视频。
 - 控制端口默认并推荐使用 `21`，可在 `1-65535` 范围内修改；PASV 默认 `50000-50100`，binding 始终为 `*:{当前控制端口}:`，不把热点 IP 写死到 IIS。控制端口不能落入被动端口范围。
@@ -268,7 +271,7 @@ pnpm build
 pnpm dist:portable
 ```
 
-`pnpm dist:portable` 会生成 Windows ZIP 便携包到 `release-pack/`。本轮 `v1.1.0-alpha.4` 不打包、不打 tag、不创建 Release。
+`pnpm dist:portable` 会生成 Windows ZIP 便携包到 `release-pack/`。本轮 `v1.2.0-alpha.1` 禁止执行发布打包，不打 Tag、不创建 Release。
 
 Electron Builder 会通过 `extraResources` 把 `scripts/windows/*.ps1` 放入打包资源目录，供 IIS 状态与显式管理操作使用。普通应用启动仍使用非管理员权限，不应修改 NSIS 为默认提权。
 
@@ -292,8 +295,10 @@ Electron Builder 会通过 `extraResources` 把 `scripts/windows/*.ps1` 放入�
 
 ## 后续路线
 
-- `v1.1.0-alpha.1`：局域网相机 FTP 传输目录监听核心，并合并到“导入图片”页面 tab。
-- `v1.1.0-alpha.2`：相机 FTP 现场稳定性、半文件和权限异常测试；基础配置指引已在 alpha.1 收口中前移完成。
-- `v1.1.0-alpha.4`：修复 IIS FTP 提权执行器、结构化诊断、首次配置按钮状态与管理员站点发现闭环。
-- `v1.1.0-alpha.3`：相机 FTP 正式转向 Windows IIS FTP + 当前 FTP 活动自动导入，继续保留在“导入图片”页面 tab。
-- `v1.1.0` 后续再评估安装器、RAW / HEIC / 视频、权限系统和更复杂的统计复盘。
+- `v1.2.0-alpha.1 / 阶段一`：统一版本、文档与重构前构建/测试基线。
+- `阶段二`：统一 IIS、配置、数据库、运行时、watcher 与前端之间的状态真相和启动恢复模型。
+- `阶段三`：通过 Mock、临时目录和故障注入补齐现场稳定性风险测试。
+- `阶段四`：保持 API 与产品规则兼容，渐进拆分相机 FTP 前后端巨型模块。
+- `阶段五`：统一 FTP 最近文件、任务中心、图片墙和确认弹窗的状态、颜色、提示与错误语义。
+- `阶段六（已完成）`：完善配置/数据库迁移、活动永久删除跨进程恢复、日志轮转、operationId、诊断脱敏与数据一致性。
+- 压力测试和多设备接入测试安排在上述六阶段完成后的下一轮，本轮只生成现场人工测试清单。

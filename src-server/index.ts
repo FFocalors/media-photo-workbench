@@ -10,6 +10,7 @@ import { setAppDataRoot } from "./routes/settings";
 import { setRuntimeServerPort } from "./runtime";
 import { cancelRunningTasks } from "./services/tasks";
 import { runStartupAutoBackup } from "./services/databaseMaintenance";
+import { recoverPendingEventPurges } from "./services/eventPurgeJournal";
 import {
   restoreCameraFtpWatcher,
   shutdownCameraFtpOrchestrator
@@ -17,7 +18,7 @@ import {
 
 export interface ServerHandle {
   port: number;
-  close: () => void;
+  close: () => Promise<void>;
 }
 
 export interface StartServerOptions {
@@ -95,7 +96,31 @@ export async function startServer(
   const dbPath = resolveDatabasePath(appDataRoot, config.database.path);
   initDatabase(dbPath);
 
-  // 6. 创建 Express 应用
+  // 6. 在开放 API 或恢复 watcher 前，先协调上次进程中断的活动永久删除。
+  // SQLite 是否仍有活动记录是提交真相；恢复过程只触碰仓库内 journal
+  // 明确记录的 working/archive 隔离路径，不执行任何 IIS 或系统修改。
+  try {
+    const purgeRecovery = await recoverPendingEventPurges(config.repository.path);
+    if (purgeRecovery.unresolved > 0) {
+      safeLog("error", {
+        scanned: purgeRecovery.scanned,
+        restored: purgeRecovery.restored,
+        cleaned: purgeRecovery.cleaned,
+        unresolved: purgeRecovery.unresolved,
+        issues: purgeRecovery.issues
+      }, "活动永久删除启动恢复仍有待重试项");
+    } else if (purgeRecovery.scanned > 0) {
+      safeLog("info", {
+        scanned: purgeRecovery.scanned,
+        restored: purgeRecovery.restored,
+        cleaned: purgeRecovery.cleaned
+      }, "活动永久删除启动恢复完成");
+    }
+  } catch (error) {
+    safeLog("error", { error }, "活动永久删除启动恢复失败，恢复日志已保留供下次重试");
+  }
+
+  // 7. 创建 Express 应用
   const app = createApp({
     frontendDistPath: options.frontendDistPath,
     serveFrontend: options.serveFrontend
@@ -103,7 +128,7 @@ export async function startServer(
   const server = http.createServer(app);
   initRealtime(server);
 
-  // 7. 带端口冲突处理的启动
+  // 8. 带端口冲突处理的启动
   const actualPort = await tryListen(server, preferredPort);
   setRuntimeServerPort(actualPort);
 
@@ -131,29 +156,49 @@ export async function startServer(
     void runStartupAutoBackup();
   }, 1500);
 
+  let closePromise: Promise<void> | null = null;
+
   return {
     port: actualPort,
     close: () => {
-      safeLog("info", "正在关闭后端服务...");
-      // 应用退出只关闭 watcher，不停止 IIS FTP 站点或 FTPSVC。
-      shutdownCameraFtpOrchestrator();
-      cancelRunningTasks("server_closing");
-      setLoggerShuttingDown(true);
-      try {
-        getRealtime()?.close();
-      } catch {
-        // ignore shutdown errors
-      }
-      try {
-        closeDatabase();
-      } catch {
-        // ignore shutdown errors
-      }
-      try {
-        server.close();
-      } catch {
-        // ignore shutdown errors
-      }
+      if (closePromise) return closePromise;
+      closePromise = (async () => {
+        safeLog("info", "正在关闭后端服务...");
+        try {
+          server.close();
+        } catch {
+          // The listener may already be closed.
+        }
+        // 应用退出只关闭 watcher，不停止 IIS FTP 站点或 FTPSVC；先等待
+        // 已开始的单批导入安全收尾，再关闭 SQLite。
+        let watcherDrained = false;
+        try {
+          watcherDrained = (await shutdownCameraFtpOrchestrator()).drained;
+        } catch (error) {
+          safeLog("warn", { error }, "相机 FTP watcher 退出收尾失败，原图将在下次启动补扫");
+        }
+        cancelRunningTasks("server_closing");
+        try {
+          getRealtime()?.close();
+        } catch {
+          // ignore shutdown errors
+        }
+        if (watcherDrained) {
+          try {
+            closeDatabase();
+          } catch {
+            // ignore shutdown errors
+          }
+        } else {
+          // An importer may still be completing its SQLite transaction. Do not
+          // close the shared handle underneath it; process exit will release it.
+          safeLog("error", {
+            code: "CAMERA_FTP_SHUTDOWN_DRAIN_TIMEOUT"
+          }, "相机 FTP 导入未在退出窗口内排空，跳过主动关闭数据库以避免中途破坏事务");
+        }
+        setLoggerShuttingDown(true);
+      })();
+      return closePromise;
     }
   };
 }

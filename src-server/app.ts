@@ -14,6 +14,7 @@ import tasksRouter from "./routes/tasks";
 import downloadPackagesRouter from "./routes/downloadPackages";
 import clientsRouter from "./routes/clients";
 import cameraFtpRouter from "./routes/cameraFtp";
+import { operationContextMiddleware } from "./utils/operationContext";
 
 export interface CreateAppOptions {
   frontendDistPath?: string;
@@ -27,7 +28,8 @@ export function createApp(options: CreateAppOptions = {}): express.Application {
   const app = express();
 
   // 中间件
-  app.use(cors());
+  app.use(cors({ exposedHeaders: ["X-Operation-Id"] }));
+  app.use(operationContextMiddleware);
   app.use(express.json());
 
   // 路由挂载

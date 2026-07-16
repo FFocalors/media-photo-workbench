@@ -1,12 +1,21 @@
 import crypto from "crypto";
-import { promises as nativeFs } from "fs";
 import path from "path";
 import fs from "fs-extra";
 import { getConfig } from "../config/config";
 import { getPendingCameraFtpEventId, reserveCameraFtpEventLifecycle } from "./cameraFtpRuntimeState";
 import { getDatabase } from "../db/database";
 import { getLogger } from "../utils/logger";
+import { deleteCameraFtpReceiptsForEvent } from "./cameraFtpReceipts";
 import { ensureEventWorkingDirs, getEventWorkspacePaths } from "./eventWorkspace";
+import {
+  cleanupEventPurgeJournal,
+  markEventPurgeDatabaseCommitted,
+  prepareEventPurgeJournal,
+  restoreEventPurgeJournal,
+  stageEventPurgeJournal,
+  type EventPurgeJournal,
+  type EventPurgeTarget
+} from "./eventPurgeJournal";
 import { checkRepository } from "./repository";
 
 export interface EventRow {
@@ -87,50 +96,11 @@ function writeEventOperationLog(eventId: string, type: string, detail: Record<st
   `).run(type, eventId, JSON.stringify({ event_id: eventId, ...detail }), nowTimestamp());
 }
 
-async function makeWritableRecursive(targetPath: string): Promise<void> {
-  let stat: fs.Stats;
+function writePurgeFailureLog(eventId: string, detail: Record<string, unknown>): void {
   try {
-    stat = await fs.lstat(targetPath);
-  } catch {
-    return;
-  }
-
-  try {
-    await fs.chmod(targetPath, stat.isDirectory() ? 0o777 : 0o666);
-  } catch {
-    // Windows/OneDrive may keep some entries locked; deletion will surface final errors.
-  }
-
-  if (!stat.isDirectory()) return;
-
-  let entries: string[];
-  try {
-    entries = await fs.readdir(targetPath);
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    await makeWritableRecursive(path.join(targetPath, entry));
-  }
-}
-
-async function removeDirectoryIfExists(targetPath: string, missingFiles: string[], errors: string[], deletedFiles: string[]): Promise<void> {
-  if (!targetPath || !(await fs.pathExists(targetPath))) {
-    missingFiles.push(targetPath);
-    return;
-  }
-
-  try {
-    await makeWritableRecursive(targetPath);
-    await nativeFs.rm(targetPath, {
-      recursive: true,
-      force: true,
-      maxRetries: 12,
-      retryDelay: 400
-    });
-    deletedFiles.push(targetPath);
-  } catch (err: any) {
-    errors.push(`${targetPath}: ${err?.message || "删除失败"}`);
+    writeEventOperationLog(eventId, "event_purge_failed", detail);
+  } catch (error) {
+    getLogger().error({ error, eventId }, "活动永久删除失败日志写入失败");
   }
 }
 
@@ -335,7 +305,7 @@ async function purgeEventInternal(id: string, input: { includeArchive?: boolean 
   const includeArchive = input.includeArchive !== false;
   const archivePaths = includeArchive ? await listArchivePathsForEvent(repositoryStatus.path, existing) : [archivePath];
   const deletedFiles: string[] = [];
-  const missingFiles: string[] = [];
+  let missingFiles: string[] = [];
   const errors: string[] = [];
 
   const imageCount = (getDatabase().prepare("SELECT COUNT(*) AS count FROM images WHERE event_id = ?").get(existing.id) as { count: number }).count;
@@ -350,45 +320,120 @@ async function purgeEventInternal(id: string, input: { includeArchive?: boolean 
   };
   writeEventOperationLog(existing.id, "event_purge_started", purgeDetail);
 
-  await removeDirectoryIfExists(workspace.eventDir, missingFiles, errors, deletedFiles);
-  if (includeArchive) {
-    for (const candidate of archivePaths) {
-      await removeDirectoryIfExists(candidate, missingFiles, errors, deletedFiles);
-    }
-  }
-
-  if (errors.length > 0) {
-    writeEventOperationLog(existing.id, "event_purge_failed", {
+  const purgeTargets: EventPurgeTarget[] = [
+    { targetPath: workspace.eventDir, root: "working" },
+    ...(includeArchive
+      ? archivePaths.map((targetPath) => ({ targetPath, root: "archive" as const }))
+      : [])
+  ];
+  let journal: EventPurgeJournal | null = null;
+  try {
+    const prepared = await prepareEventPurgeJournal(
+      repositoryStatus.path,
+      existing.id,
+      purgeTargets
+    );
+    journal = prepared.journal;
+    missingFiles = prepared.missingFiles;
+    if (journal) await stageEventPurgeJournal(journal);
+  } catch (error: any) {
+    const rollbackErrors = journal ? await restoreEventPurgeJournal(journal) : [];
+    writePurgeFailureLog(existing.id, {
       ...purgeDetail,
-      errors
+      stage: "stage_files",
+      error_code: error?.code || "EVENT_PURGE_FILE_STAGE_FAILED",
+      rollback_errors: rollbackErrors
     });
     throw {
-      code: "EVENT_PURGE_FILE_FAILED",
-      message: `活动文件删除未完成：${errors[0]}`
+      code: rollbackErrors.length > 0 ? "EVENT_PURGE_STAGE_ROLLBACK_FAILED" : (error?.code || "EVENT_PURGE_FILE_STAGE_FAILED"),
+      message: rollbackErrors.length > 0
+        ? `活动目录隔离失败，且部分目录未能恢复：${rollbackErrors[0]}`
+        : `活动目录隔离失败，数据库未修改：${error?.message || "无法移动活动目录"}`,
+      details: { rollbackErrors }
     };
   }
 
-  const db = getDatabase();
-  const imageIds = (db.prepare("SELECT id FROM images WHERE event_id = ?").all(existing.id) as Array<{ id: string }>).map((row) => row.id);
-  const exportJobIds = (db.prepare("SELECT id FROM export_jobs WHERE event_id = ?").all(existing.id) as Array<{ id: string }>).map((row) => row.id);
-  const operationTargetIds = Array.from(new Set([existing.id, ...imageIds, ...exportJobIds]));
+  let deletedRecords: {
+    deletedImageTags: number;
+    deletedDownloadLogs: number;
+    deletedExportJobs: number;
+    deletedOperationLogs: number;
+    deletedImages: number;
+    deletedArchivedEvents: number;
+    deletedEvents: number;
+  };
+  try {
+    const db = getDatabase();
+    const imageIds = (db.prepare("SELECT id FROM images WHERE event_id = ?").all(existing.id) as Array<{ id: string }>).map((row) => row.id);
+    const exportJobIds = (db.prepare("SELECT id FROM export_jobs WHERE event_id = ?").all(existing.id) as Array<{ id: string }>).map((row) => row.id);
+    const operationTargetIds = Array.from(new Set([existing.id, ...imageIds, ...exportJobIds]));
+    const deleteDatabaseRecords = db.transaction(() => {
+      writeEventOperationLog(existing.id, "event_purged", {
+        ...purgeDetail,
+        staged_paths: journal
+          ? purgeTargets
+            .map((target) => path.resolve(target.targetPath))
+            .filter((targetPath) => !missingFiles.some((missingPath) => path.resolve(missingPath) === targetPath))
+          : [],
+        missing_files: missingFiles
+      });
+      const deletedImageTags = deleteByIds("image_tags", "image_id", imageIds);
+      const deletedDownloadLogs = imageIds.length > 0
+        ? db.prepare(`DELETE FROM download_logs WHERE event_id = ? OR image_id IN (${makePlaceholders(imageIds)})`).run(existing.id, ...imageIds).changes
+        : db.prepare("DELETE FROM download_logs WHERE event_id = ?").run(existing.id).changes;
+      const deletedExportJobs = db.prepare("DELETE FROM export_jobs WHERE event_id = ?").run(existing.id).changes;
+      const deletedOperationLogsByTarget = deleteByIds("operation_logs", "target_id", operationTargetIds);
+      const deletedOperationLogsByDetail = db.prepare("DELETE FROM operation_logs WHERE detail LIKE ?").run(`%"event_id":"${existing.id}"%`).changes;
+      deleteCameraFtpReceiptsForEvent(existing.id);
+      const deletedImages = db.prepare("DELETE FROM images WHERE event_id = ?").run(existing.id).changes;
+      const deletedArchivedEvents = db.prepare("DELETE FROM archived_events WHERE event_id = ?").run(existing.id).changes;
+      const deletedEvents = db.prepare("DELETE FROM events WHERE id = ?").run(existing.id).changes;
+      return {
+        deletedImageTags,
+        deletedDownloadLogs,
+        deletedExportJobs,
+        deletedOperationLogs: deletedOperationLogsByTarget + deletedOperationLogsByDetail,
+        deletedImages,
+        deletedArchivedEvents,
+        deletedEvents
+      };
+    });
+    deletedRecords = deleteDatabaseRecords();
+  } catch (error: any) {
+    const rollbackErrors = journal ? await restoreEventPurgeJournal(journal) : [];
+    writePurgeFailureLog(existing.id, {
+      ...purgeDetail,
+      stage: "delete_database_records",
+      error_code: error?.code || "EVENT_PURGE_DATABASE_FAILED",
+      rollback_errors: rollbackErrors
+    });
+    throw {
+      code: rollbackErrors.length > 0 ? "EVENT_PURGE_DATABASE_ROLLBACK_FAILED" : "EVENT_PURGE_DATABASE_FAILED",
+      message: rollbackErrors.length > 0
+        ? `活动数据库清理失败，且部分目录未能恢复：${rollbackErrors[0]}`
+        : "活动数据库清理失败，活动目录已恢复，未永久删除文件。",
+      details: { rollbackErrors }
+    };
+  }
 
-  writeEventOperationLog(existing.id, "event_purged", {
-    ...purgeDetail,
-    deleted_files: deletedFiles,
-    missing_files: missingFiles
-  });
-
-  const deletedImageTags = deleteByIds("image_tags", "image_id", imageIds);
-  const deletedDownloadLogs = imageIds.length > 0
-    ? db.prepare(`DELETE FROM download_logs WHERE event_id = ? OR image_id IN (${makePlaceholders(imageIds)})`).run(existing.id, ...imageIds).changes
-    : db.prepare("DELETE FROM download_logs WHERE event_id = ?").run(existing.id).changes;
-  const deletedExportJobs = db.prepare("DELETE FROM export_jobs WHERE event_id = ?").run(existing.id).changes;
-  const deletedOperationLogsByTarget = deleteByIds("operation_logs", "target_id", operationTargetIds);
-  const deletedOperationLogsByDetail = db.prepare("DELETE FROM operation_logs WHERE detail LIKE ?").run(`%"event_id":"${existing.id}"%`).changes;
-  const deletedImages = db.prepare("DELETE FROM images WHERE event_id = ?").run(existing.id).changes;
-  const deletedArchivedEvents = db.prepare("DELETE FROM archived_events WHERE event_id = ?").run(existing.id).changes;
-  const deletedEvents = db.prepare("DELETE FROM events WHERE id = ?").run(existing.id).changes;
+  if (journal) {
+    let commitMarkerError: unknown = null;
+    try {
+      await markEventPurgeDatabaseCommitted(journal);
+    } catch (error) {
+      // SQLite is already committed and remains the recovery authority. Keep
+      // the immutable journal and continue cleanup; a missing phase marker is
+      // only user-visible if file cleanup also remains pending.
+      commitMarkerError = error;
+      getLogger().warn({ error, eventId: existing.id }, "活动永久删除提交阶段标记写入失败，继续按不可变恢复日志清理");
+    }
+    const cleanup = await cleanupEventPurgeJournal(journal);
+    deletedFiles.push(...cleanup.deletedFiles);
+    errors.push(...cleanup.errors);
+    if (commitMarkerError && cleanup.errors.length > 0) {
+      errors.push("数据库已清理，但永久删除阶段标记写入失败；恢复日志仍保留，下次启动将按数据库状态重试。");
+    }
+  }
 
   return {
     eventId: existing.id,
@@ -400,13 +445,13 @@ async function purgeEventInternal(id: string, input: { includeArchive?: boolean 
     missingFiles,
     errors,
     deletedRecords: {
-      events: deletedEvents,
-      images: deletedImages,
-      imageTags: deletedImageTags,
-      downloadLogs: deletedDownloadLogs,
-      exportJobs: deletedExportJobs,
-      operationLogs: deletedOperationLogsByTarget + deletedOperationLogsByDetail,
-      archivedEvents: deletedArchivedEvents
+      events: deletedRecords.deletedEvents,
+      images: deletedRecords.deletedImages,
+      imageTags: deletedRecords.deletedImageTags,
+      downloadLogs: deletedRecords.deletedDownloadLogs,
+      exportJobs: deletedRecords.deletedExportJobs,
+      operationLogs: deletedRecords.deletedOperationLogs,
+      archivedEvents: deletedRecords.deletedArchivedEvents
     }
   };
 }

@@ -19,12 +19,13 @@ function findFile(directory, fileName) {
   return "";
 }
 
-function main() {
+async function main() {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mpw-camera-ftp-ui-"));
   try {
     const tsc = path.join(root, "node_modules", "typescript", "bin", "tsc");
     const compile = spawnSync(process.execPath, [tsc,
       path.join(root, "src", "components", "import", "cameraFtpUiState.ts"),
+      path.join(root, "src", "lib", "api.ts"),
       "--outDir", tempRoot,
       "--target", "ES2020",
       "--module", "commonjs",
@@ -38,6 +39,22 @@ function main() {
     const compiledModule = findFile(tempRoot, "cameraFtpUiState.js");
     assert.ok(compiledModule, "camera FTP UI state module must compile for the test harness");
     const ui = require(compiledModule);
+    const compiledErrorPresentationModule = findFile(tempRoot, "cameraFtpErrorPresentation.js");
+    assert.ok(compiledErrorPresentationModule, "camera FTP error presentation boundary must compile for the test harness");
+    const errorPresentation = require(compiledErrorPresentationModule);
+    const compiledApiModule = findFile(tempRoot, "api.js");
+    assert.ok(compiledApiModule, "API response parser must compile for the test harness");
+    const api = require(compiledApiModule);
+    assert.strictEqual(
+      ui.buildCameraFtpErrorPresentation,
+      errorPresentation.buildCameraFtpErrorPresentation,
+      "the legacy UI state facade must re-export the error presentation builder"
+    );
+    assert.strictEqual(
+      ui.stageLabel,
+      errorPresentation.stageLabel,
+      "the legacy UI state facade must re-export stage labels from the dedicated boundary"
+    );
 
     const baseStatus = {
       initialized: false,
@@ -90,6 +107,93 @@ function main() {
     assert.equal(running.stop, true);
     assert.equal(running.restart, true);
     assert.equal(running.repair, true);
+
+    assert.equal(
+      typeof ui.applyCameraFtpStatusObservation,
+      "function",
+      "camera FTP status observations must be reduced by a pure function"
+    );
+    const fullInspectionAt = "2026-07-15T02:00:00.000Z";
+    const ordinaryInspectionAt = "2026-07-15T02:01:00.000Z";
+    const refreshedAt = "2026-07-15T02:02:00.000Z";
+    const stalePollAt = "2026-07-15T02:00:30.000Z";
+    const fullAdminStatus = {
+      inspectionLevel: "full",
+      site: { exists: true, started: true, physicalPath: "D:\\workspace\\old-full" },
+      port: { listening: true, conflict: false },
+      firewall: { correct: true },
+      warnings: []
+    };
+    const partialOrdinaryStatus = {
+      inspectionLevel: "partial",
+      site: { exists: null, started: null, physicalPath: "" },
+      port: { listening: null, conflict: null },
+      firewall: { correct: null },
+      warnings: ["ordinary inspection could not read IIS configuration"]
+    };
+    const initialInspectionState = { current: null, lastFullInspection: null };
+    const afterAdminInspection = ui.applyCameraFtpStatusObservation(initialInspectionState, {
+      source: "admin",
+      status: fullAdminStatus,
+      inspectedAt: fullInspectionAt,
+      requestId: 1,
+      latestRequestId: 1
+    });
+    assert.deepEqual(afterAdminInspection.current.status, fullAdminStatus);
+    assert.deepEqual(afterAdminInspection.lastFullInspection.status, fullAdminStatus);
+
+    const afterOrdinaryInspection = ui.applyCameraFtpStatusObservation(afterAdminInspection, {
+      source: "ordinary",
+      status: partialOrdinaryStatus,
+      inspectedAt: ordinaryInspectionAt,
+      requestId: 2,
+      latestRequestId: 2
+    });
+    assert.deepEqual(
+      afterOrdinaryInspection.current.status,
+      partialOrdinaryStatus,
+      "a new partial/unknown response is the current server fact and must not inherit old full values"
+    );
+    assert.equal(afterOrdinaryInspection.current.status.site.started, null);
+    assert.equal(afterOrdinaryInspection.current.status.port.listening, null);
+    assert.equal(afterOrdinaryInspection.current.status.firewall.correct, null);
+    assert.deepEqual(
+      afterOrdinaryInspection.lastFullInspection.status,
+      fullAdminStatus,
+      "the last administrator inspection remains a separate historical snapshot"
+    );
+    assert.equal(afterOrdinaryInspection.current.label, "当前普通检测");
+    assert.equal(afterOrdinaryInspection.current.inspectedAt, ordinaryInspectionAt);
+    assert.equal(afterOrdinaryInspection.lastFullInspection.label, "最近管理员完整检测");
+    assert.equal(afterOrdinaryInspection.lastFullInspection.inspectedAt, fullInspectionAt);
+
+    const refreshedPartialStatus = {
+      ...partialOrdinaryStatus,
+      site: { exists: true, started: false, physicalPath: "D:\\workspace\\current-refresh" },
+      warnings: []
+    };
+    const afterRefresh = ui.applyCameraFtpStatusObservation(afterOrdinaryInspection, {
+      source: "ordinary",
+      status: refreshedPartialStatus,
+      inspectedAt: refreshedAt,
+      requestId: 4,
+      latestRequestId: 4
+    });
+    const afterStalePoll = ui.applyCameraFtpStatusObservation(afterRefresh, {
+      source: "ordinary",
+      status: { ...fullAdminStatus, site: { ...fullAdminStatus.site, physicalPath: "D:\\workspace\\stale-poll" } },
+      inspectedAt: stalePollAt,
+      requestId: 3,
+      latestRequestId: 4
+    });
+    assert.strictEqual(
+      afterStalePoll,
+      afterRefresh,
+      "an older initial-load or polling response must not overwrite a newer refresh"
+    );
+    assert.deepEqual(afterStalePoll.current.status, refreshedPartialStatus);
+    assert.equal(afterStalePoll.current.inspectedAt, refreshedAt);
+    assert.equal(afterStalePoll.lastFullInspection.inspectedAt, fullInspectionAt);
 
     const validPorts = ui.validateCameraFtpPortSettings("2021", "50000", "50100");
     assert.equal(validPorts.valid, true);
@@ -187,6 +291,128 @@ function main() {
     assert.equal(firewallFailure.technicalDetails.includes(secret), false);
     assert.match(firewallFailure.technicalDetails, /已隐藏/);
     assert.match(firewallFailure.technicalDetails, /operation-test-1/);
+
+    const structuredTopLevelFailure = ui.buildCameraFtpErrorPresentation({
+      ok: false,
+      data: null,
+      error: {
+        code: "FTP_EVENT_SWITCH_FAILED",
+        title: "无法切换接收活动",
+        message: "legacy fallback message",
+        impact: "当前活动保持不变，后续文件仍进入原活动。",
+        nextAction: "确认没有上传任务后重试。",
+        rollbackStatus: "partial",
+        operationId: "operation-top-level-1",
+        retryable: false,
+        technicalDetails: `password=${secret}`,
+        details: {
+          stage: "verify_switched_state",
+          operationId: "legacy-operation-id",
+          rollbackAttempted: true,
+          rollbackSucceeded: true,
+          technicalMessage: "legacy technical details"
+        }
+      }
+    });
+    assert.equal(structuredTopLevelFailure.title, "无法切换接收活动");
+    assert.equal(structuredTopLevelFailure.body, "当前活动保持不变，后续文件仍进入原活动。");
+    assert.equal(structuredTopLevelFailure.advice, "确认没有上传任务后重试。");
+    assert.equal(structuredTopLevelFailure.retryable, false);
+    assert.equal(structuredTopLevelFailure.rollbackSucceeded, false, "top-level rollback status must win over legacy flags");
+    assert.match(structuredTopLevelFailure.technicalDetails, /operation-top-level-1/);
+    assert.doesNotMatch(structuredTopLevelFailure.technicalDetails, new RegExp(secret.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(structuredTopLevelFailure.technicalDetails, /已隐藏/);
+
+    const adminRequiredNotice = ui.buildCameraFtpErrorPresentation({
+      ok: false,
+      data: null,
+      error: {
+        code: "ADMIN_REQUIRED",
+        title: "需要管理员检测",
+        message: "普通权限无法读取完整 IIS 状态。",
+        retryable: true,
+        details: { stage: "inspect_iis_site" }
+      }
+    });
+    assert.equal(adminRequiredNotice.tone, "info");
+    const unknownStateNotice = ui.buildCameraFtpErrorPresentation({
+      ok: false,
+      data: null,
+      error: {
+        code: "FTP_SERVICE_STATE_UNKNOWN",
+        message: "当前无法确认服务状态。",
+        retryable: false,
+        details: { stage: "verify_configuration" }
+      }
+    });
+    assert.equal(unknownStateNotice.tone, "info");
+    assert.equal(unknownStateNotice.retryable, false);
+
+    const correlatedFailure = ui.buildCameraFtpErrorPresentation({
+      ok: false,
+      data: null,
+      operationId: "api-request-001",
+      error: {
+        code: "IIS_CONFIG_FAILED",
+        message: "failed",
+        operationId: "api-request-001",
+        details: {
+          stage: "verify_configuration",
+          operationId: "api-request-001",
+          parentOperationId: "api-request-001",
+          childOperationId: "elevated-child-001"
+        }
+      }
+    });
+    assert.equal(correlatedFailure.operationId, "api-request-001");
+    assert.equal(correlatedFailure.childOperationId, "elevated-child-001");
+    assert.match(correlatedFailure.technicalDetails, /API 请求 operationId：api-request-001/);
+    assert.match(correlatedFailure.technicalDetails, /提权子 operationId：elevated-child-001/);
+
+    const duplicateOperationId = ui.buildCameraFtpErrorPresentation({
+      ok: false,
+      data: null,
+      error: {
+        code: "IIS_CONFIG_FAILED",
+        message: "failed",
+        operationId: "same-operation-001",
+        details: { operationId: "same-operation-001", childOperationId: "same-operation-001" }
+      }
+    });
+    assert.equal(duplicateOperationId.childOperationId, undefined);
+    assert.equal((duplicateOperationId.technicalDetails.match(/same-operation-001/g) || []).length, 1);
+
+    const compoundSecretFailure = ui.buildCameraFtpErrorPresentation({
+      ok: false,
+      data: null,
+      error: {
+        code: "IIS_CONFIG_FAILED",
+        title: `ftpPassword=${secret}`,
+        message: "failed",
+        impact: `access_token:${secret}`,
+        nextAction: `cameraSecret=${secret}`,
+        details: {
+          stage: "verify_configuration",
+          technicalMessage: `SecureStringValue=${secret}`,
+          diagnostics: {
+            accountPassword: secret,
+            refreshToken: secret,
+            cameraSecret: secret,
+            physicalPath: "D:\\sensitive\\working\\event"
+          }
+        }
+      }
+    });
+    const compoundSecretPresentation = [
+      compoundSecretFailure.title,
+      compoundSecretFailure.body,
+      compoundSecretFailure.advice,
+      compoundSecretFailure.technicalDetails
+    ].join("\n");
+    assert.equal(compoundSecretPresentation.includes(secret), false);
+    assert.equal(compoundSecretPresentation.includes("D:\\sensitive"), false);
+    assert.match(compoundSecretPresentation, /已隐藏/);
+    assert.match(compoundSecretPresentation, /路径已隐藏/);
 
     const nestedSecret = ui.buildCameraFtpErrorPresentation({
       ok: false,
@@ -394,8 +620,41 @@ function main() {
       path.join(root, "src", "components", "import", "CameraFtpImportPanel.tsx"),
       "utf8"
     );
+    const uiStateSource = fs.readFileSync(
+      path.join(root, "src", "components", "import", "cameraFtpUiState.ts"),
+      "utf8"
+    );
+    const errorPresentationSource = fs.readFileSync(
+      path.join(root, "src", "components", "import", "camera-ftp", "cameraFtpErrorPresentation.ts"),
+      "utf8"
+    );
+    const recentFilesSource = fs.readFileSync(
+      path.join(root, "src", "components", "import", "camera-ftp", "CameraFtpRecentFiles.tsx"),
+      "utf8"
+    );
+    const provisioningFeedbackSource = fs.readFileSync(
+      path.join(root, "src", "components", "import", "camera-ftp", "CameraFtpProvisioningFeedback.tsx"),
+      "utf8"
+    );
+    const diagnosticErrorCardSource = fs.readFileSync(
+      path.join(root, "src", "components", "import", "camera-ftp", "CameraFtpDiagnosticErrorCard.tsx"),
+      "utf8"
+    );
     const apiSource = fs.readFileSync(path.join(root, "src", "lib", "api.ts"), "utf8");
     const confirmDialogSource = fs.readFileSync(path.join(root, "src", "components", "ui", "ConfirmDialog.tsx"), "utf8");
+    assert.match(uiStateSource, /export type \{ CameraFtpErrorPresentation \} from "\.\/camera-ftp\/cameraFtpErrorPresentation";/);
+    assert.match(uiStateSource, /export \{[\s\S]*buildCameraFtpErrorPresentation,[\s\S]*stageLabel[\s\S]*\} from "\.\/camera-ftp\/cameraFtpErrorPresentation";/);
+    assert.doesNotMatch(uiStateSource, /const STAGE_LABELS|const STAGE_ADVICE|function redactTechnicalText|function buildCameraFtpErrorPresentation/);
+    assert.match(errorPresentationSource, /const STAGE_LABELS/);
+    assert.match(errorPresentationSource, /const STAGE_ADVICE/);
+    assert.match(errorPresentationSource, /function redactTechnicalText/);
+    assert.match(errorPresentationSource, /export function buildCameraFtpErrorPresentation/);
+    const loadPageStart = panelSource.indexOf("const loadPage =");
+    const refreshStatusStart = panelSource.indexOf("const refreshStatus =", loadPageStart);
+    assert.ok(loadPageStart >= 0 && refreshStatusStart > loadPageStart, "camera FTP page load and refresh functions must remain inspectable");
+    const loadPageSource = panelSource.slice(loadPageStart, refreshStatusStart);
+    assert.match(loadPageSource, /statusRequestSequence\.current/, "initial load must share the status request sequence used by polling and refresh");
+    assert.match(loadPageSource, /requestId/, "initial load responses must be rejected when a newer status request has started");
     assert.match(panelSource, /管理员诊断（只读）/);
     assert.match(panelSource, /配置并启动 FTP/);
     assert.match(panelSource, /自动配置并启动 FTP/);
@@ -407,12 +666,13 @@ function main() {
     assert.match(panelSource, /相机连接参数/);
     assert.doesNotMatch(panelSource, /Nikon 相机连接参数/);
     assert.match(panelSource, /已通过 Nikon Z6III 真机验证/);
-    assert.match(panelSource, /label: "导入成功"/);
-    assert.match(panelSource, /label: "重复跳过"/);
-    assert.match(panelSource, /label: "等待稳定"/);
-    assert.match(panelSource, /record\.status === "failed" \? record\.error \|\| record\.reason : ""/);
-    assert.match(panelSource, /RecentStatChip/);
-    assert.match(panelSource, /max-h-\[420px\]/);
+    assert.match(panelSource, /CameraFtpRecentFiles/);
+    assert.match(recentFilesSource, /label: "导入成功"/);
+    assert.match(recentFilesSource, /label: "重复跳过"/);
+    assert.match(recentFilesSource, /label: "等待稳定"/);
+    assert.match(recentFilesSource, /record\.status === "failed" \? record\.error \|\| record\.reason : ""/);
+    assert.match(recentFilesSource, /RecentStatChip/);
+    assert.match(recentFilesSource, /max-h-\[420px\]/);
     assert.doesNotMatch(panelSource, /title="最近接收与自动导入"/);
     assert.match(panelSource, /FTP 设置（按需展开）/);
     assert.match(panelSource, /FTP 密码已设置/);
@@ -440,26 +700,71 @@ function main() {
     assert.match(panelSource, /CameraFtpProvisioningPlanSummary/);
     assert.match(panelSource, /CameraFtpProvisioningProgress/);
     assert.match(panelSource, /CameraFtpIssueCenter/);
-    assert.match(panelSource, /查看全部配置项/);
-    assert.match(panelSource, /查看普通信息与自动修复项/);
-    assert.match(panelSource, /max-h-52[\s\S]*overflow-y-auto/);
-    assert.match(panelSource, /mergePartialCameraFtpStatus/);
+    assert.match(provisioningFeedbackSource, /查看全部配置项/);
+    assert.match(provisioningFeedbackSource, /查看普通信息与自动修复项/);
+    assert.match(provisioningFeedbackSource, /max-h-52[\s\S]*overflow-y-auto/);
+    assert.doesNotMatch(panelSource, /mergePartialCameraFtpStatus|preserveUnknown/, "old full fields must never be merged into a newer partial status");
+    assert.match(panelSource, /applyCameraFtpStatusObservation/);
+    assert.match(panelSource, /lastFullInspection/);
+    assert.match(panelSource, /当前普通检测/);
+    assert.match(panelSource, /最近管理员完整检测/);
     assert.match(panelSource, /operationInProgressRef/);
     assert.match(panelSource, /applyDuringOperation/);
     assert.match(panelSource, /待切换，尚未生效/);
     assert.match(panelSource, /正在切换到/);
     assert.match(panelSource, /action\.kind === "repair"[\s\S]*action\.useCredentialForm/);
-    assert.match(panelSource, /自动回滚/);
-    assert.match(panelSource, /接管现有站点/);
+    assert.match(diagnosticErrorCardSource, /自动回滚/);
+    assert.match(diagnosticErrorCardSource, /接管现有站点/);
+    assert.match(diagnosticErrorCardSource, /请求操作 ID/);
+    assert.match(diagnosticErrorCardSource, /提权子操作 ID/);
+    assert.match(diagnosticErrorCardSource, /<details[\s\S]*技术详情（已脱敏）[\s\S]*diagnostic\.technicalDetails/);
+    assert.match(diagnosticErrorCardSource, /diagnostic\.retryable && onRetry/);
+    assert.match(panelSource, /onRetry=\{message\.diagnostic\.retryable/);
     assert.match(panelSource, /message\?\.diagnostic\?\.code === "UAC_CANCELLED"/);
     assert.match(panelSource, /void requestAction\(action\.kind, action\.siteName\)/);
     assert.match(apiSource, /\/api\/camera-ftp\/\$\{path\}/);
     assert.match(apiSource, /"provisioning-plan"/);
     assert.match(apiSource, /CameraFtpProvisioningPlanItemStatus/);
+    assert.match(apiSource, /export interface ApiError[\s\S]*rollbackStatus\?: string;[\s\S]*technicalDetails\?: string;/);
+    assert.match(apiSource, /title: looksLikeHtml \? "接口路由异常" : "接口响应异常"/);
     assert.match(apiSource, /repairCameraFtp\(input: \{ password\?: string/);
     assert.match(confirmDialogSource, /max-h-\[calc\(100dvh-1\.5rem\)\]/);
     assert.match(confirmDialogSource, /min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto/);
     assert.match(confirmDialogSource, /shrink-0 flex-wrap justify-end/);
+
+    const malformedJson = await api.parseApiResponse(new Response('{"ok":', {
+      status: 502,
+      headers: {
+        "Content-Type": "application/json",
+        "X-Operation-Id": "malformed-json-operation-001"
+      }
+    }));
+    assert.equal(malformedJson.ok, false);
+    assert.equal(malformedJson.error.code, "HTTP_INVALID_JSON_RESPONSE");
+    assert.equal(malformedJson.operationId, "malformed-json-operation-001");
+    assert.equal(malformedJson.error.operationId, "malformed-json-operation-001");
+
+    const falseHttpSuccess = await api.parseApiResponse(new Response(JSON.stringify({
+      ok: true,
+      data: { changed: true },
+      error: null
+    }), {
+      status: 500,
+      headers: {
+        "Content-Type": "application/json",
+        "X-Operation-Id": "status-mismatch-operation-001"
+      }
+    }));
+    assert.equal(falseHttpSuccess.ok, false);
+    assert.equal(falseHttpSuccess.error.code, "HTTP_STATUS_ENVELOPE_MISMATCH");
+    assert.equal(falseHttpSuccess.operationId, "status-mismatch-operation-001");
+
+    const invalidEnvelope = await api.parseApiResponse(new Response("{}", {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    }));
+    assert.equal(invalidEnvelope.ok, false);
+    assert.equal(invalidEnvelope.error.code, "HTTP_INVALID_JSON_ENVELOPE");
 
     console.log(JSON.stringify({
       suite: "cameraFtpUiState",
@@ -476,10 +781,18 @@ function main() {
         "port_conflict_localization_and_suggestions",
         "password_required_state",
         "uac_cancel_localization",
+        "structured_top_level_error_with_legacy_compatibility",
+        "admin_required_and_unknown_state_use_neutral_tone",
+        "non_retryable_error_hides_retry_action",
         "structured_stage_error",
         "onedrive_path_error_localization",
         "technical_detail_redaction",
         "nested_json_secret_redaction",
+        "compound_secret_keys_and_local_paths_are_redacted",
+        "parent_and_child_operation_ids_are_presented",
+        "malformed_json_preserves_operation_id",
+        "http_status_and_envelope_mismatch_cannot_report_success",
+        "invalid_json_envelope_is_rejected",
         "legacy_firewall_rule_risk_confirmation",
         "policy_firewall_rule_blocking",
         "ftp_site_start_failure_diagnostics",
@@ -497,13 +810,18 @@ function main() {
         "collapsible_plan_and_issue_lists",
         "small_window_dialog_scroll_contract",
         "repair_password_dependency",
-        "partial_poll_preserves_admin_evidence",
+        "current_and_admin_status_are_separate",
+        "partial_unknown_is_not_backfilled_from_full",
+        "stale_initial_load_and_poll_results_are_ignored",
+        "inspection_snapshot_labels_and_times_are_independent",
+        "initial_load_and_poll_share_request_sequence",
         "running_state_visual_priority",
         "camera_activity_is_explicitly_inferred",
         "recent_record_semantic_colors",
         "compact_recent_file_layout",
         "configured_password_state_without_secret_echo",
-        "generic_camera_copy_and_labels"
+        "generic_camera_copy_and_labels",
+        "error_presentation_boundary_facade"
       ]
     }, null, 2));
   } finally {
@@ -511,4 +829,7 @@ function main() {
   }
 }
 
-main();
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

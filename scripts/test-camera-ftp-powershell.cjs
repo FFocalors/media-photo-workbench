@@ -555,6 +555,10 @@ exit 0
     assert.match(source["iis-ftp-common.ps1"], /FTP_ACL_ROLLBACK_VERIFY_FAILED/);
     assert.match(source["iis-ftp-setup.ps1"], /\$aclSnapshot = Get-MpwDirectoryAclSnapshot -PhysicalPath \$physicalPath/);
     assert.match(source["iis-ftp-setup.ps1"], /Restore-MpwDirectoryAclSnapshot -PhysicalPath \$options\.PhysicalPath -Snapshot \$aclSnapshot/);
+    assert.match(source["iis-ftp-control.ps1"], /Restore-MpwDirectoryAclSnapshot -PhysicalPath \$newPath -Snapshot \$newAclSnapshot/);
+    assert.match(source["iis-ftp-control.ps1"], /FTP_ACL_ROLLBACK_VERIFY_FAILED/);
+    assert.match(source["iis-ftp-control.ps1"], /Restore-MpwFtpServiceSnapshot -Snapshot \$serviceSnapshot/);
+    assert.match(source["iis-ftp-control.ps1"], /FTP_SITE_RUNTIME_ROLLBACK_FAILED/);
     assert.match(source["iis-ftp-setup.ps1"], /FTP_ACCOUNT_ROLLBACK_DEFERRED/);
     assert.match(source["iis-ftp-common.ps1"], /aclStage = 'canonicalize_acl'/);
     assert.match(source["iis-ftp-common.ps1"], /sourceExceptionType[\s\S]*hresult[\s\S]*acl = Get-MpwDirectoryAclDiagnostics/);

@@ -126,7 +126,7 @@ eventSlug_importTime_sourceDevice_originalFilename
 
 前端必须优先遵循 Figma 设计稿。没有设计稿时采用简约、高级、克制、浅色界面、低饱和蓝色主色、轻阴影、圆角卡片、线性图标、适合 Windows 11 桌面端的方向。不要做成手机 App 风格。
 
-当前 v0.13.0-dev 的重点是 Windows 打包发布。开发模式继续使用 Vite `0.0.0.0:5173` 和后端 `3030-3040`，生产 / 打包模式必须由 Express 托管前端 `dist/`，让客户端通过 `http://主机IP:{serverPort}` 同时访问前端页面、`/api` 和 Socket.IO。Electron 主窗口建议最小尺寸为 `1200 x 760`，但页面不能只依赖最小尺寸；在 1200px 左右宽度下，图片墙、待修图、导出、归档和客户端协作页面仍必须可用。手机和平板第一版只作为轻量访问入口，不要求完整适配批量上传、批量下载、导出、归档、永久删除等重操作。
+当前 `v1.2.0-alpha.1` 的重点是现场传图稳定性与使用体验重构，不进行发布打包。开发模式继续使用 Vite `0.0.0.0:5173` 和后端 `3030-3040`，生产 / 打包模式必须由 Express 托管前端 `dist/`，让客户端通过 `http://主机IP:{serverPort}` 同时访问前端页面、`/api` 和 Socket.IO。Electron 主窗口建议最小尺寸为 `1200 x 760`，但页面不能只依赖最小尺寸；在 1200px 左右宽度下，图片墙、待修图、导出、归档和客户端协作页面仍必须可用。手机和平板第一版只作为轻量访问入口，不要求完整适配批量上传、批量下载、导出、归档、永久删除等重操作。
 
 页面：
 
@@ -178,9 +178,9 @@ Windows 打包目标为便携 ZIP 包和 NSIS 安装包，输出到 `release-pac
 
 ### 10.1 Windows IIS 相机 FTP
 
-v1.1.0-alpha 的相机 FTP 只使用 Windows IIS FTP。禁止重新引入 `ftp-srv`、Node FTP Server 或双 provider fallback。
+v1.2.0-alpha.1 的相机 FTP 只使用 Windows IIS FTP。禁止重新引入 `ftp-srv`、Node FTP Server 或双 provider fallback。
 
-- IIS 站点默认名为 `MediaPhotoWorkbenchFTP`，binding `*:21:`，普通 FTP、无 SSL、basic auth 开启、anonymous 关闭，PASV 为 `50000-50100`。
+- IIS 站点默认名为 `MediaPhotoWorkbenchFTP`，binding `*:{当前控制端口}:`；控制端口默认 `21`，允许在 `1-65535` 范围内配置且不得落入 PASV 范围。普通 FTP、无 SSL、basic auth 开启、anonymous 关闭，PASV 默认为 `50000-50100`。
 - 工作台在“导入图片 > 相机 FTP”内检测、初始化、修复、启停和显式接管 IIS。不得静默修改、停止或删除用户现有 IIS 站点、目录或文件。
 - 普通启动不要求管理员权限。只有修改 Windows 功能、IIS、FTPSVC、本地账户、ACL 或防火墙时使用 `Start-Process -Verb RunAs`；提权脚本通过短生命周期 JSON 文件传递参数和结果。
 - 默认用户名是 `camera`，没有默认密码。全局共用一套可修改账户；密码不得进入命令行、`config.json`、SQLite、API 响应、日志或测试快照。只自动管理 Description 为 `Media Photo Workbench Managed FTP Account` 的本地账户。

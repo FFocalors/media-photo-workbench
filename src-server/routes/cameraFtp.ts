@@ -1,7 +1,14 @@
 import { type Request, Router } from "express";
 import { requireHostOnly } from "../middleware/hostOnly";
 import { getCameraFtpOrchestrator } from "../services/cameraFtpOrchestrator";
+import {
+  buildCameraFtpDiagnosticSnapshot,
+  getLastCameraFtpOperation,
+  recordCameraFtpOperation
+} from "../services/cameraFtpDiagnostics";
+import { getConfig } from "../config/config";
 import { getLogger } from "../utils/logger";
+import { getCurrentOperationId } from "../utils/operationContext";
 import { sendError, sendSuccess } from "../utils/response";
 
 const router = Router();
@@ -76,20 +83,113 @@ router.use((req, res, next) => {
   requireHostOnly(req, res, next);
 });
 
+router.use((req, res, next) => {
+  const operationId = getCurrentOperationId();
+  res.on("finish", () => {
+    const errorCode = typeof res.locals.cameraFtpErrorCode === "string"
+      ? res.locals.cameraFtpErrorCode
+      : null;
+    // Successful polling is an observation, not the last meaningful FTP
+    // operation. Observation failures remain useful and are retained.
+    if (operationId && shouldRecordCameraFtpOperation(req.method, req.path, errorCode)) {
+      recordCameraFtpOperation(operationId, typeof res.locals.cameraFtpErrorCode === "string"
+        ? res.locals.cameraFtpErrorCode
+        : null);
+    }
+  });
+  next();
+});
+
+export function shouldRecordCameraFtpOperation(method: string, requestPath: string, errorCode: string | null): boolean {
+  const isObservationRequest = method.toUpperCase() === "GET"
+    && (requestPath === "/status" || requestPath === "/diagnostics");
+  return !isObservationRequest || Boolean(errorCode);
+}
+
+function firstErrorText(...values: unknown[]): string | undefined {
+  return values.find((value): value is string => typeof value === "string" && value.trim().length > 0);
+}
+
+export function redactDiagnosticText(value: string): string {
+  return value
+    .replace(/("?[\w.-]*(?:password|passphrase|secret|token|securestring|credential)[\w.-]*"?\s*[=:：]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;}]+)/gi, "$1[redacted]")
+    .replace(/[A-Za-z]:\\+[^\r\n"',;}]+/g, "[redacted-path]")
+    .replace(/\\\\+[^\r\n"',;}]+/g, "[redacted-path]");
+}
+
+function isSensitiveDiagnosticKey(key: string): boolean {
+  return /(?:password|passphrase|secret|token|securestring|credential)/i.test(key);
+}
+
+function isPathDiagnosticKey(key: string): boolean {
+  return /(?:path|directory|folder|filename)/i.test(key);
+}
+
+export function sanitizeDiagnosticValue(value: unknown, depth = 0): unknown {
+  if (depth > 12) return "[truncated]";
+  if (typeof value === "string") return redactDiagnosticText(value);
+  if (Array.isArray(value)) return value.map((item) => sanitizeDiagnosticValue(item, depth + 1));
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+    key,
+    isSensitiveDiagnosticKey(key)
+      ? "[redacted]"
+      : isPathDiagnosticKey(key)
+        ? "[redacted-path]"
+      : sanitizeDiagnosticValue(item, depth + 1)
+  ]));
+}
+
+function sendCameraFtpValidationError(
+  res: any,
+  code: string,
+  message: string,
+  nextAction: string
+): void {
+  res.locals.cameraFtpErrorCode = code;
+  sendError(res, code, message, 400, undefined, buildCameraFtpValidationErrorMetadata(message, nextAction));
+}
+
+export function buildCameraFtpValidationErrorMetadata(message: string, nextAction: string) {
+  return {
+    title: message,
+    impact: "尚未执行任何 Windows、IIS、账户、目录权限或防火墙修改。",
+    nextAction,
+    rollbackStatus: "not_required",
+    operationId: getCurrentOperationId(),
+    retryable: true
+  };
+}
+
 function handleError(res: any, error: any, fallbackCode: string, fallbackMessage: string): void {
   const code = typeof error?.code === "string" ? error.code : fallbackCode;
-  const message = typeof error?.message === "string" && error.message ? error.message : fallbackMessage;
+  res.locals.cameraFtpErrorCode = code;
+  const requestOperationId = getCurrentOperationId();
+  const message = redactDiagnosticText(
+    typeof error?.message === "string" && error.message ? error.message : fallbackMessage
+  );
   const source = error?.diagnostics && typeof error.diagnostics === "object" ? error.diagnostics : null;
   const operationData = source?.data && typeof source.data === "object" ? source.data : null;
-  const diagnosticDetails = source?.details && typeof source.details === "object" ? source.details : undefined;
+  const diagnosticDetails = source?.details && typeof source.details === "object"
+    ? sanitizeDiagnosticValue(source.details) as Record<string, unknown>
+    : undefined;
+  const sanitizedOperationData = operationData
+    ? sanitizeDiagnosticValue(operationData) as Record<string, any>
+    : undefined;
+  const legacyDetails = error?.details && typeof error.details === "object"
+    ? sanitizeDiagnosticValue(error.details) as Record<string, unknown>
+    : undefined;
+  const sourceOperationId = typeof source?.operationId === "string" ? source.operationId : undefined;
   const details = source ? {
-    operationId: typeof source.operationId === "string" ? source.operationId : undefined,
+    operationId: requestOperationId || sourceOperationId,
+    childOperationId: sourceOperationId && sourceOperationId !== requestOperationId ? sourceOperationId : undefined,
+    parentOperationId: typeof source.parentOperationId === "string" ? source.parentOperationId : undefined,
     operation: typeof source.operation === "string" ? source.operation : undefined,
     scriptName: typeof source.scriptName === "string" ? source.scriptName : undefined,
     stage: typeof source.stage === "string" ? source.stage : undefined,
-    technicalMessage: typeof source.technicalMessage === "string" ? source.technicalMessage : undefined,
+    technicalMessage: typeof source.technicalMessage === "string" ? redactDiagnosticText(source.technicalMessage) : undefined,
     exceptionType: typeof source.exceptionType === "string" ? source.exceptionType : undefined,
-    command: typeof source.command === "string" ? source.command : undefined,
+    command: typeof source.command === "string" ? redactDiagnosticText(source.command) : undefined,
     siteName: typeof source.siteName === "string" ? source.siteName : undefined,
     rollbackAttempted: typeof source.rollbackAttempted === "boolean" ? source.rollbackAttempted : undefined,
     rollbackSucceeded: typeof source.rollbackSucceeded === "boolean" || source.rollbackSucceeded === null ? source.rollbackSucceeded : undefined,
@@ -97,34 +197,71 @@ function handleError(res: any, error: any, fallbackCode: string, fallbackMessage
     timestamp: typeof source.timestamp === "string" ? source.timestamp : undefined,
     warnings: Array.isArray(source.warnings)
       ? source.warnings.map((item: unknown) => typeof item === "string"
-        ? item
+        ? redactDiagnosticText(item)
         : item && typeof item === "object" && typeof (item as any).message === "string"
-          ? (item as any).message
+          ? redactDiagnosticText((item as any).message)
           : "").filter(Boolean)
       : undefined,
     // `conflict` remains for backward-compatible UI actions. The explicitly
     // named fields preserve the full, sanitized transaction report.
     conflict: diagnosticDetails,
     diagnostics: diagnosticDetails,
-    completedSteps: Array.isArray(operationData?.completedSteps)
-      ? operationData.completedSteps
-      : Array.isArray(operationData?.steps)
-        ? operationData.steps
+    completedSteps: Array.isArray(sanitizedOperationData?.completedSteps)
+      ? sanitizedOperationData.completedSteps
+      : Array.isArray(sanitizedOperationData?.steps)
+        ? sanitizedOperationData.steps
         : undefined,
-    failedStep: operationData?.failedStep && typeof operationData.failedStep === "object" ? operationData.failedStep : undefined,
-    rollback: operationData?.rollback && typeof operationData.rollback === "object" ? operationData.rollback : undefined,
-    preflight: operationData?.preflight && typeof operationData.preflight === "object" ? operationData.preflight : undefined,
-    provisioningPlan: operationData?.plan && typeof operationData.plan === "object" ? operationData.plan : undefined
-  } : error?.details && typeof error.details === "object"
-    ? { conflict: error.details, diagnostics: error.details }
+    failedStep: sanitizedOperationData?.failedStep && typeof sanitizedOperationData.failedStep === "object" ? sanitizedOperationData.failedStep : undefined,
+    rollback: sanitizedOperationData?.rollback && typeof sanitizedOperationData.rollback === "object" ? sanitizedOperationData.rollback : undefined,
+    preflight: sanitizedOperationData?.preflight && typeof sanitizedOperationData.preflight === "object" ? sanitizedOperationData.preflight : undefined,
+    provisioningPlan: sanitizedOperationData?.plan && typeof sanitizedOperationData.plan === "object" ? sanitizedOperationData.plan : undefined
+  } : legacyDetails
+    ? { ...legacyDetails, conflict: legacyDetails, diagnostics: legacyDetails }
     : undefined;
+  const rollbackData = operationData?.rollback && typeof operationData.rollback === "object" ? operationData.rollback : null;
+  const rollbackStatus = firstErrorText(
+    error?.rollbackStatus,
+    source?.rollbackStatus,
+    rollbackData?.status
+  ) || (source?.rollbackAttempted === false
+    ? "not_required"
+    : source?.rollbackSucceeded === true
+      ? "success"
+      : source?.rollbackSucceeded === false
+        ? "failed"
+        : undefined);
+  const structuredTechnicalDetails = firstErrorText(
+    error?.technicalDetails,
+    source?.technicalDetails,
+    details?.technicalMessage
+  );
+  const structuredImpact = firstErrorText(error?.impact, source?.impact);
+  const structuredNextAction = firstErrorText(error?.nextAction, source?.nextAction, source?.advice);
+  const structuredError = {
+    title: redactDiagnosticText(firstErrorText(error?.title, source?.title, fallbackMessage) || fallbackMessage),
+    impact: redactDiagnosticText(structuredImpact || "本次操作未得到成功确认；任何不完整变更都不会被视为成功。"),
+    nextAction: redactDiagnosticText(structuredNextAction || "请根据失败阶段检查后重试；若回滚状态不明确，请先查看技术详情。"),
+    rollbackStatus: rollbackStatus || "unknown",
+    operationId: firstErrorText(requestOperationId, error?.operationId, source?.operationId, details?.operationId),
+    retryable: typeof error?.retryable === "boolean"
+      ? error.retryable
+      : typeof source?.retryable === "boolean"
+        ? source.retryable
+        : true,
+    technicalDetails: structuredTechnicalDetails ? redactDiagnosticText(structuredTechnicalDetails) : undefined
+  };
   if (!error?.code) {
-    getLogger().error({ error }, fallbackMessage);
-    sendError(res, code, message, 500, details);
+    getLogger().error({
+      code,
+      stage: details?.stage,
+      operationId: structuredError.operationId,
+      exceptionType: typeof error?.name === "string" ? error.name : typeof error
+    }, fallbackMessage);
+    sendError(res, code, message, 500, details, structuredError);
     return;
   }
-  getLogger().warn({ code, stage: details?.stage, operationId: details?.operationId }, fallbackMessage);
-  sendError(res, code, message, errorStatus(code), details);
+  getLogger().warn({ code, stage: details?.stage, operationId: structuredError.operationId }, fallbackMessage);
+  sendError(res, code, message, errorStatus(code), details, structuredError);
 }
 
 router.get("/status", async (req, res) => {
@@ -132,6 +269,24 @@ router.get("/status", async (req, res) => {
     sendSuccess(res, await orchestrator.getStatus({ forceSystemRefresh: req.query.refresh === "1" }));
   } catch (error) {
     handleError(res, error, "IIS_STATUS_CHECK_FAILED", "读取 IIS FTP 状态失败");
+  }
+});
+
+router.get("/diagnostics", async (_req, res) => {
+  try {
+    const requestOperationId = getCurrentOperationId();
+    if (!requestOperationId) {
+      throw Object.assign(new Error("无法建立诊断操作标识。"), { code: "DIAGNOSTIC_OPERATION_ID_MISSING" });
+    }
+    const status = await orchestrator.getStatus();
+    sendSuccess(res, buildCameraFtpDiagnosticSnapshot({
+      config: getConfig().cameraFtp,
+      status,
+      requestOperationId,
+      lastOperation: getLastCameraFtpOperation()
+    }));
+  } catch (error) {
+    handleError(res, error, "CAMERA_FTP_DIAGNOSTICS_FAILED", "生成相机 FTP 脱敏诊断信息失败");
   }
 });
 
@@ -159,7 +314,12 @@ router.post("/provisioning-plan", async (req, res) => {
 router.post("/setup", async (req, res) => {
   try {
     if (req.body?.confirm !== true) {
-      sendError(res, "ADMIN_REQUIRED", "初始化会修改 Windows 功能、IIS、账户、ACL 和防火墙，需要用户明确确认。", 400);
+      sendCameraFtpValidationError(
+        res,
+        "ADMIN_REQUIRED",
+        "初始化会修改 Windows 功能、IIS、账户、ACL 和防火墙，需要用户明确确认。",
+        "请查看配置计划，确认后重新执行初始化。"
+      );
       return;
     }
     const eventId = typeof req.body?.eventId === "string" ? req.body.eventId.trim() : "";
@@ -172,7 +332,7 @@ router.post("/setup", async (req, res) => {
     const allowLegacyFirewallRuleUpdate = req.body?.allowLegacyFirewallRuleUpdate === true;
     const allowAclTightening = req.body?.allowAclTightening === true;
     if (password !== confirmPassword) {
-      sendError(res, "FTP_PASSWORD_INVALID", "两次输入的 FTP 密码不一致。", 400);
+      sendCameraFtpValidationError(res, "FTP_PASSWORD_INVALID", "两次输入的 FTP 密码不一致。", "请重新输入并确认相同的 FTP 密码。");
       return;
     }
     sendSuccess(res, await orchestrator.setup({ baseUrl: getBaseUrl(req), eventId, username, password, controlPort, passivePortStart, passivePortEnd, allowLegacyFirewallRuleUpdate, allowAclTightening }));
@@ -184,12 +344,17 @@ router.post("/setup", async (req, res) => {
 router.post("/adopt-site", async (req, res) => {
   try {
     if (req.body?.confirm !== true) {
-      sendError(res, "IIS_SITE_ADOPTION_REQUIRED", "接管会修改现有 IIS FTP 站点，需要用户明确确认。", 400);
+      sendCameraFtpValidationError(
+        res,
+        "IIS_SITE_ADOPTION_REQUIRED",
+        "接管会修改现有 IIS FTP 站点，需要用户明确确认。",
+        "请先核对待接管站点与配置计划，再明确确认。"
+      );
       return;
     }
     const siteName = typeof req.body?.siteName === "string" ? req.body.siteName.trim() : "";
     if (!siteName) {
-      sendError(res, "IIS_SITE_ADOPTION_REQUIRED", "请选择需要接管的 IIS FTP 站点。", 400);
+      sendCameraFtpValidationError(res, "IIS_SITE_ADOPTION_REQUIRED", "请选择需要接管的 IIS FTP 站点。", "请从管理员检测结果中选择站点后重试。");
       return;
     }
     const eventId = typeof req.body?.eventId === "string" ? req.body.eventId.trim() : "";
@@ -202,7 +367,7 @@ router.post("/adopt-site", async (req, res) => {
     const allowLegacyFirewallRuleUpdate = req.body?.allowLegacyFirewallRuleUpdate === true;
     const allowAclTightening = req.body?.allowAclTightening === true;
     if (password !== undefined && confirmPassword !== undefined && password !== confirmPassword) {
-      sendError(res, "FTP_PASSWORD_INVALID", "两次输入的 FTP 密码不一致。", 400);
+      sendCameraFtpValidationError(res, "FTP_PASSWORD_INVALID", "两次输入的 FTP 密码不一致。", "请重新输入并确认相同的 FTP 密码。");
       return;
     }
     sendSuccess(res, await orchestrator.adoptSite({ siteName, eventId, username, password, controlPort, passivePortStart, passivePortEnd, allowLegacyFirewallRuleUpdate, allowAclTightening, baseUrl: getBaseUrl(req) }));
@@ -250,7 +415,12 @@ router.post("/restart", async (req, res) => {
 router.post("/repair", async (req, res) => {
   try {
     if (req.body?.confirm !== true) {
-      sendError(res, "ADMIN_REQUIRED", "修复会修改项目管理的 IIS FTP 配置，需要用户明确确认。", 400);
+      sendCameraFtpValidationError(
+        res,
+        "ADMIN_REQUIRED",
+        "修复会修改项目管理的 IIS FTP 配置，需要用户明确确认。",
+        "请查看修复计划，确认后重新执行。"
+      );
       return;
     }
     const password = typeof req.body?.password === "string" ? req.body.password : undefined;
@@ -283,7 +453,7 @@ router.patch("/credentials", async (req, res) => {
     const password = typeof req.body?.password === "string" ? req.body.password : "";
     const confirmPassword = typeof req.body?.confirmPassword === "string" ? req.body.confirmPassword : undefined;
     if (confirmPassword !== undefined && password !== confirmPassword) {
-      sendError(res, "FTP_PASSWORD_INVALID", "两次输入的 FTP 密码不一致。", 400);
+      sendCameraFtpValidationError(res, "FTP_PASSWORD_INVALID", "两次输入的 FTP 密码不一致。", "请重新输入并确认相同的 FTP 密码。");
       return;
     }
     sendSuccess(res, await orchestrator.updateCredentials({ username, password, baseUrl: getBaseUrl(req) }));
@@ -300,7 +470,12 @@ router.patch("/active-event", async (req, res) => {
       return;
     }
     if (!eventId) {
-      sendError(res, "FTP_EVENT_NOT_FOUND", "请选择 FTP 接收活动；解除关联需要明确确认。", 400);
+      sendCameraFtpValidationError(
+        res,
+        "FTP_EVENT_NOT_FOUND",
+        "请选择 FTP 接收活动；解除关联需要明确确认。",
+        "请选择活动；如需解除关联，请单独执行并明确确认。"
+      );
       return;
     }
     sendSuccess(res, await orchestrator.switchActiveEvent({ eventId, baseUrl: getBaseUrl(req) }));

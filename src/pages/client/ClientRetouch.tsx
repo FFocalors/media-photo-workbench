@@ -1,6 +1,6 @@
 import { Download, FileArchive, PackageCheck, UploadCloud } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Notice } from "../../components/ui/States";
+import { TransientNotice } from "../../components/ui/States";
 import {
   downloadEditPackage,
   EditedUploadData,
@@ -327,7 +327,7 @@ export function ClientRetouchPage() {
       <div className="flex-1 overflow-y-auto p-4 lg:p-6">
         <div className="mx-auto grid max-w-6xl gap-6 xl:grid-cols-[1fr_380px]">
           <section className="space-y-6">
-            {message && <Notice tone={message.tone} title={message.title}>{message.body}</Notice>}
+            <TransientNotice message={message} onDismiss={() => setMessage(null)} />
 
             <div className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
               <div className="mb-5 flex items-center justify-between">

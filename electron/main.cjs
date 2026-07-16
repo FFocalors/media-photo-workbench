@@ -453,16 +453,23 @@ app.whenReady().then(async () => {
   });
 });
 
-app.on("before-quit", () => {
+let shutdownInProgress = false;
+
+app.on("before-quit", (event) => {
   if (startupLogsDir) {
     writeStartupLog(startupLogsDir, "应用即将退出，准备关闭后端服务");
   }
-  if (serverHandle) {
-    serverHandle.close();
+  if (serverHandle && !shutdownInProgress) {
+    event.preventDefault();
+    shutdownInProgress = true;
+    const handle = serverHandle;
     serverHandle = null;
-    if (startupLogsDir) {
-      writeStartupLog(startupLogsDir, "后端服务 close 已调用");
-    }
+    void handle.close().finally(() => {
+      if (startupLogsDir) {
+        writeStartupLog(startupLogsDir, "后端服务已完成退出收尾");
+      }
+      app.quit();
+    });
   }
 });
 

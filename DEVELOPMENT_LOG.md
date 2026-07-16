@@ -27,6 +27,65 @@
 ---
 
 ## 开发记录
+### v1.2.0-alpha.1 阶段一：稳定性与体验重构启动基线
+- **启动时间**：2026-07-15 21:47:33 +08:00
+- **开发者 / 工具**：Codex
+- **基线**：从 `main` 的 `99e6f9fac487490267839c62a05db82ed5e6ccdb` 创建 `dev/v1.2.0`；起始版本为 `v1.1.0-alpha.4`，工作区干净。`v1.1.0` 仅作为内部开发节点，不发布，直接进入 `v1.2.0-alpha.1`。
+- **目标**：围绕现场传图稳定性与使用体验，依次完成状态真相/启动恢复、异常风险测试、相机 FTP 渐进模块化、状态和错误语义统一、重启恢复与数据安全；保持 Windows IIS FTP 单 provider、现有 API 和产品规则兼容。
+- **范围外**：相机来源识别、现场接收看板、一键现场模式、公网远传、FTPS/SFTP、RAW/NEF/ARW/CR3/HEIC/视频、相机品牌 SDK、云同步、AI 选片、多 FTP 账户、完整权限系统、NSIS 重做及非 FTP 页面大范围视觉重构。
+- **重构前验证**：`pnpm build` 通过（34.3 秒，仅有主 JS chunk 701.87 kB 的既有体积警告）；`pnpm test:camera-ftp` 通过（6 个子套件、159 项，98.4 秒）；`git diff --check` 通过。
+- **阶段一完成验证**：版本与文档调整后再次执行 `pnpm build`，以 `1.2.0-alpha.1` 成功构建（23.2 秒，仅保留既有 chunk 体积警告）；`pnpm test:camera-ftp` 再次通过 6 个子套件、159 项（96.7 秒）；`git diff --check` 通过且没有额外构建/测试产物进入 Git 状态。
+- **环境边界**：自动测试只执行了一次普通权限、只读的 IIS 状态探测；未执行 setup/adopt/control/credentials 等真实修改入口，也未触发 UAC。FTPSVC 可读为 Running/Auto，但普通权限无法完整读取 IIS 站点配置，因此站点状态为 unknown/requiresAdmin；该限制保留为人工验收项。
+- **交付约束**：本轮不执行压力测试或多设备接入测试，不提交、不推送、不打 Tag、不创建 Release、不打包 ZIP、不生成安装包。
+
+### v1.2.0-alpha.1 阶段二：系统状态真相与只读启动恢复
+- **日期**：2026-07-15
+- **状态真相**：普通检测与最近一次管理员完整检测分开保存并显示；较旧响应不得覆盖较新状态，历史管理员结果仅作参考，不能伪造当前 IIS 事实。状态响应兼容新增 `inspectionOutcome / inspectionSource / inspectedAt / startupRecovery`。
+- **启动恢复**：新增纯决策与执行模块，仅在 activeEvent、仓库、目录、当前 IIS 站点及 physicalPath 均可由只读证据确认时恢复 watcher，并只补扫一次停机新增文件。恢复过程不请求 UAC、不执行 setup/repair/adopt、不创建缺失目录；路径或状态不一致时给出明确跳过原因。
+- **安全门**：解除关联必须基于本次实际 IIS 检测；旧的 `lastKnownManagedSiteStarted` 只保留为展示线索，不再参与破坏性操作授权。
+- **验证**：`pnpm build`、`pnpm test:camera-ftp`、UI 状态测试、watcher 测试与 `git diff --check` 均通过；自动测试只使用 fixture、Mock、临时目录与普通只读状态检测。
+
+### v1.2.0-alpha.1 阶段三：稳定性风险与故障注入
+- **日期**：2026-07-15
+- **导入原子性**：图片记录与操作日志在同一 SQLite 事务提交；数据库、hash、缩略图或预览图失败均返回稳定 code/stage/retryable，删除本轮不完整衍生图但保留相机原图，不产生成功回执或虚假图片记录。EXIF 失败继续使用安全默认值并记录诊断。
+- **旁路隔离**：任务中心和 Socket.IO 广播失败只写诊断，不回滚已经安全落库的图片；任务进度回调故障也不得打断核心导入。
+- **watcher 与退出**：权威 `busy` 覆盖 reservation、稳定检测、队列、批次计时器和在途导入；活动切换/解除关联据此阻断。退出先停止接收新任务并等待在途导入，超时明确返回 undrained，后端不会在活动事务下方强关 SQLite。相机同名覆盖由内容 SHA-256 识别，即使路径、大小和 mtime 相同也会重新判断；未变化历史回执继续跳过。
+- **提权与回滚**：结构化 PowerShell 结果必须包含 `ok / operation / stage / timestamp / data`，缺字段返回 `ELEVATED_RESULT_INVALID_SCHEMA`；取消、无结果、无效 JSON、超时均保持独立错误码。已启动管理员子进程超时后标记 `systemStateUnknown`、保留受保护 IPC 并阻止下一项提权修改，直至后台观察到进程结束。set-path ACL 回滚复用 SDDL 复读验证；start/restart 失败恢复站点与 FTPSVC 快照；活动切换及解除关联均返回逐项 `success / partial / failed` 回滚结果。
+- **测试**：新增临时目录 watcher 故障组和临时 SQLite/仓库导入故障组，并纳入 `pnpm test:camera-ftp`；不调用真实 IIS 修改脚本，不修改真实账户、ACL、防火墙或服务。
+
+### v1.2.0-alpha.1 阶段四：相机 FTP 渐进模块化
+- **日期**：2026-07-16
+- **前端边界**：`CameraFtpImportPanel` 保留页面状态、请求编排和确认流程；最近文件、通用 Panel、配置计划/问题中心、结构化错误卡和格式化函数迁入 `src/components/import/camera-ftp/`。`cameraFtpUiState` 保留按钮、计划与状态观察等页面纯规则，错误码、阶段、建议、脱敏技术详情及回滚呈现迁入独立错误模块。
+- **后端边界**：活动切换事务迁入 `cameraFtpSwitchTransaction`；watcher 的 DTO、候选分类、记录合并、路径/context/fingerprint 纯模型迁入 `cameraFtpWatcherModel`；IIS status/result DTO、unknown 构造与 normalize 迁入 `iisFtpStatusTypes`。原 `cameraFtpOrchestrator`、`cameraFtpWatcher`、`iisFtpManager` 与 `cameraFtpUiState` 均显式 re-export 旧入口，现有消费者与 API 不需要改导入路径。
+- **行为约束**：本阶段只调整职责边界，不改变 IIS 单 provider、站点/账户/ACL/防火墙管理合同、activeEvent 原子切换、watcher 原地导入、密码保密、Socket.IO 或 API 路径。React 组件保持模块顶层定义，派生展示值在 render 期间计算。
+- **验证**：每个抽离单独执行对应 TypeScript、IIS/UI/watcher/fault 测试和 scoped diff 检查；阶段门禁 `pnpm test:camera-ftp` 通过（7 个子套件，96.6 秒），`pnpm build` 通过（28.7 秒，仅有既有主 JS chunk 703.63 kB 警告），`git diff --check` 通过。自动测试未触发 UAC，未修改真实 IIS、账户、ACL、防火墙或服务。
+
+### v1.2.0-alpha.1 阶段五：统一状态与结构化错误展示
+- **日期**：2026-07-16
+- **统一语义**：新增集中状态合同并由任务中心、导入任务、图片墙、FTP 最近文件、FTP 总状态和 provisioning 计划复用。运行/接收/处理使用蓝色，成功使用绿色，跳过/重复/风险使用黄色或灰色，未知/需管理员/停止/取消使用中性灰色，只有真实 `failed` 使用红色；废片是业务分类，不再误画成系统失败。
+- **FTP 状态**：普通 partial、`ADMIN_REQUIRED`、停止但活动仍关联、watcher 活动与 FTP 服务状态分别表达；“已停止，活动仍关联”不会被 watcher 仍运行误报为配置故障。计划 blocked 和 user confirmation 是可处理警告，不是已经执行失败。
+- **错误合同**：统一错误 envelope 兼容新增 `title / impact / nextAction / rollbackStatus / operationId / retryable / technicalDetails`，同时保留旧 `code / message / details`。FTP route 与前端错误卡优先消费新字段，旧 rollback flags 和 details 继续兼容；顶层字段优先于旧别名，technicalDetails 继续递归脱敏密码、secret、token 和 SecureString。前端同时校验 HTTP 状态与完整 envelope，失败 HTTP 不会因正文误写 `ok: true` 而伪成功；`ADMIN_REQUIRED` 和未知状态使用中性提示，`retryable = false` 不显示重试入口。
+- **界面边界**：ConfirmDialog 继续保持固定标题与底部按钮、中间内容独立滚动；本阶段只调整状态/错误语义，没有重做非 FTP 页面。
+- **验证**：新增状态语义自动测试并纳入 `pnpm test:camera-ftp`。阶段门禁 8 个子套件通过（111.8 秒），`pnpm build` 通过（15.0 秒，仅有既有主 JS chunk 706.86 kB 警告），`git diff --check` 通过；自动测试未触发 UAC 或真实系统修改。
+
+### v1.2.0-alpha.1 阶段六：重启恢复与数据安全
+- **日期**：2026-07-16
+- **配置安全**：`config.json` 增加 `schemaVersion = 1` 与幂等迁移入口。旧 FTP 明文密码字段在归一化前递归清理并标记需要重设；损坏 JSON、旧/当前版本已知字段类型错误、非法/未来 schema、迁移写入失败均 fail closed，保留原文件，不再用默认空配置伪装正常启动。迁移和普通保存都先写同目录临时文件再原子替换，失败时磁盘与内存中的旧有效配置保持不变。
+- **数据库安全**：新增 `schema_migrations` 成功账本，四项现有兼容迁移只在事务提交后登记；启动会复核账本与实际表/列/索引，二者漂移时 fail closed。`images` CHECK 表重建前使用 `VACUUM INTO` 创建独立备份并执行 `quick_check`，失败备份最多保留 3 份；迁移失败关闭连接、清空全局数据库状态、保留源表和备份。相机 FTP 回执不按时间清理，在活动逻辑删除/归档期间继续保留，永久删除活动时在同一事务显式删除并由外键级联兜底。
+- **日志与关联诊断**：`server.log` 在 logger 打开前按 10 MiB 阈值轮转，默认只保留 10 个工作台命名的历史日志；已打开的当前日志永不重命名或删除。所有 API 响应可附加 `X-Operation-Id` 与兼容顶层 `operationId`；FTP 请求、orchestrator、provisioning、PowerShell 子操作、verify/rollback、日志和前端错误展示保留父子关联。
+- **一键脱敏诊断**：新增主机专用只读 `GET /api/camera-ftp/diagnostics`，只返回平台、非敏感 FTP 端口/托管站点、当前活动、inspection、watcher 计数、最近错误码和 operationId。成功的 status/diagnostics 轮询不会覆盖最近一次业务操作；错误响应和前端折叠详情会隐藏复合 password/secret/token/credential 字段及完整本地路径，并分别显示 API 父操作与提权子操作 ID。设置页复制诊断仍执行第二次白名单脱敏。
+- **数据一致性复核**：活动永久删除在首次移动前以 fsync + 同目录原子 rename 写入不可变 purge journal，再把受控 working/archive 目录在同一父目录原子隔离；数据库事务失败时恢复原路径，数据库提交后才删除隔离目录。启动时先于 API 和 watcher 扫描 journal：活动记录仍存在则恢复目录，记录已删除则继续清理；阶段标记损坏或缺失不覆盖 SQLite 提交真相。提交后文件清理失败返回明确的部分成功和保留路径，前端不再显示“全部清理成功”。
+- **自动测试**：新增配置迁移、数据库迁移、活动永久删除故障、日志轮转和运行时诊断/operationId 五组临时环境测试；活动删除 6 项覆盖仓库外路径、数据库回滚、提交后清理失败及重试、提交前/提交后进程边界恢复。另补充 malformed JSON、无效/状态冲突 envelope、复合敏感字段、本地路径、父子 operationId、中性权限提示和不可重试按钮的 UI 行为断言，全部纳入 `pnpm test:camera-ftp`。测试不执行真实 setup/repair/adopt/control/credentials，不修改 IIS、账户、ACL、防火墙或服务。
+- **交付边界**：本轮未执行压力测试、多设备接入、发布打包、提交、推送、Tag 或 Release；Windows/IIS 真机验证保留到下一阶段人工清单。
+
+### v1.2.0-alpha.1 图片墙任务中心交互修复
+- **日期**：2026-07-16
+- **任务中心交互**：侧栏入口改为关闭时向右、展开时向左的方向箭头；展开后点击任务中心以外区域或按 `Esc` 自动收回，事件监听与关闭动画均在组件卸载时清理。
+- **层级修复**：侧栏任务面板通过顶层 portal 以固定层级渲染，并根据入口位置和视口动态定位；图片卡片建立独立 stacking context，避免卡片悬浮操作、状态标签和图片内容遮挡任务中心。
+- **通知收回**：新增统一 `TransientNotice`，主机概览、活动、导入、图片墙、修图、导出、归档、设置、客户端连接/上传/修图及相机 FTP 普通操作反馈全部复用。成功/信息通知 5 秒、警告 7 秒、错误 9 秒后自动消失；进入使用 200ms 减速淡入和 4px 位移，退出使用 150ms 加速淡出，并尊重系统减少动态效果设置。消息替换会清理旧计时器；FTP 结构化错误操作卡、运行进度、仓库/连接状态和排查说明等需要用户持续查看的内容保持常驻。
+- **验证**：扩展状态语义源码回归，覆盖箭头方向、点击外部收回、portal 层级隔离、12 个动态通知入口、分级时长、进出动画、减少动态效果和计时器清理；通过 TypeScript 类型检查，正式构建与 `git diff --check` 作为最终门禁。
+- **未完成事项**：未执行 Electron 窗口截图对比；建议在实际窗口中补验侧栏展开、图片卡片悬停、活动状态通知淡入淡出和连续通知替换效果。
+
 ### v1.1.0-alpha.4 优化：相机 FTP 运行状态、连接活动与接收记录语义
 - **日期**：2026-07-15
 - **重启重复处理修复**：旧 watcher 启动时清空内存 `processedFiles` 后全量扫描接收目录，导致上次已导入或重复跳过的文件再次进入任务。新增 SQLite 文件处理回执，终态为 `imported/skipped` 时保存活动、规范化路径、大小和修改时间；启动时恢复完全一致的指纹，只处理新增或已变化文件。首次升级会从现有 `images.source = camera_ftp` 路径与大小引导生成回执，避免更新后的第一次启动仍重复扫描；回执写入失败不会阻止上传链路，仍由图片 hash 去重兜底。
@@ -205,10 +264,10 @@
 - **冻结规则**：
   - 正式版发布阶段只允许修复阻塞性 bug、文档问题、打包问题和正式发布验证发现的问题。
 - **发布准备信息**：
-  - ZIP 文件名：`MediaPhotoWorkbench-v1.1.0-x64.zip`
-  - Git tag：`v1.1.0`
-  - Release 标题：`v1.1.0 - Windows ZIP Portable Stable Release`
-  - Release 类型：正式稳定版
+  - 以下是 2026-06-13 当时记录、现已取消的发布计划；`v1.1.0` 最终仅作为内部节点，由 `v1.2.0-alpha.1` 接续。
+  - 原计划 ZIP 文件名：`MediaPhotoWorkbench-v1.1.0-x64.zip`（未生成正式发布包）
+  - 原计划 Git tag：`v1.1.0`（未创建）
+  - 原计划 Release 标题：`v1.1.0 - Windows ZIP Portable Stable Release`（未创建）
 
 ### v0.17.0 开发阶段：17.2 图片墙效率增强
 - **日期**：2026-05-22

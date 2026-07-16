@@ -5,7 +5,7 @@ import { MetadataPanel } from "../../components/gallery/MetadataPanel";
 import { PhotoGrid } from "../../components/gallery/PhotoGrid";
 import { PreviewModal } from "../../components/gallery/PreviewModal";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
-import { Notice } from "../../components/ui/States";
+import { TransientNotice } from "../../components/ui/States";
 import {
   EventData,
   EventImageData,
@@ -41,6 +41,11 @@ import type { RealtimeConnectionState, RealtimeImagePayload } from "../../lib/so
 const GALLERY_PAGE_SIZE = 200;
 type RatingFilterValue = number | "all";
 type RatingMode = "eq" | "gte";
+type PhotoWallMessage = {
+  tone: "success" | "warning" | "danger" | "info";
+  title: string;
+  body: string;
+};
 
 function withCacheKey(url: string, key: string): string {
   try {
@@ -100,7 +105,7 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
   });
   const [confirmAction, setConfirmAction] = useState<"delete" | "restore" | "purge" | null>(null);
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
-  const [message, setMessage] = useState<{ tone: "success" | "warning" | "danger" | "info"; title: string; body: string } | null>(null);
+  const [message, setMessage] = useState<PhotoWallMessage | null>(null);
 
   const activePhoto = photos.find((photo) => photo.id === activePhotoId) ?? null;
   const previewPhotos = useMemo(() => {
@@ -886,11 +891,11 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
           onlineClientCount={mode === "host" ? onlineClients.length : undefined}
         />
 
-        {message && (
-          <div className="shrink-0 px-4 pt-4">
-            <Notice tone={message.tone} title={message.title}>{message.body}</Notice>
-          </div>
-        )}
+        <TransientNotice
+          className="shrink-0 px-4 pt-4"
+          message={message}
+          onDismiss={() => setMessage(null)}
+        />
 
         <div className="flex-1 overflow-y-auto p-4">
           {loading ? (

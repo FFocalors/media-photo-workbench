@@ -2,7 +2,7 @@ import { Archive as ArchiveIcon, CheckCircle2, ExternalLink, FileText, ShieldChe
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Step } from "../../components/ui/FormControls";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
-import { Notice } from "../../components/ui/States";
+import { Notice, TransientNotice } from "../../components/ui/States";
 import {
   ArchiveCleanupData,
   ArchiveCleanupTaskData,
@@ -417,7 +417,7 @@ export function ArchivePage() {
         )}
       </div>
 
-      {message && <Notice className="mb-6" tone={message.tone} title={message.title}>{message.body}</Notice>}
+      <TransientNotice className="mb-6" message={message} onDismiss={() => setMessage(null)} />
 
       {archiveDeleteTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6 backdrop-blur-sm">

@@ -11,6 +11,37 @@ function requireDist(relativePath) {
   return require(path.join(dist, relativePath));
 }
 
+function cloneFixture(value) {
+  if (value === undefined) return undefined;
+  return JSON.parse(JSON.stringify(value));
+}
+
+function mergeFixture(base, override) {
+  if (!override || typeof override !== "object" || Array.isArray(override)) {
+    return override === undefined ? cloneFixture(base) : cloneFixture(override);
+  }
+  const output = cloneFixture(base);
+  for (const [key, value] of Object.entries(override)) {
+    if (
+      value
+      && typeof value === "object"
+      && !Array.isArray(value)
+      && output[key]
+      && typeof output[key] === "object"
+      && !Array.isArray(output[key])
+    ) {
+      output[key] = mergeFixture(output[key], value);
+    } else {
+      output[key] = cloneFixture(value);
+    }
+  }
+  return output;
+}
+
+function warningCodes(result) {
+  return (result.warnings || []).map((warning) => typeof warning === "string" ? warning : warning.code);
+}
+
 function containsSecretField(value) {
   if (!value || typeof value !== "object") return false;
   if (Array.isArray(value)) return value.some(containsSecretField);
@@ -88,6 +119,73 @@ async function main() {
     }, null, 2));
 
     const configModule = requireDist("config/config.js");
+    const responseModule = requireDist("utils/response.js");
+    const legacyErrorDetails = {
+      title: "Legacy title",
+      impact: "Legacy impact",
+      advice: "Legacy next action",
+      operationId: "legacy-operation-1",
+      retryable: false,
+      technicalMessage: "Legacy technical details",
+      rollbackAttempted: true,
+      rollbackSucceeded: true,
+      rollback: { status: "success" }
+    };
+    const promotedLegacyError = responseModule.buildApiErrorPayload(
+      "LEGACY_ERROR",
+      "Legacy message",
+      legacyErrorDetails
+    );
+    assert.equal(promotedLegacyError.code, "LEGACY_ERROR");
+    assert.equal(promotedLegacyError.message, "Legacy message");
+    assert.strictEqual(promotedLegacyError.details, legacyErrorDetails, "legacy details must remain available to old clients");
+    assert.equal(promotedLegacyError.title, "Legacy title");
+    assert.equal(promotedLegacyError.impact, "Legacy impact");
+    assert.equal(promotedLegacyError.nextAction, "Legacy next action");
+    assert.equal(promotedLegacyError.rollbackStatus, "success");
+    assert.equal(promotedLegacyError.operationId, "legacy-operation-1");
+    assert.equal(promotedLegacyError.retryable, false);
+    assert.equal(promotedLegacyError.technicalDetails, "Legacy technical details");
+
+    let responseStatus = 0;
+    let responseBody = null;
+    const fakeResponse = {
+      status(statusCode) {
+        responseStatus = statusCode;
+        return this;
+      },
+      json(body) {
+        responseBody = body;
+        return this;
+      }
+    };
+    responseModule.sendError(fakeResponse, "STRUCTURED_ERROR", "Structured message", 409, {
+      operationId: "legacy-operation-2",
+      rollback: { status: "failed" }
+    }, {
+      title: "Structured title",
+      impact: "Structured impact",
+      nextAction: "Structured next action",
+      operationId: "top-operation-2",
+      retryable: true,
+      technicalDetails: "Structured technical details"
+    });
+    assert.equal(responseStatus, 409);
+    assert.deepEqual(responseBody.error, {
+      code: "STRUCTURED_ERROR",
+      message: "Structured message",
+      details: {
+        operationId: "legacy-operation-2",
+        rollback: { status: "failed" }
+      },
+      title: "Structured title",
+      impact: "Structured impact",
+      nextAction: "Structured next action",
+      rollbackStatus: "failed",
+      operationId: "top-operation-2",
+      retryable: true,
+      technicalDetails: "Structured technical details"
+    });
     const migrated = configModule.loadConfig(configDir);
     const persisted = JSON.parse(fs.readFileSync(path.join(configDir, "config.json"), "utf8"));
 
@@ -181,6 +279,17 @@ async function main() {
     );
 
     const managerModule = requireDist("services/iisFtpManager.js");
+    const statusTypesModule = requireDist("services/camera-ftp/iisFtpStatusTypes.js");
+    assert.equal(
+      managerModule.createUnknownIisFtpStatus,
+      statusTypesModule.createUnknownIisFtpStatus,
+      "the IIS manager facade must preserve the unknown-status constructor entrypoint"
+    );
+    assert.equal(
+      managerModule.normalizeIisFtpStatus,
+      statusTypesModule.normalizeIisFtpStatus,
+      "the IIS manager facade must preserve the status normalizer entrypoint"
+    );
     managerModule.validateCameraFtpCredentials("mpw-camera", "SafePass123!");
     assert.doesNotThrow(() => managerModule.validateCameraFtpPorts(21, 50000, 50100));
     assert.doesNotThrow(() => managerModule.validateCameraFtpPorts(2021, 51000, 51100));
@@ -225,8 +334,22 @@ async function main() {
     );
     assert.equal(powerShellModule.powershellLiteral("摄影 用户'O"), "'摄影 用户''O'");
     assert.throws(
-      () => powerShellModule.parsePowerShellJsonEnvelope({ ok: false, error: { code: "UAC_CANCELLED", message: "cancelled" } }),
+      () => powerShellModule.parsePowerShellJsonEnvelope({
+        ok: false,
+        operation: "setup",
+        stage: "uac_cancelled",
+        timestamp: "2026-01-01T00:00:00.000Z",
+        data: null,
+        error: { code: "UAC_CANCELLED", message: "cancelled" }
+      }),
       (error) => error && error.code === "UAC_CANCELLED" && error.message === "cancelled"
+    );
+    assert.throws(
+      () => powerShellModule.parsePowerShellJsonEnvelope({ ok: true, data: { ready: true } }),
+      (error) => error && error.code === "ELEVATED_RESULT_INVALID_SCHEMA"
+        && error.diagnostics.details.invalidFields.includes("operation")
+        && error.diagnostics.details.invalidFields.includes("timestamp"),
+      "missing structured-result fields must never be treated as success"
     );
     assert.throws(
       () => powerShellModule.resolveWindowsScriptPath("../iis-ftp-setup.ps1"),
@@ -437,6 +560,12 @@ exit 0
     assert.equal(hostOnlyModule.isHostRequest(fakeRequest("127.0.0.1", "https://evil.example")), false);
 
     const orchestratorModule = requireDist("services/cameraFtpOrchestrator.js");
+    const switchTransactionModule = requireDist("services/camera-ftp/cameraFtpSwitchTransaction.js");
+    assert.equal(
+      orchestratorModule.runCameraFtpEventSwitchTransaction,
+      switchTransactionModule.runCameraFtpEventSwitchTransaction,
+      "the orchestrator facade must preserve the existing switch transaction entrypoint"
+    );
     const readOnlyRepository = path.join(tempRoot, "read-only-preflight-repository");
     const readOnlyReceivePath = orchestratorModule.resolveCameraFtpReceivePath(
       readOnlyRepository,
@@ -451,6 +580,324 @@ exit 0
       false,
       "read-only provisioning path resolution must not create the repository or event directory"
     );
+
+    const startupRecoveryModule = requireDist("services/cameraFtpStartupRecovery.js");
+    assert.equal(typeof startupRecoveryModule.decideCameraFtpStartupRecovery, "function");
+    assert.equal(typeof startupRecoveryModule.runCameraFtpStartupRecovery, "function");
+
+    const startupRepository = path.join(tempRoot, "startup-recovery-repository");
+    const startupExpectedPath = orchestratorModule.resolveCameraFtpReceivePath(startupRepository, "event_slug");
+    const startupDecisionFixture = (overrides = {}) => mergeFixture({
+      activeEventId: "evt_startup",
+      eventExists: true,
+      eventStatus: "active",
+      repositoryConfigured: true,
+      repositoryAvailable: true,
+      repositoryPath: startupRepository,
+      expectedPath: startupExpectedPath,
+      receiveDirectoryExists: true,
+      receiveDirectoryAccessible: true,
+      currentInspectionLevel: "full",
+      siteExists: true,
+      siteStarted: true,
+      sitePhysicalPath: startupExpectedPath,
+      watcher: {
+        running: false,
+        eventId: "",
+        directory: ""
+      }
+    }, overrides);
+    const decideStartupRecovery = startupRecoveryModule.decideCameraFtpStartupRecovery;
+
+    const noActiveEventDecision = decideStartupRecovery(startupDecisionFixture({
+      activeEventId: "",
+      eventExists: false
+    }));
+    assert.equal(noActiveEventDecision.action, "skip");
+    assert.equal(noActiveEventDecision.status, "skipped");
+    assert.equal(noActiveEventDecision.reasonCode, "NO_ACTIVE_EVENT");
+    assert.equal(noActiveEventDecision.shouldStartWatcher, false);
+    assert.equal(noActiveEventDecision.shouldScan, false);
+
+    const missingEventDecision = decideStartupRecovery(startupDecisionFixture({ eventExists: false }));
+    assert.equal(missingEventDecision.action, "skip");
+    assert.equal(missingEventDecision.reasonCode, "ACTIVE_EVENT_NOT_FOUND");
+    assert.equal(missingEventDecision.shouldStartWatcher, false);
+
+    const archivedEventDecision = decideStartupRecovery(startupDecisionFixture({ eventStatus: "archived" }));
+    assert.equal(archivedEventDecision.action, "skip");
+    assert.equal(archivedEventDecision.reasonCode, "EVENT_NOT_RECEIVABLE");
+    assert.equal(archivedEventDecision.shouldStartWatcher, false);
+
+    for (const repositoryState of [
+      { repositoryConfigured: false, repositoryAvailable: false },
+      { repositoryConfigured: true, repositoryAvailable: false }
+    ]) {
+      const repositoryUnavailableDecision = decideStartupRecovery(startupDecisionFixture(repositoryState));
+      assert.equal(repositoryUnavailableDecision.action, "skip");
+      assert.equal(repositoryUnavailableDecision.reasonCode, "REPOSITORY_UNAVAILABLE");
+      assert.equal(repositoryUnavailableDecision.shouldStartWatcher, false);
+      assert.equal(repositoryUnavailableDecision.shouldScan, false);
+    }
+
+    for (const directoryState of [
+      { receiveDirectoryExists: false, receiveDirectoryAccessible: false },
+      { receiveDirectoryExists: true, receiveDirectoryAccessible: false }
+    ]) {
+      const receivePathUnavailableDecision = decideStartupRecovery(startupDecisionFixture(directoryState));
+      assert.equal(receivePathUnavailableDecision.action, "skip");
+      assert.equal(receivePathUnavailableDecision.reasonCode, "RECEIVE_PATH_UNAVAILABLE");
+      assert.equal(receivePathUnavailableDecision.shouldStartWatcher, false);
+      assert.equal(receivePathUnavailableDecision.shouldScan, false);
+    }
+
+    const unknownInspectionDecision = decideStartupRecovery(startupDecisionFixture({
+      currentInspectionLevel: "unknown",
+      siteExists: null,
+      siteStarted: null,
+      sitePhysicalPath: ""
+    }));
+    assert.equal(unknownInspectionDecision.action, "skip");
+    assert.equal(unknownInspectionDecision.status, "skipped");
+    assert.ok(
+      ["IIS_SITE_STATE_UNKNOWN", "IIS_PHYSICAL_PATH_UNKNOWN"].includes(unknownInspectionDecision.reasonCode),
+      "unknown ordinary inspection must remain unknown instead of being treated as a missing or healthy IIS site"
+    );
+    assert.equal(unknownInspectionDecision.inspectionLevel, "unknown");
+    assert.equal(unknownInspectionDecision.shouldStartWatcher, false);
+
+    const missingSiteDecision = decideStartupRecovery(startupDecisionFixture({
+      siteExists: false,
+      siteStarted: false,
+      sitePhysicalPath: ""
+    }));
+    assert.equal(missingSiteDecision.action, "skip");
+    assert.equal(missingSiteDecision.reasonCode, "IIS_SITE_NOT_FOUND");
+    assert.equal(missingSiteDecision.shouldStartWatcher, false);
+
+    const physicalPathMismatchDecision = decideStartupRecovery(startupDecisionFixture({
+      sitePhysicalPath: path.join(startupRepository, "working", "different_event", "原图", "相机FTP")
+    }));
+    assert.equal(physicalPathMismatchDecision.action, "skip");
+    assert.equal(physicalPathMismatchDecision.status, "skipped");
+    assert.equal(physicalPathMismatchDecision.reasonCode, "IIS_PHYSICAL_PATH_MISMATCH");
+    assert.equal(physicalPathMismatchDecision.shouldStartWatcher, false);
+    assert.equal(physicalPathMismatchDecision.shouldScan, false);
+
+    const partialStoppedSiteDecision = decideStartupRecovery(startupDecisionFixture({
+      currentInspectionLevel: "partial",
+      siteStarted: false,
+      sitePhysicalPath: `${startupExpectedPath.toUpperCase()}${path.sep}`
+    }));
+    assert.equal(partialStoppedSiteDecision.action, "restore");
+    assert.equal(partialStoppedSiteDecision.status, "eligible");
+    assert.equal(partialStoppedSiteDecision.inspectionLevel, "partial");
+    assert.equal(partialStoppedSiteDecision.shouldStartWatcher, true);
+    assert.equal(partialStoppedSiteDecision.shouldScan, true);
+    assert.ok(warningCodes(partialStoppedSiteDecision).includes("ADMIN_INSPECTION_RECOMMENDED"));
+
+    const adminRequiredStoppedSiteDecision = decideStartupRecovery(startupDecisionFixture({
+      currentInspectionLevel: "admin_required",
+      siteStarted: false
+    }));
+    assert.equal(adminRequiredStoppedSiteDecision.action, "restore");
+    assert.equal(adminRequiredStoppedSiteDecision.status, "eligible");
+    assert.equal(adminRequiredStoppedSiteDecision.inspectionLevel, "admin_required");
+    assert.equal(adminRequiredStoppedSiteDecision.shouldStartWatcher, true);
+    assert.ok(warningCodes(adminRequiredStoppedSiteDecision).includes("ADMIN_INSPECTION_RECOMMENDED"));
+
+    const unknownRuntimeDecision = decideStartupRecovery(startupDecisionFixture({
+      currentInspectionLevel: "partial",
+      siteStarted: null
+    }));
+    assert.equal(unknownRuntimeDecision.action, "restore", "an unknown IIS runtime does not make the matching watcher path unsafe");
+    assert.equal(unknownRuntimeDecision.status, "eligible", "unknown IIS runtime must not be reported as a completed success");
+    assert.notEqual(unknownRuntimeDecision.status, "success");
+    assert.ok(warningCodes(unknownRuntimeDecision).includes("IIS_SITE_STATE_UNKNOWN"));
+
+    const stoppedSiteWithMatchingWatcherDecision = decideStartupRecovery(startupDecisionFixture({
+      siteStarted: false,
+      watcher: {
+        running: true,
+        eventId: "evt_startup",
+        directory: startupExpectedPath
+      }
+    }));
+    assert.equal(stoppedSiteWithMatchingWatcherDecision.action, "keep");
+    assert.equal(stoppedSiteWithMatchingWatcherDecision.status, "already_running");
+    assert.equal(stoppedSiteWithMatchingWatcherDecision.shouldStartWatcher, false);
+
+    const mismatchedWatcherDecision = decideStartupRecovery(startupDecisionFixture({
+      siteStarted: false,
+      watcher: {
+        running: true,
+        eventId: "evt_other",
+        directory: path.join(startupRepository, "working", "other_event", "原图", "相机FTP")
+      }
+    }));
+    assert.equal(mismatchedWatcherDecision.action, "skip");
+    assert.equal(mismatchedWatcherDecision.reasonCode, "WATCHER_TARGET_MISMATCH");
+    assert.equal(mismatchedWatcherDecision.shouldStartWatcher, false);
+
+    const startupRecoverySourcePath = path.join(root, "src-server", "services", "cameraFtpStartupRecovery.ts");
+    const startupRecoverySource = fs.readFileSync(startupRecoverySourcePath, "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/.*$/gm, "");
+    const forbiddenStartupMutationPatterns = [
+      ["administrator inspection", /\bgetStatusElevated\b|\brunElevatedPowerShellJsonScript\b/],
+      ["configuration mutation", /\bsaveConfig\b/],
+      ["directory creation", /\bensureEventWorkingDirs\b|\bensureDir\s*\(|\bmkdir\s*\(/],
+      ["IIS mutation", /\brunMutationScript\b|\.\s*(?:setup|repair|restart|setPhysicalPath|adoptSite|updateCredentials)\s*\(/]
+    ];
+    for (const [label, pattern] of forbiddenStartupMutationPatterns) {
+      assert.doesNotMatch(startupRecoverySource, pattern, `startup recovery must not perform ${label}`);
+    }
+
+    fs.mkdirSync(startupExpectedPath, { recursive: true });
+    const startupConfig = {
+      repository: { path: startupRepository },
+      cameraFtp: {
+        activeEventId: "evt_startup",
+        controlPort: 21,
+        passivePortStart: 50000,
+        passivePortEnd: 50100
+      }
+    };
+    const currentInspection = {
+      currentInspectionLevel: "partial",
+      site: {
+        exists: true,
+        started: false,
+        physicalPath: startupExpectedPath
+      }
+    };
+    const startupConfigBefore = JSON.stringify(startupConfig);
+    const currentInspectionBefore = JSON.stringify(currentInspection);
+    const startupCalls = [];
+    const forbiddenStartupCalls = [];
+    let startupScanCount = 0;
+    const healthyWatcherStatus = {
+      running: true,
+      eventId: "evt_startup",
+      directory: startupExpectedPath,
+      pendingCount: 0,
+      queuedCount: 0,
+      importingCount: 0,
+      unstableCount: 0,
+      lastScanAt: "2026-07-15T00:00:00.000Z"
+    };
+    const forbiddenDependency = (name) => async () => {
+      forbiddenStartupCalls.push(name);
+      throw new Error(`startup recovery must not call ${name}`);
+    };
+    const startupDependencies = {
+      getConfig: () => {
+        startupCalls.push("config:read");
+        return startupConfig;
+      },
+      getEvent: (eventId) => {
+        startupCalls.push("event:read");
+        assert.equal(eventId, "evt_startup");
+        return { id: eventId, name: "启动恢复活动", slug: "event_slug", status: "active" };
+      },
+      inspectRepository: async (repositoryPath) => {
+        startupCalls.push("repository:inspect");
+        assert.equal(repositoryPath, startupRepository);
+        return { configured: true, available: true };
+      },
+      inspectReceiveDirectory: async (receivePath) => {
+        startupCalls.push("directory:inspect");
+        assert.equal(receivePath, startupExpectedPath);
+        return { exists: true, accessible: true, isDirectory: true };
+      },
+      inspectCurrent: async (input) => {
+        startupCalls.push("iis:inspect-current-readonly");
+        assert.equal(input.physicalPath, startupExpectedPath);
+        return currentInspection;
+      },
+      getWatcherStatus: () => ({
+        running: false,
+        eventId: "",
+        directory: "",
+        pendingCount: 0,
+        queuedCount: 0,
+        importingCount: 0,
+        unstableCount: 0
+      }),
+      startWatcher: async (input) => {
+        startupCalls.push("watcher:start");
+        assert.equal(input.eventId, "evt_startup");
+        assert.equal(input.directory, startupExpectedPath);
+        assert.equal(input.createDirectory, false, "startup recovery must require the pre-existing receive directory");
+        if (input.scanExistingOnStart !== false) startupScanCount += 1;
+        return healthyWatcherStatus;
+      },
+      scanWatcher: async () => {
+        startupCalls.push("watcher:scan");
+        startupScanCount += 1;
+        return healthyWatcherStatus;
+      },
+      log: () => undefined,
+      requestElevation: forbiddenDependency("requestElevation"),
+      inspectElevated: forbiddenDependency("inspectElevated"),
+      saveConfig: forbiddenDependency("saveConfig"),
+      setupIis: forbiddenDependency("setupIis"),
+      repairIis: forbiddenDependency("repairIis"),
+      adoptIis: forbiddenDependency("adoptIis"),
+      setPhysicalPath: forbiddenDependency("setPhysicalPath"),
+      createReceiveDirectory: forbiddenDependency("createReceiveDirectory")
+    };
+    const successfulStartupRecovery = await withTemporaryDirectoryEnvironment(tempRoot, () => (
+      startupRecoveryModule.runCameraFtpStartupRecovery(
+        { baseUrl: "http://localhost:3030" },
+        startupDependencies
+      )
+    ));
+    assert.equal(successfulStartupRecovery.status, "restored");
+    assert.equal(successfulStartupRecovery.decision.action, "restore");
+    assert.equal(successfulStartupRecovery.watcher.running, true);
+    assert.equal(startupScanCount, 1, "startup restore must backfill existing files exactly once");
+    assert.ok(startupCalls.includes("iis:inspect-current-readonly"));
+    assert.ok(startupCalls.indexOf("watcher:start") > startupCalls.indexOf("iis:inspect-current-readonly"));
+    assert.deepEqual(forbiddenStartupCalls, []);
+    assert.equal(JSON.stringify(startupConfig), startupConfigBefore, "startup recovery must not rewrite saved target configuration");
+    assert.equal(JSON.stringify(currentInspection), currentInspectionBefore, "startup recovery must not mutate the detected IIS snapshot");
+    assertNoElevatedOperationDirectories(tempRoot, "ordinary startup recovery must not create UAC operation IPC directories");
+
+    fs.rmSync(startupExpectedPath, { recursive: true, force: true });
+    let failedStartupScanCount = 0;
+    const failedStartupRecovery = await withTemporaryDirectoryEnvironment(tempRoot, () => (
+      startupRecoveryModule.runCameraFtpStartupRecovery(
+        { baseUrl: "http://localhost:3030" },
+        {
+          ...startupDependencies,
+          inspectReceiveDirectory: async () => {
+            startupCalls.push("directory:inspect-before-disconnect");
+            return { exists: true, accessible: true, isDirectory: true };
+          },
+          startWatcher: async (input) => {
+            assert.equal(input.createDirectory, false);
+            assert.equal(fs.existsSync(startupExpectedPath), false, "fixture simulates a repository disconnect after preflight");
+            throw Object.assign(new Error("receive directory disappeared before watcher start"), {
+              code: "RECEIVE_PATH_UNAVAILABLE"
+            });
+          },
+          scanWatcher: async () => {
+            failedStartupScanCount += 1;
+            return healthyWatcherStatus;
+          }
+        }
+      )
+    ));
+    assert.equal(failedStartupRecovery.status, "failed");
+    assert.equal(failedStartupRecovery.decision.action, "restore");
+    assert.ok(warningCodes(failedStartupRecovery).includes("WATCHER_RESTORE_FAILED"));
+    assert.equal(failedStartupScanCount, 0, "a failed watcher start must never report or run the backfill scan");
+    assert.equal(fs.existsSync(startupExpectedPath), false, "startup recovery must not recreate a disappeared receive directory");
+    assert.deepEqual(forbiddenStartupCalls, []);
+    assert.equal(JSON.stringify(startupConfig), startupConfigBefore);
+    assert.equal(JSON.stringify(currentInspection), currentInspectionBefore);
+    assertNoElevatedOperationDirectories(tempRoot, "failed startup recovery must not request elevation");
 
     assert.equal(
       orchestratorModule.requiresElevatedCameraFtpSiteStateInspection({
@@ -743,6 +1190,11 @@ exit 0
       () => orchestratorModule.assertCameraFtpSwitchAllowed({ pendingCount: 1, queuedCount: 0, importingCount: 0, unstableCount: 0 }),
       (error) => error && error.code === "FTP_UPLOAD_IN_PROGRESS"
     );
+    assert.throws(
+      () => orchestratorModule.assertCameraFtpSwitchAllowed({ busy: true, pendingCount: 0, queuedCount: 0, importingCount: 0, unstableCount: 0 }),
+      (error) => error && error.code === "FTP_UPLOAD_IN_PROGRESS",
+      "hidden reservations/timers represented by watcher.busy must block an event switch"
+    );
     const idleWatcher = { pendingCount: 0, queuedCount: 0, importingCount: 0, unstableCount: 0 };
     assert.throws(
       () => orchestratorModule.assertCameraFtpUnlinkAllowed(idleWatcher, { exists: true, started: true }),
@@ -839,6 +1291,7 @@ exit 0
         persistentCameraFtpFileReceiptSchema: "passed",
         credentialValidation: "passed",
         structuredErrorMapping: "passed",
+        apiErrorEnvelopeCompatibility: "passed",
         powershellLiteralEscaping: "passed",
         powerShellJsonIpc: powerShellIpc,
         powerShellInvalidParameters,
@@ -859,8 +1312,14 @@ exit 0
         activeEventIncompleteRollbackReporting: "passed",
         reconcileBeforeWatcher: "passed",
         serviceAndAssociationSeparation: "passed",
+        startupRecoveryDecisionMatrix: "passed_fixture_only",
+        startupRecoveryPartialTruth: "passed_fixture_only",
+        startupRecoveryReadOnlyExecution: "passed_fixture_only_no_uac_no_iis_mutation",
+        startupRecoveryBackfill: "passed_fixture_only_exactly_once",
+        startupRecoveryDirectoryDisconnect: "passed_fixture_only_no_directory_creation",
         partialInspectionContract: "passed",
         firstSetupUiContract: "passed",
+        iisStatusFacadeCompatibility: "passed",
         unknownStatusSemantics: "passed",
         readOnlyStatus: process.platform === "win32" ? "passed" : "skipped_non_windows"
       },

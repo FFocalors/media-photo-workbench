@@ -1,7 +1,7 @@
 import { Bug, Clipboard, FolderOpen, Github, Info, Keyboard, Mail, Network, RotateCcw, Save } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { BrandLogo } from "../../components/common/BrandLogo";
-import { Notice, StatusPill } from "../../components/ui/States";
+import { Notice, StatusPill, TransientNotice } from "../../components/ui/States";
 import { cn } from "../../lib/cn";
 import {
   backupDatabaseNow,
@@ -9,6 +9,7 @@ import {
   eventStatusLabels,
   fetchEvents,
   fetchDatabaseBackups,
+  fetchCameraFtpDiagnostics,
   fetchHealth,
   fetchSettings,
   getApiBase,
@@ -19,6 +20,7 @@ import {
   type EventData,
   type HealthData,
   type BatchSelectionBehavior,
+  type CameraFtpDiagnosticData,
   type RepositoryCheckData,
   type SettingsData
 } from "../../lib/api";
@@ -291,12 +293,13 @@ export function SettingsPage() {
     setDiagnosticMessage(null);
 
     try {
-      const [healthRes, settingsRes, repositoryRes, activeEventsRes, reviewingEventsRes] = await Promise.all([
+      const [healthRes, settingsRes, repositoryRes, activeEventsRes, reviewingEventsRes, cameraFtpDiagnosticsRes] = await Promise.all([
         fetchHealth(),
         fetchSettings(),
         checkRepository(),
         fetchEvents("active"),
-        fetchEvents("reviewing")
+        fetchEvents("reviewing"),
+        fetchCameraFtpDiagnostics()
       ]);
 
       if (!healthRes.ok || !healthRes.data) {
@@ -315,6 +318,13 @@ export function SettingsPage() {
         repository: repositoryRes.data,
         settings: settingsRes.data,
         currentEvent,
+        cameraFtp: cameraFtpDiagnosticsRes.ok ? cameraFtpDiagnosticsRes.data : null,
+        cameraFtpError: cameraFtpDiagnosticsRes.error
+          ? {
+              code: cameraFtpDiagnosticsRes.error.code,
+              operationId: cameraFtpDiagnosticsRes.error.operationId
+            }
+          : null,
         runtimeInfo: window.mediaPhotoWorkbench?.getRuntimeInfo?.()
       });
 
@@ -396,11 +406,7 @@ export function SettingsPage() {
 
           {activeTab === "general" && (
             <div className="space-y-6">
-              {generalMessage && (
-                <Notice tone={generalMessage.tone} title={generalMessage.title}>
-                  {generalMessage.body}
-                </Notice>
-              )}
+              <TransientNotice message={generalMessage} onDismiss={() => setGeneralMessage(null)} />
               <SettingSwitch checked label="启动后显示最近使用" note="保留主机/客户端入口和最近连接记录。" />
               <SettingSwitch checked label="浅色界面" note="第一版固定浅色界面，后续可扩展深色模式。" />
               <SettingSwitch label="启动后自动进入上次模式" note="当前保持手动选择主机或客户端。" />
@@ -445,11 +451,7 @@ export function SettingsPage() {
                 </Notice>
               )}
 
-              {repositoryMessage && (
-                <Notice tone={repositoryMessage.tone} title={repositoryMessage.title}>
-                  {repositoryMessage.body}
-                </Notice>
-              )}
+              <TransientNotice message={repositoryMessage} onDismiss={() => setRepositoryMessage(null)} />
 
               <Notice tone="info" title="仓库路径可更改">
                 图片仓库可以放在移动 SSD 或本机磁盘；数据库仍保存在软件数据目录，不跟随仓库移动。
@@ -480,11 +482,7 @@ export function SettingsPage() {
                 <label className="mb-2 block text-sm font-medium text-slate-900">数据库位置</label>
                 <p className="mb-3 break-all rounded-lg bg-slate-50 px-4 py-3 text-sm text-slate-600">{databasePath}</p>
 
-                {databaseMessage && (
-                  <Notice className="mb-3" tone={databaseMessage.tone} title={databaseMessage.title}>
-                    {databaseMessage.body}
-                  </Notice>
-                )}
+                <TransientNotice className="mb-3" message={databaseMessage} onDismiss={() => setDatabaseMessage(null)} />
 
                 <div className="mb-3 grid gap-3 text-sm text-slate-600 sm:grid-cols-2">
                   <div className="rounded-lg bg-slate-50 px-4 py-3">
@@ -602,11 +600,7 @@ export function SettingsPage() {
 
           {activeTab === "diagnostics" && (
             <div className="space-y-6">
-              {diagnosticMessage && (
-                <Notice tone={diagnosticMessage.tone} title={diagnosticMessage.title}>
-                  {diagnosticMessage.body}
-                </Notice>
-              )}
+              <TransientNotice message={diagnosticMessage} onDismiss={() => setDiagnosticMessage(null)} />
 
               <InfoCard icon={<Bug size={18} />} title="诊断信息">
                 <p>用于现场排查后端端口、仓库路径、局域网地址、剩余空间和当前活动状态。</p>
@@ -721,7 +715,7 @@ export function SettingsPage() {
           {activeTab === "about" && (
             <div className="space-y-5">
               <InfoCard icon={<BrandLogo size="sm" />} title="融媒体图片工作台">
-                <p>Media Photo Workbench · v1.1.0-alpha.4</p>
+                <p>Media Photo Workbench · v{runtimeInfo?.appVersion || "1.2.0-alpha.1"}</p>
                 <p>桌面端：Electron + React + Vite + TypeScript + Tailwind</p>
                 <p>后端：Express + SQLite + better-sqlite3 + pino</p>
               </InfoCard>
@@ -848,11 +842,21 @@ function formatDateTime(value: string): string {
   return date.toLocaleString();
 }
 
+function redactDiagnosticCopyText(value: string): string {
+  return value
+    .replace(/([A-Za-z]:\\Users\\)[^\\\r\n]+/gi, "$1[用户]")
+    .replace(/(\/Users\/)[^/\r\n]+/gi, "$1[用户]")
+    .replace(/("?(?:password|newPassword|confirmPassword|oldPassword|currentPassword|secret|token)"?\s*[=:：]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;}]+)/gi, "$1[已隐藏]")
+    .replace(/(SecureString\s*[=:：]\s*)[^\s,;}\"]+/gi, "$1[已隐藏]");
+}
+
 function buildDiagnosticsText(input: {
   health: HealthData;
   repository: RepositoryCheckData;
   settings: SettingsData;
   currentEvent: EventData | null;
+  cameraFtp: CameraFtpDiagnosticData | null;
+  cameraFtpError: { code: string; operationId?: string } | null;
   runtimeInfo?: ReturnType<NonNullable<MediaPhotoWorkbenchBridge["getRuntimeInfo"]>>;
 }): string {
   const runtime = input.runtimeInfo;
@@ -863,8 +867,11 @@ function buildDiagnosticsText(input: {
   const eventStatus = currentEvent
     ? eventStatusLabels[currentEvent.status as keyof typeof eventStatusLabels] || currentEvent.status
     : "";
+  const cameraFtp = input.cameraFtp?.ftp;
+  const cameraFtpPlatform = input.cameraFtp?.platform;
+  const cameraFtpWatcher = cameraFtp?.watcher;
 
-  return [
+  return redactDiagnosticCopyText([
     "Media Photo Workbench / 融媒体图片工作台 诊断信息",
     `生成时间：${new Date().toLocaleString()}`,
     "",
@@ -901,10 +908,27 @@ function buildDiagnosticsText(input: {
       ? `活动名称：${currentEvent.name}\n活动状态：${eventStatus}\n活动日期：${currentEvent.date || "未填写"}\n图片数量：${currentEvent.total_images}`
       : "暂无 active / reviewing 活动",
     "",
+    "[相机 FTP / 已脱敏]",
+    cameraFtpPlatform
+      ? `平台：${cameraFtpPlatform.os} ${cameraFtpPlatform.arch} / ${cameraFtpPlatform.release}`
+      : "平台：暂不可用",
+    `Provider：${cameraFtp?.provider || "iis"}`,
+    `托管站点：${cameraFtp?.siteName || "暂不可用"}`,
+    `Site ID：${cameraFtp?.managedSiteId ?? "未建立"}`,
+    `控制端口：${cameraFtp?.controlPort ?? "暂不可用"}`,
+    `PASV 端口：${cameraFtp ? `${cameraFtp.passivePortStart}-${cameraFtp.passivePortEnd}` : "暂不可用"}`,
+    `FTP 当前活动：${cameraFtp?.activeEvent ? `${cameraFtp.activeEvent.id} / ${cameraFtp.activeEvent.name}` : "未关联"}`,
+    `检测级别：${cameraFtp?.inspectionLevel || "暂不可用"} / ${cameraFtp?.inspectionOutcome || "unknown"}`,
+    `Watcher：${cameraFtpWatcher ? `${cameraFtpWatcher.running ? "运行中" : "已停止"} / ${cameraFtpWatcher.busy ? "处理中" : "空闲"}` : "暂不可用"}`,
+    `Watcher 队列：pending=${cameraFtpWatcher?.pendingCount ?? 0}, queued=${cameraFtpWatcher?.queuedCount ?? 0}, importing=${cameraFtpWatcher?.importingCount ?? 0}, unstable=${cameraFtpWatcher?.unstableCount ?? 0}`,
+    `最近错误码：${cameraFtp?.lastErrorCode || input.cameraFtpError?.code || "无"}`,
+    `operationId：${input.cameraFtp?.operationId || input.cameraFtpError?.operationId || "暂不可用"}`,
+    "说明：此段未收集 FTP 密码、账户详情、图片路径、图片内容、提权临时文件或其他 IIS 站点配置。",
+    "",
     "[连接排查提示]",
     "- 校园网可能存在设备隔离，同一 Wi-Fi 下客户端也可能无法访问主机。",
     "- 同一 Wi-Fi 无法连接时，建议使用主机 Windows 热点。",
     "- 检查 Windows 防火墙是否允许应用访问专用网络。",
     "- 客户端应访问主机首页显示的真实地址和端口，不要填写客户端自己的 localhost。"
-  ].join("\n");
+  ].join("\n"));
 }

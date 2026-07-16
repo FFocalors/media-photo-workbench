@@ -120,10 +120,20 @@ exit 1
     );
 
     assert.throws(
-      () => powerShell.parsePowerShellJsonEnvelope({ ok: false, operation: "setup", stage: "uac_cancelled", code: "UAC_CANCELLED", message: "cancelled" }),
+      () => powerShell.parsePowerShellJsonEnvelope({ ok: false, operation: "setup", stage: "uac_cancelled", code: "UAC_CANCELLED", message: "cancelled", timestamp: "2026-01-01T00:00:00.000Z", data: null }),
       (error) => error.code === "UAC_CANCELLED" && error.diagnostics.stage === "uac_cancelled"
     );
+    assert.throws(
+      () => powerShell.parsePowerShellJsonEnvelope({}),
+      (error) => error.code === "ELEVATED_RESULT_INVALID_SCHEMA"
+        && error.diagnostics.details.invalidFields.includes("ok")
+        && error.diagnostics.details.invalidFields.includes("data")
+    );
     assert.equal(powerShell.redactDiagnosticText(`{"password":"${secret}","stage":"test"}`).includes(secret), false);
+    assert.equal(powerShell.redactDiagnosticText(`{"ftpPassword":"${secret}","stage":"test"}`).includes(secret), false);
+    assert.equal(powerShell.redactDiagnosticText(`{"cameraSecret":"${secret}","stage":"test"}`).includes(secret), false);
+    assert.equal(powerShell.redactDiagnosticText(`{"SecureStringValue":"${secret}","stage":"test"}`).includes(secret), false);
+    assert.equal(powerShell.redactDiagnosticText(`{"ftpPassword":"${secret}`).includes(secret), false);
 
     await powerShell.cleanupStaleElevatedOperationDirs(Date.now() + 20 * 60 * 1000);
     const elevatedRoot = path.join(ipcTemp, "MediaPhotoWorkbench", "elevated");
@@ -148,6 +158,7 @@ exit 1
         "uac_cancel_mapping",
         "timeout_mapping",
         "invalid_json_diagnostics",
+        "invalid_schema_diagnostics",
         "temporary_cleanup",
         "secret_redaction",
         "windows_powershell_5_1_bom"

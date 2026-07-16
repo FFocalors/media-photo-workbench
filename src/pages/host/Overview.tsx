@@ -18,7 +18,7 @@ import {
   SettingsData
 } from "../../lib/api";
 import { cn } from "../../lib/cn";
-import { Notice, StatusPill } from "../../components/ui/States";
+import { Notice, StatusPill, TransientNotice } from "../../components/ui/States";
 import { subscribeClientsUpdated, subscribeRealtimeImageEvent, subscribeRealtimeTaskEvent, type RealtimeImagePayload } from "../../lib/socket";
 
 type LiveActivity = {
@@ -222,7 +222,7 @@ export function OverviewPage() {
         </div>
       </div>
 
-      {message && <Notice className="mb-6" tone={message.tone} title={message.title}>{message.body}</Notice>}
+      <TransientNotice className="mb-6" message={message} onDismiss={() => setMessage(null)} />
 
       {loading ? (
         <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-slate-100 bg-white text-sm text-slate-400 shadow-sm">

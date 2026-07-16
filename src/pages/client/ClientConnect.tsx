@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { QRCodeCard } from "../../components/common/QRCodeCard";
-import { Notice } from "../../components/ui/States";
+import { Notice, TransientNotice } from "../../components/ui/States";
 import {
   fetchHealthFrom,
   getClientApiBase,
@@ -147,11 +147,7 @@ export function ClientConnectPage() {
                   请输入主机地址和姓名后再发起连接测试。主机地址需要使用完整格式，例如 http://192.168.137.1:3030。
                 </Notice>
               )}
-              {message && (
-                <Notice className="mt-4" tone={message.tone} title={message.title}>
-                  {message.body}
-                </Notice>
-              )}
+              <TransientNotice className="mt-4" message={message} onDismiss={() => setMessage(null)} />
             </div>
 
             <div className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
