@@ -14,12 +14,20 @@
   box-sizing: border-box;
 }
 
+html,
 body {
   margin: 0;
-  min-width: 1120px;
-  color: #172033;
   background: transparent;
   overflow: hidden;
+}
+
+body {
+  min-width: 1120px;
+  color: #172033;
+}
+
+#root {
+  background: transparent;
 }
 
 button,

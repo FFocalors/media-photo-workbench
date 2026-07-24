@@ -120,9 +120,9 @@ function createWindow(serverPort, logsDir) {
     show: false,
     title: "融媒体图片工作台 · Media Photo Workbench",
     icon: resolveWindowIcon(),
-    // Transparent window for custom rounded corners on Windows 11
+    // Transparent window: allows CSS border-radius to define the visible shape
     transparent: true,
-    // Hide the title bar but keep native frame for Snap Layout / resize edges
+    // Hide title bar content, keep native frame for titleBarOverlay buttons
     titleBarStyle: "hidden",
     // Native minimize / maximize / close buttons overlaid on custom title bar
     titleBarOverlay: {
@@ -131,7 +131,9 @@ function createWindow(serverPort, logsDir) {
       height: 48
     },
     backgroundColor: "#00000000",
-    hasShadow: true,
+    // Disable system DWM shadow (draws on rectangular HWND, ignores CSS radius).
+    // Shadow is now handled by CSS box-shadow on the rounded .window-shell container.
+    hasShadow: false,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
