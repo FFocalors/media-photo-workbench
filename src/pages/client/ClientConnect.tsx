@@ -15,6 +15,7 @@ import {
 import { getClientName, setClientName } from "../../lib/clientIdentity";
 import { cn } from "../../lib/cn";
 import { registerClientPresence } from "../../lib/socket";
+import { WindowShell } from "../../components/shell/WindowShell";
 
 const roles = ["编辑", "修图", "访客"];
 const CONNECTION_TIMEOUT_MS = 6000;
@@ -81,6 +82,7 @@ export function ClientConnectPage() {
   };
 
   return (
+    <WindowShell showBusinessInfo={false}>
     <main className="min-h-screen bg-[#F8F9FA] text-slate-900">
       <div className="mx-auto flex min-h-screen max-w-6xl flex-col px-4 py-6 lg:px-8 lg:py-8">
         <header className="mb-8 flex flex-wrap items-center justify-between gap-4">
@@ -230,6 +232,7 @@ export function ClientConnectPage() {
         </div>
       </div>
     </main>
+    </WindowShell>
   );
 }
 
