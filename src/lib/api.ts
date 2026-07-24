@@ -1054,6 +1054,16 @@ export async function fetchEventById(id: string): Promise<ApiResponse<EventData>
   return request<EventData>(`/api/events/${id}`);
 }
 
+export interface EventSummaryData {
+  event_id: string;
+  total_images: number;
+  edited_images: number;
+}
+
+export async function fetchEventSummary(eventId: string): Promise<ApiResponse<EventSummaryData>> {
+  return request<EventSummaryData>(`/api/events/${eventId}/summary`);
+}
+
 export async function createEvent(input: {
   name: string;
   slug?: string;
