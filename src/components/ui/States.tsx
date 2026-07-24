@@ -117,9 +117,9 @@ export function TransientNotice({
   );
 }
 
-export function EmptyState({ icon, title, body, action }: { icon?: ReactNode; title: string; body: string; action?: ReactNode }) {
+export function EmptyState({ icon, title, body, action, className }: { icon?: ReactNode; title: string; body: string; action?: ReactNode; className?: string }) {
   return (
-    <div className="flex h-full min-h-[360px] flex-col items-center justify-center rounded-xl border border-dashed border-slate-200 bg-white px-6 py-10 text-center">
+    <div className={cn("flex h-full min-h-[360px] flex-col items-center justify-center rounded-xl border border-dashed border-slate-200 bg-white px-6 py-10 text-center", className)}>
       {icon && <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-slate-50 text-slate-400">{icon}</div>}
       <h3 className="text-sm font-semibold text-slate-800">{title}</h3>
       <p className="mt-2 max-w-sm text-sm leading-6 text-slate-500">{body}</p>

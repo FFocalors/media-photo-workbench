@@ -911,8 +911,9 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
         />
 
         <div className="flex-1 overflow-y-auto p-4">
+          <div className="overflow-hidden rounded-xl border border-slate-100 bg-white shadow-sm">
           {loading ? (
-            <div className="flex h-full min-h-[360px] items-center justify-center rounded-xl border border-slate-100 bg-white text-sm text-slate-400">正在读取图片...</div>
+            <div className="flex h-full min-h-[360px] items-center justify-center text-sm text-slate-400">正在读取图片...</div>
           ) : (
             <PhotoGrid
               activeId={activePhotoId}
@@ -938,6 +939,7 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
               </button>
             </div>
           )}
+          </div>
         </div>
 
         <div className="flex h-10 shrink-0 items-center justify-between border-t border-slate-100 bg-white px-4 text-xs text-slate-500">

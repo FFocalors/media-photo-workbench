@@ -32,6 +32,7 @@ export function PhotoGrid({
         body={emptyBody}
         icon={<ImageOff size={22} />}
         title={emptyTitle}
+        className="border-0 bg-transparent"
       />
     );
   }
