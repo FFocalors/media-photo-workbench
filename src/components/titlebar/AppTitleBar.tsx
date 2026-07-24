@@ -1,5 +1,6 @@
 import { BrandLogo } from "../common/BrandLogo";
 import { useCurrentPageEventStore } from "../../stores/currentPageEventStore";
+import { WindowControls } from "./WindowControls";
 
 interface AppTitleBarProps {
   /** Whether to show business info (mode, event, stats). Startup page hides these. */
@@ -11,11 +12,10 @@ interface AppTitleBarProps {
 }
 
 /**
- * Custom read-only title bar for the transparent window shell.
+ * Custom read-only title bar for the transparent frameless window.
  * All business content is pointer-events: none (non-interactive).
  * Blank areas are draggable (-webkit-app-region: drag).
- * Native window control buttons are rendered by Electron's titleBarOverlay
- * on the right side; we leave padding for them.
+ * Window control buttons (minimize/maximize/close) are custom-rendered on the right.
  */
 export function AppTitleBar({
   showBusinessInfo = false,
@@ -31,8 +31,7 @@ export function AppTitleBar({
         display: "flex",
         alignItems: "center",
         height: 48,
-        paddingLeft: 12,
-        paddingRight: 160, // reserve space for native overlay buttons (~140-150px on Windows 11)
+        paddingLeft: 14,
         gap: 10,
         // @ts-expect-error -webkit-app-region is not in CSSProperties type
         WebkitAppRegion: "drag",
@@ -115,6 +114,12 @@ export function AppTitleBar({
           )}
         </>
       )}
+
+      {/* Spacer pushes window controls to the right */}
+      <div style={{ flex: 1 }} />
+
+      {/* Custom window control buttons (minimize / maximize / close) */}
+      <WindowControls />
     </div>
   );
 }

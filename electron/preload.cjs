@@ -112,5 +112,10 @@ contextBridge.exposeInMainWorld("mediaPhotoWorkbench", {
     };
     ipcRenderer.on("window-state-changed", handler);
     return () => { ipcRenderer.removeListener("window-state-changed", handler); };
-  }
+  },
+
+  // Window control commands (frame:false requires custom buttons)
+  windowMinimize: () => { ipcRenderer.send("window:minimize"); },
+  windowMaximizeRestore: () => { ipcRenderer.send("window:maximize-restore"); },
+  windowClose: () => { ipcRenderer.send("window:close"); }
 });

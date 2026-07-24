@@ -4,8 +4,8 @@ const fs = require("node:fs");
 
 const isDev = !app.isPackaged;
 
-/** @type {'transparent-native-overlay' | 'fallback-opaque-overlay'} */
-const WINDOW_MODE = "transparent-native-overlay";
+/** @type {'frameless-transparent' | 'fallback-opaque-overlay'} */
+const WINDOW_MODE = "frameless-transparent";
 
 /** @type {import('../dist-server/index').ServerHandle | null} */
 let serverHandle = null;
@@ -120,19 +120,11 @@ function createWindow(serverPort, logsDir) {
     show: false,
     title: "融媒体图片工作台 · Media Photo Workbench",
     icon: resolveWindowIcon(),
-    // Transparent window: allows CSS border-radius to define the visible shape
+    // frame:false removes ALL native chrome (border, shadow, DWM corners).
+    // Combined with transparent:true, the window shape is entirely CSS-controlled.
+    frame: false,
     transparent: true,
-    // Hide title bar content, keep native frame for titleBarOverlay buttons
-    titleBarStyle: "hidden",
-    // Native minimize / maximize / close buttons overlaid on custom title bar
-    titleBarOverlay: {
-      color: "#ffffff",
-      symbolColor: "#172033",
-      height: 48
-    },
     backgroundColor: "#00000000",
-    // Disable system DWM shadow (draws on rectangular HWND, ignores CSS radius).
-    // Shadow is now handled by CSS box-shadow on the rounded .window-shell container.
     hasShadow: false,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -439,6 +431,22 @@ app.whenReady().then(async () => {
     } else {
       event.returnValue = { maximized: false, fullscreen: false };
     }
+  });
+
+  // Window control commands (frame:false requires custom buttons)
+  ipcMain.on("window:minimize", () => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.minimize();
+  });
+  ipcMain.on("window:maximize-restore", () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMaximized()) {
+      mainWindow.unmaximize();
+    } else {
+      mainWindow.maximize();
+    }
+  });
+  ipcMain.on("window:close", () => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
   });
 
   // 启动后端服务

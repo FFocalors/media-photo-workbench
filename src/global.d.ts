@@ -27,6 +27,12 @@ interface MediaPhotoWorkbenchBridge {
   getWindowState: () => WindowState;
   /** 监听窗口状态变化，返回取消监听函数 */
   onWindowStateChanged: (callback: (state: WindowState) => void) => () => void;
+  /** 最小化窗口 */
+  windowMinimize: () => void;
+  /** 最大化或还原窗口 */
+  windowMaximizeRestore: () => void;
+  /** 关闭窗口 */
+  windowClose: () => void;
 }
 
 interface WindowState {
