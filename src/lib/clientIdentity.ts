@@ -53,6 +53,24 @@ export function getClientName(): string {
   return name;
 }
 
+const DEFAULT_USER_NAME = "外拍同学";
+
+export function getClientUserName(): string {
+  return localStorage.getItem(CLIENT_USER_NAME_KEY)?.trim() || DEFAULT_USER_NAME;
+}
+
+export function setClientUserName(value: string): string {
+  const normalized = value.trim();
+  if (normalized) {
+    localStorage.setItem(CLIENT_USER_NAME_KEY, normalized);
+    return normalized;
+  }
+  // Empty display name is never meaningful; fall back to the device name so the
+  // host-side list still has a human-readable label to show.
+  localStorage.removeItem(CLIENT_USER_NAME_KEY);
+  return getClientName();
+}
+
 export function setClientName(value: string): string {
   const normalized = value.trim() || defaultClientName(getOrCreateClientId());
   localStorage.setItem(CLIENT_NAME_KEY, normalized);

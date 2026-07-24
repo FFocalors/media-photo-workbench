@@ -16,7 +16,6 @@ import { getClientName, setClientName } from "../../lib/clientIdentity";
 import { cn } from "../../lib/cn";
 import { registerClientPresence } from "../../lib/socket";
 
-const roles = ["编辑", "修图", "访客"];
 const CONNECTION_TIMEOUT_MS = 6000;
 
 type ConnectionMessage = {
@@ -30,7 +29,6 @@ export function ClientConnectPage() {
   const recentHosts = useMemo(() => getRecentClientHosts(), []);
   const [hostAddress, setHostAddress] = useState(recentHosts[0] || getClientApiBase() || "http://127.0.0.1:3030");
   const [userName, setUserName] = useState(localStorage.getItem("mediaPhotoWorkbench.clientUserName") || "外拍同学");
-  const [role, setRole] = useState(localStorage.getItem("mediaPhotoWorkbench.clientRole") || "编辑");
   const [deviceName, setDeviceNameState] = useState(getClientName());
   const [testing, setTesting] = useState(false);
   const [health, setHealth] = useState<HealthData | null>(null);
@@ -65,10 +63,9 @@ export function ClientConnectPage() {
 
       const savedBase = setClientApiBase(normalized);
       localStorage.setItem("mediaPhotoWorkbench.clientUserName", userName.trim());
-      localStorage.setItem("mediaPhotoWorkbench.clientRole", role);
       const savedClientName = setClientName(normalizedDeviceName);
       setDeviceNameState(savedClientName);
-      registerClientPresence();
+      registerClientPresence(userName.trim());
       setHealth(result.data);
       setMessage({ tone: "success", title: "连接测试通过", body: `已连接到 ${savedBase}。` });
     } catch (err: any) {
@@ -152,14 +149,8 @@ export function ClientConnectPage() {
 
             <div className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
               <h2 className="mb-5 font-semibold text-slate-900">协作身份</h2>
-              <div className="grid gap-4 sm:grid-cols-3">
-                <Field label="姓名" onChange={setUserName} value={userName} />
-                <label>
-                  <span className="mb-1.5 block text-xs font-medium text-slate-500">角色</span>
-                  <select className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 outline-none focus:border-blue-500" onChange={(event) => setRole(event.target.value)} value={role}>
-                    {roles.map((item) => <option key={item}>{item}</option>)}
-                  </select>
-                </label>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="姓名（必填）" onChange={setUserName} value={userName} />
                 <Field
                   helper="用于主机端识别你的上传和操作记录，例如：修图电脑A、摄影组1号。"
                   label="设备名称"

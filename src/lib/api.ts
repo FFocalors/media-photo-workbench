@@ -343,6 +343,7 @@ export async function fetchHealthFrom(baseUrl: string, options?: RequestInit): P
 export interface ClientPresenceData {
   clientId: string;
   clientName: string;
+  displayName?: string;
   role: "client";
   connectedAt: string;
   lastSeenAt: string;

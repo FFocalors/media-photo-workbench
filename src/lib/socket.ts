@@ -1,6 +1,6 @@
 import { io, type Socket } from "socket.io-client";
 import { getApiBase, type EventImageData, type TaskData } from "./api";
-import { getClientIdentity } from "./clientIdentity";
+import { getClientIdentity, getClientUserName, setClientUserName } from "./clientIdentity";
 
 export type RealtimeConnectionState = "connected" | "reconnecting" | "disconnected";
 
@@ -25,6 +25,7 @@ export type RealtimeTaskPayload = TaskData & {
 export interface ClientPresence {
   clientId: string;
   clientName: string;
+  displayName?: string;
   role: "client";
   connectedAt: string;
   lastSeenAt: string;
@@ -38,7 +39,12 @@ export interface ClientsUpdatedPayload {
 
 let socket: Socket | null = null;
 let socketBaseUrl = "";
-let pendingClientRegistration: { clientId: string; clientName: string; role: "client" } | null = null;
+let pendingClientRegistration: {
+  clientId: string;
+  clientName: string;
+  displayName?: string;
+  role: "client";
+} | null = null;
 
 function getSocket(): Socket {
   const apiBaseUrl = getApiBase();
@@ -68,11 +74,15 @@ function getSocket(): Socket {
   return socket;
 }
 
-export function registerClientPresence(): void {
+export function registerClientPresence(displayNameInput?: string): void {
   const identity = getClientIdentity();
+  // Snapshot the displayed name into pending registration so reconnects replay
+  // the value captured at connect time rather than re-reading localStorage.
+  const displayName = displayNameInput !== undefined ? setClientUserName(displayNameInput) : getClientUserName();
   pendingClientRegistration = {
     clientId: identity.clientId,
     clientName: identity.clientName,
+    displayName,
     role: "client"
   };
   const activeSocket = getSocket();

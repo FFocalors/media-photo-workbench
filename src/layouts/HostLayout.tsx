@@ -13,6 +13,7 @@ import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { cn } from "../lib/cn";
 import { TaskCenter } from "../components/tasks/TaskCenter";
 import { BrandLogo } from "../components/common/BrandLogo";
+import { ConnectedClientsPanel } from "../components/sidebar/ConnectedClientsPanel";
 
 const navItems = [
   { icon: Home, label: "首页", to: "/host/overview" },
@@ -59,18 +60,8 @@ export function HostLayout() {
           <TaskCenter />
         </div>
 
-        <div className="flex items-center gap-3 border-t border-slate-50 p-4">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-200 text-slate-500">
-            <img
-              alt="Avatar"
-              className="h-full w-full object-cover"
-              src="https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?ixlib=rb-4.0.3&auto=format&fit=crop&w=100&q=80"
-            />
-          </div>
-          <div className="flex flex-col">
-            <span className="text-sm font-medium">管理员</span>
-            <span className="text-xs text-slate-400">在线</span>
-          </div>
+        <div className="border-t border-slate-50 p-3">
+          <ConnectedClientsPanel />
         </div>
       </div>
 
