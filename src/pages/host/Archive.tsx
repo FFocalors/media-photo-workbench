@@ -25,6 +25,7 @@ import {
 } from "../../lib/api";
 import { cn } from "../../lib/cn";
 import { subscribeRealtimeTaskEvent } from "../../lib/socket";
+import { useCurrentPageEventStore } from "../../stores/currentPageEventStore";
 
 const visibleStatuses = new Set(["active", "reviewing", "draft", "archived"]);
 
@@ -62,6 +63,17 @@ export function ArchivePage() {
     () => events.find((event) => event.id === selectedEventId),
     [events, selectedEventId]
   );
+
+  const selectedEventName = selectedEvent?.name ?? null;
+  const setCurrentPageEvent = useCurrentPageEventStore((s) => s.setCurrentPageEvent);
+  const clearCurrentPageEvent = useCurrentPageEventStore((s) => s.clearCurrentPageEvent);
+
+  useEffect(() => {
+    if (selectedEventId && selectedEventName) {
+      setCurrentPageEvent({ eventId: selectedEventId, eventName: selectedEventName }, "archive");
+    }
+    return () => { clearCurrentPageEvent("archive"); };
+  }, [selectedEventId, selectedEventName, setCurrentPageEvent, clearCurrentPageEvent]);
 
   const step = cleanupResult ? 4 : cleanupTaskId ? 3 : verifyResult?.verified ? 3 : prepareResult ? 2 : 1;
 

@@ -20,6 +20,7 @@ import {
 import { cn } from "../../lib/cn";
 import { Notice, StatusPill, TransientNotice } from "../../components/ui/States";
 import { subscribeClientsUpdated, subscribeRealtimeImageEvent, subscribeRealtimeTaskEvent, type RealtimeImagePayload } from "../../lib/socket";
+import { useCurrentPageEventStore } from "../../stores/currentPageEventStore";
 
 type LiveActivity = {
   id: string;
@@ -84,6 +85,16 @@ export function OverviewPage() {
   useEffect(() => {
     void loadOverview();
   }, [loadOverview]);
+
+  // Sync current event to global title bar context
+  const setCurrentPageEvent = useCurrentPageEventStore((s) => s.setCurrentPageEvent);
+  const clearCurrentPageEvent = useCurrentPageEventStore((s) => s.clearCurrentPageEvent);
+  useEffect(() => {
+    if (currentEvent) {
+      setCurrentPageEvent({ eventId: currentEvent.id, eventName: currentEvent.name }, "overview");
+    }
+    return () => { clearCurrentPageEvent("overview"); };
+  }, [currentEvent, setCurrentPageEvent, clearCurrentPageEvent]);
 
   useEffect(() => {
     const pushActivity = (activity: LiveActivity) => {

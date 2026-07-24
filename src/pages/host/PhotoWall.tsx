@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCurrentPageEventStore } from "../../stores/currentPageEventStore";
 import { FilterSidebar } from "../../components/gallery/FilterSidebar";
 import { GalleryToolbar } from "../../components/gallery/GalleryToolbar";
 import { MetadataPanel } from "../../components/gallery/MetadataPanel";
@@ -106,6 +107,18 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
   const [confirmAction, setConfirmAction] = useState<"delete" | "restore" | "purge" | null>(null);
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
   const [message, setMessage] = useState<PhotoWallMessage | null>(null);
+
+  const setCurrentPageEvent = useCurrentPageEventStore((s) => s.setCurrentPageEvent);
+  const clearCurrentPageEvent = useCurrentPageEventStore((s) => s.clearCurrentPageEvent);
+
+  const selectedEventName = events.find((e) => e.id === selectedEventId)?.name ?? null;
+
+  useEffect(() => {
+    if (selectedEventId && selectedEventName) {
+      setCurrentPageEvent({ eventId: selectedEventId, eventName: selectedEventName }, "photo-wall");
+    }
+    return () => { clearCurrentPageEvent("photo-wall"); };
+  }, [selectedEventId, selectedEventName, setCurrentPageEvent, clearCurrentPageEvent]);
 
   const activePhoto = photos.find((photo) => photo.id === activePhotoId) ?? null;
   const previewPhotos = useMemo(() => {
