@@ -137,7 +137,7 @@ function createWindow(serverPort, logsDir) {
 
   if (logsDir) {
     writeStartupLog(logsDir, `window mode: ${WINDOW_MODE}`);
-    writeStartupLog(logsDir, `BrowserWindow created with transparent=true, titleBarStyle=hidden, titleBarOverlay.height=48`);
+    writeStartupLog(logsDir, `BrowserWindow created: frame=false, transparent=true, hasShadow=false`);
   }
 
   mainWindow.on("closed", () => {
@@ -434,16 +434,17 @@ app.whenReady().then(async () => {
   });
 
   // Window control commands (frame:false requires custom buttons)
-  ipcMain.on("window:minimize", () => {
+  ipcMain.handle("window:minimize", () => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.minimize();
   });
-  ipcMain.on("window:maximize-restore", () => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
+  ipcMain.handle("window:maximize-toggle", () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return { maximized: false };
     if (mainWindow.isMaximized()) {
       mainWindow.unmaximize();
     } else {
       mainWindow.maximize();
     }
+    return { maximized: mainWindow.isMaximized() };
   });
   ipcMain.on("window:close", () => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();

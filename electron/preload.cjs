@@ -115,7 +115,7 @@ contextBridge.exposeInMainWorld("mediaPhotoWorkbench", {
   },
 
   // Window control commands (frame:false requires custom buttons)
-  windowMinimize: () => { ipcRenderer.send("window:minimize"); },
-  windowMaximizeRestore: () => { ipcRenderer.send("window:maximize-restore"); },
+  windowMinimize: () => ipcRenderer.invoke("window:minimize"),
+  windowMaximizeToggle: () => ipcRenderer.invoke("window:maximize-toggle"),
   windowClose: () => { ipcRenderer.send("window:close"); }
 });
