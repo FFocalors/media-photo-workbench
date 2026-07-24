@@ -155,6 +155,11 @@ function createWindow(serverPort, logsDir) {
       mainWindow.webContents.send("window-state-changed", { maximized: false, fullscreen: false });
     }
   });
+  mainWindow.on("restore", () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("window-state-changed", { maximized: mainWindow.isMaximized(), fullscreen: false });
+    }
+  });
   mainWindow.on("enter-full-screen", () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("window-state-changed", { maximized: mainWindow.isMaximized(), fullscreen: true });
@@ -434,20 +439,25 @@ app.whenReady().then(async () => {
   });
 
   // Window control commands (frame:false requires custom buttons)
-  ipcMain.handle("window:minimize", () => {
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.minimize();
+  // Use BrowserWindow.fromWebContents(event.sender) to get the actual window,
+  // avoiding stale closure references.
+  ipcMain.handle("window:minimize", (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win && !win.isDestroyed()) win.minimize();
   });
-  ipcMain.handle("window:maximize-toggle", () => {
-    if (!mainWindow || mainWindow.isDestroyed()) return { maximized: false };
-    if (mainWindow.isMaximized()) {
-      mainWindow.unmaximize();
+  ipcMain.handle("window:maximize-toggle", (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win || win.isDestroyed()) return { maximized: false };
+    if (win.isMaximized()) {
+      win.unmaximize();
     } else {
-      mainWindow.maximize();
+      win.maximize();
     }
-    return { maximized: mainWindow.isMaximized() };
+    return { maximized: win.isMaximized() };
   });
-  ipcMain.on("window:close", () => {
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+  ipcMain.on("window:close", (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win && !win.isDestroyed()) win.close();
   });
 
   // 启动后端服务

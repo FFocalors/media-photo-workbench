@@ -24,9 +24,14 @@ export function AppTitleBar({
 }: AppTitleBarProps) {
   const pageEvent = useCurrentPageEventStore((s) => s.event);
 
+  const handleDoubleClick = () => {
+    void window.mediaPhotoWorkbench?.windowMaximizeToggle();
+  };
+
   return (
     <div
       className="titlebar"
+      onDoubleClick={handleDoubleClick}
       style={{
         display: "flex",
         alignItems: "center",
