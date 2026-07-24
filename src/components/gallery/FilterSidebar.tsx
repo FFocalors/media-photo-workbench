@@ -56,7 +56,7 @@ export function FilterSidebar({
   const hasCameraFtpImports = uploaders.some((item) => item.sourceType === "camera_ftp");
 
   return (
-    <div className={cn("flex w-64 shrink-0 flex-col overflow-y-auto border-r border-slate-100 bg-white", className)}>
+    <div className={cn("flex h-full w-64 shrink-0 flex-col overflow-y-auto border-r border-slate-100 bg-white", className)}>
       <div className="flex items-center justify-between border-b border-slate-50 p-4">
         <h2 className="font-semibold text-slate-800">筛选</h2>
         <div className="flex items-center gap-3">

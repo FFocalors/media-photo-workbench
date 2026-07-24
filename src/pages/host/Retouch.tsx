@@ -23,6 +23,7 @@ import {
 import { cn } from "../../lib/cn";
 import { subscribeRealtimeTaskEvent } from "../../lib/socket";
 import { formatTaskDuration, getTaskStats } from "../../lib/taskStats";
+import { useCurrentPageEventStore } from "../../stores/currentPageEventStore";
 
 const visibleStatuses = new Set(["active", "reviewing", "draft"]);
 const supportedEditedExtensions = new Set([".jpg", ".jpeg"]);
@@ -158,6 +159,18 @@ export function RetouchPage() {
   const [uploadingEdited, setUploadingEdited] = useState(false);
   const [deletePackageTarget, setDeletePackageTarget] = useState<EditPackageData | null>(null);
   const [deletingPackageId, setDeletingPackageId] = useState("");
+
+  const setCurrentPageEvent = useCurrentPageEventStore((s) => s.setCurrentPageEvent);
+  const clearCurrentPageEvent = useCurrentPageEventStore((s) => s.clearCurrentPageEvent);
+
+  const selectedEventName = events.find((e) => e.id === selectedEventId)?.name ?? null;
+
+  useEffect(() => {
+    if (selectedEventId && selectedEventName) {
+      setCurrentPageEvent({ eventId: selectedEventId, eventName: selectedEventName }, "retouch");
+    }
+    return () => { clearCurrentPageEvent("retouch"); };
+  }, [selectedEventId, selectedEventName, setCurrentPageEvent, clearCurrentPageEvent]);
 
   const originalMissingCount = useMemo(() => editImages.filter((image) => !image.original_exists).length, [editImages]);
   const activeCustomPackage = useMemo(

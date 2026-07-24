@@ -14,6 +14,8 @@ import { cn } from "../lib/cn";
 import { TaskCenter } from "../components/tasks/TaskCenter";
 import { BrandLogo } from "../components/common/BrandLogo";
 import { ConnectedClientsPanel } from "../components/sidebar/ConnectedClientsPanel";
+import { WindowShell } from "../components/shell/WindowShell";
+import { useHostEventSummary } from "../hooks/useHostEventSummary";
 
 const navItems = [
   { icon: Home, label: "首页", to: "/host/overview" },
@@ -29,45 +31,50 @@ const navItems = [
 
 export function HostLayout() {
   const navigate = useNavigate();
+  const summary = useHostEventSummary();
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#F8F9FA] font-sans text-slate-800">
-      <div className="z-10 flex w-56 flex-col border-r border-slate-100 bg-white shadow-[2px_0_8px_rgba(0,0,0,0.02)]">
-        <button className="flex items-center gap-3 border-b border-slate-50 p-5 text-left" onClick={() => navigate("/")} type="button">
-          <BrandLogo size="sm" />
-          <span className="truncate text-sm font-semibold">融媒体图片工作台</span>
-        </button>
+    <WindowShell showBusinessInfo modeLabel="主机模式" summary={summary}>
+      <div className="flex flex-1 overflow-hidden font-sans text-slate-800">
+        {/* Sidebar — independent rounded container, not touching window edges */}
+        <div className="z-10 m-3 flex w-56 shrink-0 flex-col rounded-2xl border border-slate-100 bg-white shadow-sm">
+          <button className="flex items-center gap-3 border-b border-slate-50 p-5 text-left" onClick={() => navigate("/")} type="button">
+            <BrandLogo size="sm" />
+            <span className="truncate text-sm font-semibold">融媒体图片工作台</span>
+          </button>
 
-        <div className="flex flex-1 flex-col gap-1 overflow-y-auto px-3 py-4">
-          {navItems.map((item) => (
-            <NavLink
-              className={({ isActive }) =>
-                cn(
-                  "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
-                  isActive ? "bg-blue-50 text-blue-600" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-                )
-              }
-              key={item.to}
-              to={item.to}
-            >
-              <item.icon size={18} strokeWidth={2} />
-              {item.label}
-            </NavLink>
-          ))}
+          <div className="flex flex-1 flex-col gap-1 overflow-y-auto px-3 py-4">
+            {navItems.map((item) => (
+              <NavLink
+                className={({ isActive }) =>
+                  cn(
+                    "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+                    isActive ? "bg-blue-50 text-blue-600" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                  )
+                }
+                key={item.to}
+                to={item.to}
+              >
+                <item.icon size={18} strokeWidth={2} />
+                {item.label}
+              </NavLink>
+            ))}
+          </div>
+
+          <div className="border-t border-slate-50 px-3 py-3">
+            <TaskCenter />
+          </div>
+
+          <div className="border-t border-slate-50 p-3">
+            <ConnectedClientsPanel />
+          </div>
         </div>
 
-        <div className="border-t border-slate-50 px-3 py-3">
-          <TaskCenter />
-        </div>
-
-        <div className="border-t border-slate-50 p-3">
-          <ConnectedClientsPanel />
+        {/* Main content area */}
+        <div className="relative m-3 ml-0 flex flex-1 flex-col overflow-hidden">
+          <Outlet />
         </div>
       </div>
-
-      <div className="relative flex flex-1 flex-col overflow-hidden">
-        <Outlet />
-      </div>
-    </div>
+    </WindowShell>
   );
 }

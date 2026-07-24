@@ -14,6 +14,7 @@ import {
   PublishExportSize
 } from "../../lib/api";
 import { cn } from "../../lib/cn";
+import { useCurrentPageEventStore } from "../../stores/currentPageEventStore";
 
 const visibleStatuses = new Set(["active", "reviewing", "draft"]);
 
@@ -66,6 +67,18 @@ export function ExportPage() {
   const [loadingCounts, setLoadingCounts] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [downloading, setDownloading] = useState(false);
+
+  const setCurrentPageEvent = useCurrentPageEventStore((s) => s.setCurrentPageEvent);
+  const clearCurrentPageEvent = useCurrentPageEventStore((s) => s.clearCurrentPageEvent);
+
+  const selectedEventName = events.find((e) => e.id === selectedEventId)?.name ?? null;
+
+  useEffect(() => {
+    if (selectedEventId && selectedEventName) {
+      setCurrentPageEvent({ eventId: selectedEventId, eventName: selectedEventName }, "export");
+    }
+    return () => { clearCurrentPageEvent("export"); };
+  }, [selectedEventId, selectedEventName, setCurrentPageEvent, clearCurrentPageEvent]);
 
   const loadEvents = useCallback(async () => {
     setLoadingEvents(true);

@@ -27,6 +27,64 @@
 ---
 
 ## 开发记录
+### feat/custom-window-shell：自定义透明窗口外壳与只读顶部状态栏
+- **日期**：2026-07-24
+- **开发者 / 工具**：Claude Opus 4.8
+- **完成内容**：
+  - Electron 窗口改为 `transparent: true` + `titleBarStyle: 'hidden'` + `titleBarOverlay`，实现透明大圆角窗口并保留原生窗口控制按钮
+  - 隐藏默认菜单栏（`Menu.setApplicationMenu(null)`），保留 F12 / Ctrl+Shift+I DevTools 快捷键
+  - 新增 `WindowShell` 组件：窗口化 24px 圆角 + 阴影，最大化铺满且圆角/阴影归零
+  - 新增只读 `AppTitleBar`（48px）：图标、名称、模式、当前活动、已导入/已修数量，全部不可点击，空白区域拖动窗口
+  - 新增 `currentPageEventStore`（Zustand）：页面选择活动后同步标题栏，owner token 防竞态
+  - 新增 `windowStateStore`：监听 Electron maximize/unmaximize/enter-full-screen/leave-full-screen 事件
+  - 新增 `GET /api/events/:id/summary` 后端接口：纯 SQL COUNT，返回 total_images 和 edited_images
+  - 新增 `fetchEventSummary()` 前端 API
+  - 标题栏通过 Socket.IO image-created/image-updated/image-deleted-logical 节流刷新统计
+  - 左侧栏改为独立圆角矩形容器，四边留间距，最大化后保留
+  - 启动页使用同一窗口外壳，只显示品牌信息
+  - 已接入 Overview、PhotoWall、Import、Retouch、Export、Archive、ClientUpload、ClientRetouch、ClientConnect 页面
+- **修改文件**：
+  - `electron/main.cjs`：BrowserWindow 透明/titleBarStyle/titleBarOverlay/maximize 事件/IPC
+  - `electron/preload.cjs`：getWindowState/onWindowStateChanged
+  - `src/global.d.ts`：WindowState 类型
+  - `src/styles.css`：透明背景、titlebar drag/no-drag
+  - `src/stores/windowStateStore.ts`（新增）
+  - `src/stores/currentPageEventStore.ts`（新增）
+  - `src/components/shell/WindowShell.tsx`（新增）
+  - `src/components/titlebar/AppTitleBar.tsx`（新增）
+  - `src/hooks/useHostEventSummary.ts`（新增）
+  - `src/layouts/HostLayout.tsx`：WindowShell 包裹、侧栏圆角容器
+  - `src/layouts/ClientLayout.tsx`：同上
+  - `src/pages/Startup.tsx`：WindowShell 包裹
+  - `src/pages/client/ClientConnect.tsx`：WindowShell 包裹
+  - `src/pages/host/Overview.tsx`：currentPageEvent 同步
+  - `src/pages/host/PhotoWall.tsx`：currentPageEvent 同步
+  - `src/pages/host/Import.tsx`：currentPageEvent 同步
+  - `src/pages/host/Retouch.tsx`：currentPageEvent 同步
+  - `src/pages/host/Export.tsx`：currentPageEvent 同步
+  - `src/pages/host/Archive.tsx`：currentPageEvent 同步
+  - `src/pages/client/ClientUpload.tsx`：currentPageEvent 同步
+  - `src/pages/client/ClientRetouch.tsx`：currentPageEvent 同步
+  - `src-server/services/images.ts`：getEventSummary()
+  - `src-server/routes/events.ts`：GET /:id/summary 路由
+  - `src/lib/api.ts`：EventSummaryData、fetchEventSummary()
+  - `CHANGELOG.md`：版本记录
+  - `DEVELOPMENT_LOG.md`：开发记录
+- **验证方式**：
+  - `pnpm lint`（TypeScript 类型检查）通过
+  - `pnpm build`（前端 + 后端构建）通过
+  - `pnpm build:server`（后端单独构建）通过
+  - `git diff --check` 通过
+- **已知限制**：
+  - 透明窗口在多显示器不同 DPI 和非 Windows 11 环境下可能存在兼容差异
+  - Snap Layout 需要在实际 Windows 11 环境中验证
+  - ClientConnect 页面使用 WindowShell 但无业务信息
+- **并行分支冲突热点**：
+  - `src/layouts/HostLayout.tsx` 的底部管理员/TaskCenter/ConnectedClientsPanel 区域保持原样，后续需与 `feature/connected-clients-panel` 手工合并
+- **下一步**：
+  - 在真实 Windows 11 + Electron 33.4.11 环境中验证透明窗口、原生按钮、最大化、Snap Layout、高 DPI 行为
+  - 如透明窗口与 titleBarOverlay 不兼容，启用 fallback-opaque-overlay 降级模式
+
 ### v1.2.0-alpha.1 阶段一：稳定性与体验重构启动基线
 - **启动时间**：2026-07-15 21:47:33 +08:00
 - **开发者 / 工具**：Codex

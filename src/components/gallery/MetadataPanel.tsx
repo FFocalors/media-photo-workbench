@@ -36,7 +36,7 @@ export function MetadataPanel({
   }, [photo?.id, photo?.category, photo?.remark]);
 
   return (
-    <div className={cn("flex w-72 shrink-0 flex-col overflow-y-auto border-l border-slate-100 bg-white", className)}>
+    <div className={cn("flex h-full w-72 shrink-0 flex-col overflow-y-auto border-l border-slate-100 bg-white", className)}>
       <div className="flex items-center justify-between border-b border-slate-50 p-4">
         <h2 className="flex items-center gap-2 font-semibold text-slate-800">
           <Info size={16} /> 元数据
