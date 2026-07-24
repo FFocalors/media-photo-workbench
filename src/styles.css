@@ -7,7 +7,7 @@
   font-family:
     Inter, "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui,
     sans-serif;
-  background: #f6f8fb;
+  background: transparent;
 }
 
 * {
@@ -18,7 +18,8 @@ body {
   margin: 0;
   min-width: 1120px;
   color: #172033;
-  background: #f6f8fb;
+  background: transparent;
+  overflow: hidden;
 }
 
 button,
@@ -66,4 +67,23 @@ button {
   .filter-button {
     @apply flex w-full items-center justify-between rounded-lg border border-transparent px-3 py-2 text-left text-muted transition hover:border-line hover:bg-slate-50 hover:text-ink;
   }
+}
+
+/* ---- Window titlebar drag regions ---- */
+
+/* Titlebar: entire bar is draggable */
+.titlebar {
+  -webkit-app-region: drag;
+}
+
+/* Interactive elements inside the titlebar must NOT be draggable */
+.titlebar-no-drag,
+.titlebar-no-drag * {
+  -webkit-app-region: no-drag;
+  pointer-events: none; /* titlebar content is read-only */
+}
+
+/* Resize edges must not be blocked by the rounded shell */
+.window-root {
+  -webkit-app-region: no-drag;
 }

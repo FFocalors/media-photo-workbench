@@ -23,6 +23,15 @@ interface MediaPhotoWorkbenchBridge {
   getPathForFile?: (file: File) => string;
   inspectDroppedPaths?: (paths: string[]) => Promise<DroppedPathInfo[]>;
   openPath: (path: string) => Promise<string>;
+  /** 同步获取当前窗口状态（初始渲染用） */
+  getWindowState: () => WindowState;
+  /** 监听窗口状态变化，返回取消监听函数 */
+  onWindowStateChanged: (callback: (state: WindowState) => void) => () => void;
+}
+
+interface WindowState {
+  maximized: boolean;
+  fullscreen: boolean;
 }
 
 interface Window {

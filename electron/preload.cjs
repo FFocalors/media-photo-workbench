@@ -86,5 +86,31 @@ contextBridge.exposeInMainWorld("mediaPhotoWorkbench", {
     }
   },
   inspectDroppedPaths: (paths) => ipcRenderer.invoke("drag:inspect-paths", paths),
-  openPath: (path) => ipcRenderer.invoke("shell:open-path", path)
+  openPath: (path) => ipcRenderer.invoke("shell:open-path", path),
+
+  /**
+   * 同步获取当前窗口状态（用于初始渲染）。
+   * @returns {{ maximized: boolean, fullscreen: boolean }}
+   */
+  getWindowState: () => {
+    try {
+      return ipcRenderer.sendSync("window:get-state-sync");
+    } catch (_) {
+      return { maximized: false, fullscreen: false };
+    }
+  },
+
+  /**
+   * 监听窗口状态变化（最大化 / 还原 / 全屏）。
+   * 返回取消监听函数，组件卸载时应调用。
+   * @param {(state: { maximized: boolean, fullscreen: boolean }) => void} callback
+   * @returns {() => void} unsubscribe
+   */
+  onWindowStateChanged: (callback) => {
+    const handler = (_event, state) => {
+      try { callback(state); } catch (_) { /* swallow */ }
+    };
+    ipcRenderer.on("window-state-changed", handler);
+    return () => { ipcRenderer.removeListener("window-state-changed", handler); };
+  }
 });

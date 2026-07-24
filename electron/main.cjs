@@ -4,6 +4,9 @@ const fs = require("node:fs");
 
 const isDev = !app.isPackaged;
 
+/** @type {'transparent-native-overlay' | 'fallback-opaque-overlay'} */
+const WINDOW_MODE = "transparent-native-overlay";
+
 /** @type {import('../dist-server/index').ServerHandle | null} */
 let serverHandle = null;
 /** @type {BrowserWindow | null} */
@@ -109,24 +112,64 @@ function createWindow(serverPort, logsDir) {
     return mainWindow;
   }
 
-  mainWindow = new BrowserWindow({
+  const windowOpts = {
     width: 1360,
     height: 860,
     minWidth: 1200,
     minHeight: 760,
     show: false,
-    backgroundColor: "#f6f8fb",
     title: "融媒体图片工作台 · Media Photo Workbench",
     icon: resolveWindowIcon(),
+    // Transparent window for custom rounded corners on Windows 11
+    transparent: true,
+    // Hide the title bar but keep native frame for Snap Layout / resize edges
+    titleBarStyle: "hidden",
+    // Native minimize / maximize / close buttons overlaid on custom title bar
+    titleBarOverlay: {
+      color: "#ffffff",
+      symbolColor: "#172033",
+      height: 48
+    },
+    backgroundColor: "#00000000",
+    hasShadow: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false
     }
-  });
+  };
+
+  mainWindow = new BrowserWindow(windowOpts);
+
+  if (logsDir) {
+    writeStartupLog(logsDir, `window mode: ${WINDOW_MODE}`);
+    writeStartupLog(logsDir, `BrowserWindow created with transparent=true, titleBarStyle=hidden, titleBarOverlay.height=48`);
+  }
 
   mainWindow.on("closed", () => {
     mainWindow = null;
+  });
+
+  // Window state change events for frontend shell styling
+  mainWindow.on("maximize", () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("window-state-changed", { maximized: true, fullscreen: false });
+    }
+  });
+  mainWindow.on("unmaximize", () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("window-state-changed", { maximized: false, fullscreen: false });
+    }
+  });
+  mainWindow.on("enter-full-screen", () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("window-state-changed", { maximized: mainWindow.isMaximized(), fullscreen: true });
+    }
+  });
+  mainWindow.on("leave-full-screen", () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("window-state-changed", { maximized: mainWindow.isMaximized(), fullscreen: false });
+    }
   });
 
   mainWindow.once("ready-to-show", () => {
@@ -384,6 +427,18 @@ app.whenReady().then(async () => {
     event.returnValue = { ...runtimeInfo };
   });
 
+  // Window state query (synchronous, safe for preload initial sync)
+  ipcMain.on("window:get-state-sync", (event) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      event.returnValue = {
+        maximized: mainWindow.isMaximized(),
+        fullscreen: mainWindow.isFullScreen()
+      };
+    } else {
+      event.returnValue = { maximized: false, fullscreen: false };
+    }
+  });
+
   // 启动后端服务
   /** @type {string|null} */
   let startErrorStack = null;
@@ -427,7 +482,9 @@ app.whenReady().then(async () => {
     console.error("[main] 后端服务启动失败:", err);
   }
 
-  setChineseMenu();
+  // Hide the default application menu bar.
+  // DevTools remain accessible via F12 / Ctrl+Shift+I keyboard shortcuts.
+  Menu.setApplicationMenu(null);
   createWindow(serverHandle?.port, logsDir);
 
   // 将真实运行时信息发送给渲染进程
