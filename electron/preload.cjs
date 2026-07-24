@@ -88,22 +88,13 @@ contextBridge.exposeInMainWorld("mediaPhotoWorkbench", {
   inspectDroppedPaths: (paths) => ipcRenderer.invoke("drag:inspect-paths", paths),
   openPath: (path) => ipcRenderer.invoke("shell:open-path", path),
 
-  /**
-   * 同步获取当前窗口状态（用于初始渲染）。
-   * @returns {{ maximized: boolean, fullscreen: boolean }}
-   */
-  getWindowState: () => {
-    try {
-      return ipcRenderer.sendSync("window:get-state-sync");
-    } catch (_) {
-      return { maximized: false, fullscreen: false };
-    }
-  },
+  /** 获取主进程确认的当前窗口状态。 */
+  getWindowState: () => ipcRenderer.invoke("window:get-state"),
 
   /**
    * 监听窗口状态变化（最大化 / 还原 / 全屏）。
    * 返回取消监听函数，组件卸载时应调用。
-   * @param {(state: { maximized: boolean, fullscreen: boolean }) => void} callback
+   * @param {(state: { maximized: boolean, fullscreen: boolean, bounds: object | null, mode: "native" | "manual" }) => void} callback
    * @returns {() => void} unsubscribe
    */
   onWindowStateChanged: (callback) => {
@@ -116,6 +107,6 @@ contextBridge.exposeInMainWorld("mediaPhotoWorkbench", {
 
   // Window control commands (frame:false requires custom buttons)
   windowMinimize: () => ipcRenderer.invoke("window:minimize"),
-  windowMaximizeToggle: () => ipcRenderer.invoke("window:maximize-toggle"),
-  windowClose: () => { ipcRenderer.send("window:close"); }
+  windowMaximizeToggle: () => ipcRenderer.invoke("window:toggle-maximize"),
+  windowClose: () => ipcRenderer.invoke("window:close")
 });

@@ -1,5 +1,7 @@
+import type { MouseEvent } from "react";
 import { BrandLogo } from "../common/BrandLogo";
 import { useCurrentPageEventStore } from "../../stores/currentPageEventStore";
+import { toggleWindowMaximize } from "../../stores/windowStateStore";
 import { WindowControls } from "./WindowControls";
 
 interface AppTitleBarProps {
@@ -24,8 +26,11 @@ export function AppTitleBar({
 }: AppTitleBarProps) {
   const pageEvent = useCurrentPageEventStore((s) => s.event);
 
-  const handleDoubleClick = () => {
-    void window.mediaPhotoWorkbench?.windowMaximizeToggle();
+  const handleDoubleClick = (event: MouseEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement;
+    if (target.closest("button, .titlebar-no-drag")) return;
+    event.preventDefault();
+    void toggleWindowMaximize();
   };
 
   return (

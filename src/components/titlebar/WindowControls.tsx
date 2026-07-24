@@ -1,4 +1,4 @@
-import { useWindowShellStore } from "../../stores/windowStateStore";
+import { toggleWindowMaximize, useWindowShellStore } from "../../stores/windowStateStore";
 
 /**
  * Custom window control buttons styled after Windows 11 / Mavis.
@@ -10,8 +10,8 @@ export function WindowControls() {
   const bridge = window.mediaPhotoWorkbench;
 
   const onMinimize = () => { void bridge?.windowMinimize(); };
-  const onMaximize = () => { void bridge?.windowMaximizeToggle(); };
-  const onClose = () => { bridge?.windowClose(); };
+  const onMaximize = () => { void toggleWindowMaximize(); };
+  const onClose = () => { void bridge?.windowClose(); };
 
   return (
     <div

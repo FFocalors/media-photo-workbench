@@ -18,7 +18,7 @@ interface WindowShellProps {
  *       AppTitleBar
  *       .window-body  (page content)
  *
- * Windowed: 28px border-radius, CSS shadow follows the curve, 12px padding.
+ * Windowed: 28px border-radius, CSS shadow follows the curve, 24px padding.
  * Maximized: fills entire screen, no radius/shadow/padding.
  */
 export function WindowShell({ children, showBusinessInfo, modeLabel, summary }: WindowShellProps) {
@@ -35,35 +35,8 @@ export function WindowShell({ children, showBusinessInfo, modeLabel, summary }: 
     <div
       className="window-root"
       data-maximized={isMaximized ? "true" : "false"}
-      style={{
-        width: "100vw",
-        height: "100vh",
-        display: "flex",
-        justifyContent: "center",
-        alignItems: "center",
-        background: "transparent",
-        overflow: "hidden",
-        // Padding creates transparent space around .window-shell so the
-        // CSS box-shadow is visible (not clipped by the BrowserWindow edge).
-        padding: isMaximized ? 0 : 12
-      }}
     >
-      <div
-        className="window-shell"
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          width: "100%",
-          height: "100%",
-          borderRadius: isMaximized ? 0 : 28,
-          overflow: "hidden",
-          background: "#f6f8fb",
-          boxShadow: isMaximized
-            ? "none"
-            : "0 10px 30px rgba(15,23,42,0.12), 0 2px 8px rgba(15,23,42,0.08)",
-          transition: "border-radius 0.15s ease, box-shadow 0.15s ease"
-        }}
-      >
+      <div className="window-shell">
         <AppTitleBar
           showBusinessInfo={showBusinessInfo}
           modeLabel={modeLabel}

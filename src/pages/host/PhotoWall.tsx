@@ -849,25 +849,10 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
 
   return (
     <div className="relative flex h-full min-w-0 flex-1 overflow-hidden bg-[#F8F9FA]">
+      <div className="m-3 flex h-full min-w-0 flex-1 items-stretch overflow-hidden rounded-xl border border-slate-100 bg-white shadow-sm">
       <FilterSidebar {...filterSidebarProps} className="hidden xl:flex" />
-      {filterPanelOpen && (
-        <>
-          <button
-            aria-label="关闭筛选"
-            className="absolute inset-0 z-30 bg-slate-900/20 xl:hidden"
-            onClick={() => setFilterPanelOpen(false)}
-            type="button"
-          />
-          <FilterSidebar
-            {...filterSidebarProps}
-            className="absolute inset-y-0 left-0 z-40 flex w-72 shadow-xl xl:hidden"
-            showClose
-            onClose={() => setFilterPanelOpen(false)}
-          />
-        </>
-      )}
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex h-full min-w-0 min-h-0 flex-1 flex-col">
         <GalleryToolbar
           filteredCount={photos.length}
           search={search}
@@ -910,8 +895,7 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
           onDismiss={() => setMessage(null)}
         />
 
-        <div className="flex-1 overflow-y-auto p-4">
-          <div className="overflow-hidden rounded-xl border border-slate-100 bg-white shadow-sm">
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
           {loading ? (
             <div className="flex h-full min-h-[360px] items-center justify-center text-sm text-slate-400">正在读取图片...</div>
           ) : (
@@ -939,7 +923,6 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
               </button>
             </div>
           )}
-          </div>
         </div>
 
         <div className="flex h-10 shrink-0 items-center justify-between border-t border-slate-100 bg-white px-4 text-xs text-slate-500">
@@ -964,6 +947,25 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
       </div>
 
       <MetadataPanel {...metadataPanelProps} className="hidden 2xl:flex" />
+      </div>
+
+      {filterPanelOpen && (
+        <>
+          <button
+            aria-label="关闭筛选"
+            className="absolute inset-0 z-30 bg-slate-900/20 xl:hidden"
+            onClick={() => setFilterPanelOpen(false)}
+            type="button"
+          />
+          <FilterSidebar
+            {...filterSidebarProps}
+            className="absolute inset-y-0 left-0 z-40 flex w-72 shadow-xl xl:hidden"
+            showClose
+            onClose={() => setFilterPanelOpen(false)}
+          />
+        </>
+      )}
+
       {metadataPanelOpen && (
         <>
           <button
