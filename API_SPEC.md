@@ -760,6 +760,32 @@ working/{event_slug}/清单
   ```
 - **备注**：该接口基于当前活动 `images` 记录统计，不要求客户端在线；设备名可能重复，筛选应优先使用 `clientId`。
 
+### [已实现] 获取活动摘要（标题栏统计）
+- **用途**：轻量活动统计，供标题栏显示已导入和已修数量。纯 SQL COUNT，无文件系统访问。
+- **请求方法**：`GET`
+- **路径**：`/api/events/:eventId/summary`
+- **请求参数示例**：无
+- **响应示例**：
+  ```json
+  {
+    "ok": true,
+    "data": {
+      "event_id": "evt_xxx",
+      "total_images": 1286,
+      "edited_images": 324
+    },
+    "error": null
+  }
+  ```
+- **统计口径**：
+  - `total_images`：`COUNT(*) WHERE is_deleted = 0`（排除逻辑删除图片，包括所有状态）。
+  - `edited_images`：`SUM(CASE WHEN edited_path != '' THEN 1 ELSE 0 END) WHERE is_deleted = 0`（只要 edited_path 非空即计入，覆盖 edited / publish / published 状态）。
+- **错误码**：
+  - `EVENT_NOT_FOUND`：活动不存在。
+  - `EVENT_DELETED`：活动已逻辑删除。
+  - `EVENT_SUMMARY_FAILED`：查询失败。
+- **备注**：该接口不逐图执行 `fs.existsSync`，不扫描文件系统。前端标题栏通过 Socket.IO 事件（image-created / image-updated / image-deleted-logical）节流刷新统计。
+
 ### [已实现] 获取缩略图
 - **用途**：按图片 ID 获取长边 400px 的 WebP 缩略图。
 - **请求方法**：`GET`
