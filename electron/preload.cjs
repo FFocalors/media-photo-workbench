@@ -108,5 +108,10 @@ contextBridge.exposeInMainWorld("mediaPhotoWorkbench", {
   // Window control commands (frame:false requires custom buttons)
   windowMinimize: () => ipcRenderer.invoke("window:minimize"),
   windowMaximizeToggle: () => ipcRenderer.invoke("window:toggle-maximize"),
-  windowClose: () => ipcRenderer.invoke("window:close")
+  windowClose: () => ipcRenderer.invoke("window:close"),
+
+  // Custom title-bar drag (title bar is no-drag so DOM dblclick works; the main
+  // process moves/restores the window and follows the cursor during the gesture).
+  beginTitlebarDrag: (payload) => ipcRenderer.invoke("window:begin-titlebar-drag", payload),
+  endTitlebarDrag: () => ipcRenderer.invoke("window:end-titlebar-drag")
 });

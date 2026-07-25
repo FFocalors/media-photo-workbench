@@ -33,6 +33,10 @@ interface MediaPhotoWorkbenchBridge {
   windowMaximizeToggle: () => Promise<WindowState>;
   /** 关闭窗口 */
   windowClose: () => Promise<void>;
+  /** 开始标题栏自定义拖拽：最大化时先还原为默认尺寸并定位到鼠标下（ratioX 为标题栏横向比例，offsetY 为标题栏内纵向偏移），窗口化时按当前位置跟随 */
+  beginTitlebarDrag: (payload: { ratioX: number; offsetY: number }) => Promise<WindowState | null>;
+  /** 结束标题栏拖拽 */
+  endTitlebarDrag: () => Promise<WindowState | null>;
 }
 
 interface WindowState {

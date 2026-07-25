@@ -849,7 +849,7 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
 
   return (
     <div className="relative flex h-full min-w-0 flex-1 overflow-hidden bg-[#F8F9FA]">
-      <div className="m-3 flex h-full min-w-0 flex-1 items-stretch overflow-hidden rounded-xl border border-slate-100 bg-white shadow-sm">
+      <div className="flex min-h-0 min-w-0 flex-1 items-stretch overflow-hidden rounded-xl border border-slate-100 bg-white shadow-sm">
       <FilterSidebar {...filterSidebarProps} className="hidden xl:flex" />
 
       <div className="flex h-full min-w-0 min-h-0 flex-1 flex-col">

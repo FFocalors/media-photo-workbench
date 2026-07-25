@@ -32,6 +32,11 @@ const BOUNDS_TOLERANCE = 4;
 let lastNormalBounds = null;
 let manualMaximized = false;
 let windowTransitioning = false;
+/** Active title-bar drag session (custom pointer drag), or null when idle. */
+/** @type {{ grabOffsetX: number, grabOffsetY: number, width: number, height: number } | null} */
+let titlebarDragState = null;
+/** @type {NodeJS.Timeout | null} */
+let titlebarDragTimer = null;
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -279,6 +284,106 @@ async function toggleWindowMaximize(win, channel) {
   return getWindowStatePayload(win);
 }
 
+function clampNumber(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function stopTitlebarDragTimer() {
+  if (titlebarDragTimer) {
+    clearInterval(titlebarDragTimer);
+    titlebarDragTimer = null;
+  }
+}
+
+/**
+ * Begin a custom title-bar drag. The title bar uses -webkit-app-region: no-drag
+ * (drag regions swallow DOM dblclick on Windows, breaking double-click toggle),
+ * so all dragging is done here by polling the cursor and moving the window.
+ *
+ * Maximized: restore to the configured DEFAULT window size (not the pre-maximize
+ * size), positioned so the grabbed title-bar point (ratioX / offsetY) stays under
+ * the cursor, then keep following for the rest of the gesture.
+ * Windowed: keep the current size and grab offset, just follow the cursor.
+ */
+function beginTitlebarDrag(win, payload) {
+  if (!win || win.isDestroyed()) {
+    return null;
+  }
+  stopTitlebarDragTimer();
+
+  const cursor = screen.getCursorScreenPoint();
+  const workArea = screen.getDisplayNearestPoint(cursor).workArea;
+  const maximizedNow = manualMaximized || win.isMaximized() || windowCoversWorkArea(win);
+
+  let grabOffsetX;
+  let grabOffsetY;
+  let width;
+  let height;
+  if (maximizedNow) {
+    const ratioX = clampNumber(Number(payload && payload.ratioX) || 0, 0, 1);
+    const offsetY = Math.max(0, Number(payload && payload.offsetY) || 0);
+    width = Math.min(DEFAULT_WINDOW_WIDTH, workArea.width);
+    height = Math.min(DEFAULT_WINDOW_HEIGHT, workArea.height);
+    grabOffsetX = Math.round(width * ratioX);
+    grabOffsetY = Math.round(clampNumber(offsetY, 0, height));
+
+    if (win.isFullScreen()) {
+      win.setFullScreen(false);
+    }
+    manualMaximized = false;
+    const x = clampNumber(cursor.x - grabOffsetX, workArea.x, workArea.x + workArea.width - width);
+    const y = clampNumber(cursor.y - grabOffsetY, workArea.y, workArea.y + workArea.height - height);
+    // setBounds also unmaximizes a natively maximized window in one step.
+    win.setBounds({ x, y, width, height });
+  } else {
+    const bounds = win.getBounds();
+    width = bounds.width;
+    height = bounds.height;
+    grabOffsetX = clampNumber(cursor.x - bounds.x, 0, width);
+    grabOffsetY = clampNumber(cursor.y - bounds.y, 0, height);
+  }
+
+  titlebarDragState = { grabOffsetX, grabOffsetY, width, height };
+  if (maximizedNow) {
+    rememberNormalBounds(win, "titlebar-drag-restore");
+  }
+  broadcastWindowState(win, maximizedNow ? "titlebar-drag-restore" : "titlebar-drag-begin");
+
+  // Follow the cursor until endTitlebarDrag. Polling here keeps motion smooth and
+  // independent of renderer IPC rate. Use setBounds with the pinned width/height:
+  // plain setPosition lets Windows/DWM recompute the size of this transparent
+  // frameless window, which drifts (grows) on fractional-DPI displays.
+  titlebarDragTimer = setInterval(() => {
+    if (!titlebarDragState || !win || win.isDestroyed()) {
+      stopTitlebarDragTimer();
+      return;
+    }
+    const point = screen.getCursorScreenPoint();
+    win.setBounds({
+      x: point.x - titlebarDragState.grabOffsetX,
+      y: point.y - titlebarDragState.grabOffsetY,
+      width: titlebarDragState.width,
+      height: titlebarDragState.height
+    });
+  }, 8);
+
+  return getWindowStatePayload(win);
+}
+
+function endTitlebarDrag(win) {
+  const wasDragging = Boolean(titlebarDragState);
+  titlebarDragState = null;
+  stopTitlebarDragTimer();
+  if (!win || win.isDestroyed()) {
+    return null;
+  }
+  if (wasDragging) {
+    rememberNormalBounds(win, "titlebar-drag-end");
+    broadcastWindowState(win, "titlebar-drag-end");
+  }
+  return getWindowStatePayload(win);
+}
+
 function resolveEarlyLogsDir() {
   const appData = process.env.APPDATA;
   if (appData) {
@@ -416,6 +521,8 @@ function createWindow(serverPort, logsDir) {
     lastNormalBounds = null;
     manualMaximized = false;
     windowTransitioning = false;
+    titlebarDragState = null;
+    stopTitlebarDragTimer();
   });
 
   // Window state change events for frontend shell styling
@@ -770,6 +877,15 @@ app.whenReady().then(async () => {
   ipcMain.handle("window:toggle-maximize", async (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     return toggleWindowMaximize(win, "window:toggle-maximize");
+  });
+  // Custom title-bar drag (no-drag region; native drag regions swallow dblclick).
+  ipcMain.handle("window:begin-titlebar-drag", (event, payload) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    return beginTitlebarDrag(win, payload);
+  });
+  ipcMain.handle("window:end-titlebar-drag", (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    return endTitlebarDrag(win);
   });
   ipcMain.handle("window:close", (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);

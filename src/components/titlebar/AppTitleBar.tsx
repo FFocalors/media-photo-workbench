@@ -1,4 +1,5 @@
-import type { MouseEvent } from "react";
+import { useRef } from "react";
+import type { MouseEvent, PointerEvent } from "react";
 import { BrandLogo } from "../common/BrandLogo";
 import { useCurrentPageEventStore } from "../../stores/currentPageEventStore";
 import { toggleWindowMaximize } from "../../stores/windowStateStore";
@@ -13,11 +14,19 @@ interface AppTitleBarProps {
   summary?: { total_images: number; edited_images: number } | null;
 }
 
+/** Movement (px) past which a title-bar press becomes a drag instead of a click/double-click. */
+const DRAG_THRESHOLD = 3;
+
 /**
  * Custom read-only title bar for the transparent frameless window.
  * All business content is pointer-events: none (non-interactive).
- * Blank areas are draggable (-webkit-app-region: drag).
  * Window control buttons (minimize/maximize/close) are custom-rendered on the right.
+ *
+ * The whole bar uses -webkit-app-region: no-drag. Native drag regions swallow the
+ * DOM dblclick event on Windows (and the OS caption double-click does not reach our
+ * manual, bounds-based maximize), so a native draggable title bar cannot support
+ * double-click-to-maximize here. Instead a single custom pointer drag handles both
+ * windowed movement and drag-from-maximized restore, while dblclick toggles maximize.
  */
 export function AppTitleBar({
   showBusinessInfo = false,
@@ -25,6 +34,15 @@ export function AppTitleBar({
   summary
 }: AppTitleBarProps) {
   const pageEvent = useCurrentPageEventStore((s) => s.event);
+  const titlebarRef = useRef<HTMLDivElement | null>(null);
+  const dragRef = useRef<{
+    pointerId: number;
+    ratioX: number;
+    offsetY: number;
+    startX: number;
+    startY: number;
+    started: boolean;
+  } | null>(null);
 
   const handleDoubleClick = (event: MouseEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement;
@@ -33,10 +51,62 @@ export function AppTitleBar({
     void toggleWindowMaximize();
   };
 
+  const handlePointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    const target = event.target as HTMLElement;
+    if (target.closest("button, .titlebar-no-drag")) return;
+    if (!window.mediaPhotoWorkbench?.beginTitlebarDrag) return;
+
+    const rect = titlebarRef.current?.getBoundingClientRect();
+    const barWidth = rect?.width || 1;
+    dragRef.current = {
+      pointerId: event.pointerId,
+      ratioX: (event.clientX - (rect?.left ?? 0)) / barWidth,
+      offsetY: event.clientY - (rect?.top ?? 0),
+      startX: event.screenX,
+      startY: event.screenY,
+      started: false
+    };
+    try { titlebarRef.current?.setPointerCapture(event.pointerId); } catch { /* noop */ }
+  };
+
+  const handlePointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag || event.pointerId !== drag.pointerId || drag.started) return;
+    // Ignore sub-threshold jitter so a plain click / double-click still toggles.
+    const moved = Math.abs(event.screenX - drag.startX) + Math.abs(event.screenY - drag.startY);
+    if (moved < DRAG_THRESHOLD) return;
+    const bridge = window.mediaPhotoWorkbench;
+    if (!bridge?.beginTitlebarDrag) {
+      dragRef.current = null;
+      return;
+    }
+    // First real movement: hand off to the main process, which restores (if
+    // maximized) and then follows the cursor for the rest of the gesture.
+    drag.started = true;
+    void bridge.beginTitlebarDrag({ ratioX: drag.ratioX, offsetY: drag.offsetY });
+  };
+
+  const handlePointerEnd = (event: PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    const wasStarted = drag.started;
+    dragRef.current = null;
+    try { titlebarRef.current?.releasePointerCapture(event.pointerId); } catch { /* noop */ }
+    if (wasStarted) {
+      void window.mediaPhotoWorkbench?.endTitlebarDrag?.();
+    }
+  };
+
   return (
     <div
+      ref={titlebarRef}
       className="titlebar"
       onDoubleClick={handleDoubleClick}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerEnd}
+      onPointerCancel={handlePointerEnd}
       style={{
         display: "flex",
         alignItems: "center",
@@ -44,7 +114,7 @@ export function AppTitleBar({
         paddingLeft: 14,
         gap: 10,
         // @ts-expect-error -webkit-app-region is not in CSSProperties type
-        WebkitAppRegion: "drag",
+        WebkitAppRegion: "no-drag",
         userSelect: "none",
         flexShrink: 0,
         background: "transparent"

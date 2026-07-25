@@ -78,9 +78,11 @@ button {
 
 /* ---- Window titlebar drag regions ---- */
 
-/* Titlebar: entire bar is draggable */
+/* Titlebar: no-drag so DOM dblclick fires (native drag regions swallow dblclick on */
+/* Windows, and the OS caption double-click can't drive our manual bounds maximize). */
+/* Dragging is handled by a custom pointer drag in AppTitleBar + the main process. */
 .titlebar {
-  -webkit-app-region: drag;
+  -webkit-app-region: no-drag;
 }
 
 /* Interactive elements inside the titlebar must NOT be draggable */
@@ -91,12 +93,16 @@ button {
 }
 
 .window-root {
-  width: 100%;
-  height: 100%;
+  /* Fill the BrowserWindow exactly: no transparent gutter for an outer shadow, */
+  /* so the visible border coincides with the window bounds and OS resize hit area. */
+  width: 100vw;
+  height: 100vh;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
+  align-items: stretch;
+  justify-content: stretch;
   background: transparent;
   border: 0;
   outline: 0;
@@ -115,14 +121,10 @@ button {
   outline: 0;
   border-radius: 28px;
   background: #f6f8fb;
-  box-shadow:
-    0 10px 24px -12px rgba(15, 23, 42, 0.34),
-    0 3px 8px -4px rgba(15, 23, 42, 0.18);
+  /* Inset 1px edge instead of an outer drop shadow: the shadow no longer needs a */
+  /* transparent gutter, so the visible edge stays flush with the window bounds. */
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.1);
   transition: border-radius 0.15s ease, box-shadow 0.15s ease;
-}
-
-.window-root[data-maximized="true"] {
-  padding: 0;
 }
 
 .window-root[data-maximized="true"] .window-shell {
