@@ -131,3 +131,233 @@ button {
   border-radius: 0;
   box-shadow: none;
 }
+
+/*
+ * ---- Web (plain browser) shell overrides ----
+ *
+ * The rules above target the Electron `.window-root` / `.window-shell`
+ * unconditionally so the desktop look is preserved when `data-runtime`
+ * isn't set (older snapshots, cached CSS, etc.). When the page runs in a
+ * plain browser, WindowShell emits `data-runtime="web"` on `.window-root`
+ * and the override block below takes over:
+ *   - fills the viewport with a normal rectangle (no rounded surface)
+ *   - drops the inset edge and the drag/button area is just a header
+ *   - lets the page body scroll normally
+ *
+ * The Electron selectors above are intentionally NOT modified — every
+ * existing rule continues to apply on Electron, and these new rules only
+ * match when the runtime attribute is "web".
+ */
+
+.window-root[data-runtime="web"] {
+  width: 100%;
+  min-height: 100vh;
+  height: auto;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: stretch;
+  background: #f6f8fb;
+  border: 0;
+  outline: 0;
+  box-shadow: none;
+  border-radius: 0;
+  overflow: visible;
+  -webkit-app-region: no-drag;
+}
+
+.window-root[data-runtime="web"] .window-shell {
+  width: 100%;
+  min-height: 100vh;
+  height: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+  border: 0;
+  outline: 0;
+  border-radius: 0;
+  background: #f6f8fb;
+  box-shadow: none;
+}
+
+.window-root[data-runtime="web"] .titlebar {
+  -webkit-app-region: no-drag;
+  border-bottom: 1px solid #e6ebf2;
+  background: #ffffff;
+}
+
+.window-root[data-runtime="web"] .window-body {
+  flex: 0 0 auto;
+  min-height: 0;
+  height: auto;
+  overflow: visible;
+}
+
+/*
+ * Layouts like ClientLayout mount `flex flex-1 overflow-hidden` flex containers
+ * directly inside .window-body. In web mode the page-level scroll (set on
+ * html/body by the WindowShell effect) should own scrolling, so we let those
+ * inner containers grow with content instead of clipping it.
+ *
+ * Scoped to direct children of .window-body so deeper in-page scroll regions
+ * (e.g. ClientLayout sidebar's `overflow-y-auto` nav list) keep their own
+ * scrolling intact.
+ */
+.window-root[data-runtime="web"] .window-body > [class*="overflow-hidden"] {
+  overflow: visible;
+}
+
+/*
+ * ============================================================================
+ * Mobile web layout (phone browsers)
+ * ============================================================================
+ *
+ * Every rule in this block is gated on `<html data-mobile-web="true">`, which
+ * `useMobileWebLayout()` / `initMobileWebAttribute()` set ONLY when all of:
+ *   - NOT running inside the Electron shell
+ *   - primary input is touch (pointer: coarse, hover: none)
+ *   - viewport width <= 1024px (covers phones in portrait AND landscape)
+ * match. Electron and desktop browsers never receive the attribute, so nothing
+ * here can regress the frameless desktop window or the desktop browser layout.
+ */
+
+html[data-mobile-web="true"] body {
+  /* Release the desktop min-width that would otherwise force horizontal scroll. */
+  min-width: 0;
+}
+
+html[data-mobile-web="true"],
+html[data-mobile-web="true"] body,
+html[data-mobile-web="true"] #root {
+  /* Natural document flow: the page scrolls vertically. We do NOT pin to a
+     fixed 100vh / overflow:hidden here — the desktop globals above do that for
+     the Electron window, so we release them for the mobile page. Full-screen
+     mobile surfaces opt into 100dvh via the utilities below. */
+  height: auto;
+  min-height: 100%;
+  overflow: visible;
+  background: #f6f8fb !important;
+}
+
+html[data-mobile-web="true"] {
+  /* `clip` clips horizontal overflow WITHOUT creating a scroll container, so a
+     sticky top bar keeps working. Progressive enhancement; the fluid mobile
+     layout is designed to never overflow horizontally in the first place. */
+  overflow-x: clip;
+  -webkit-text-size-adjust: 100%;
+  /* Remove the grey tap flash on interactive elements. */
+  -webkit-tap-highlight-color: transparent;
+}
+
+html[data-mobile-web="true"] body {
+  overflow-x: clip;
+  /* No sideways rubber-banding; vertical overscroll (pull-to-refresh) is left
+     to the browser on the photo wall. */
+  overscroll-behavior-x: none;
+}
+
+/* Thumbnails / preview imagery must not offer the native long-press "save
+   image" callout — a long-press on a card opens our own quick-action sheet. */
+html[data-mobile-web="true"] img {
+  -webkit-touch-callout: none;
+}
+
+/* ---- Mobile sizing utilities (100dvh with a 100vh fallback) ----
+ * 100dvh tracks the *dynamic* viewport height, so full-screen surfaces do not
+ * jump when the Android/iOS address bar collapses. Browsers without dvh
+ * support fall back to 100vh. */
+html[data-mobile-web="true"] .mpw-h-screen {
+  height: 100vh;
+  height: 100dvh;
+}
+html[data-mobile-web="true"] .mpw-min-h-screen {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+html[data-mobile-web="true"] .mpw-max-h-screen {
+  max-height: 100vh;
+  max-height: 100dvh;
+}
+
+/* Bottom-sheet max-heights (vh fallback + dvh). Never exceed the viewport. */
+html[data-mobile-web="true"] .mpw-max-h-92 {
+  max-height: 92vh;
+  max-height: 92dvh;
+}
+html[data-mobile-web="true"] .mpw-max-h-85 {
+  max-height: 85vh;
+  max-height: 85dvh;
+}
+html[data-mobile-web="true"] .mpw-max-h-80 {
+  max-height: 80vh;
+  max-height: 80dvh;
+}
+html[data-mobile-web="true"] .mpw-max-h-70 {
+  max-height: 70vh;
+  max-height: 70dvh;
+}
+html[data-mobile-web="true"] .mpw-max-h-60 {
+  max-height: 60vh;
+  max-height: 60dvh;
+}
+
+/* ---- Safe-area utilities (iPhone notch + home indicator) ---- */
+html[data-mobile-web="true"] .mpw-pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+html[data-mobile-web="true"] .mpw-pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+html[data-mobile-web="true"] .mpw-pl-safe {
+  padding-left: env(safe-area-inset-left, 0px);
+}
+html[data-mobile-web="true"] .mpw-pr-safe {
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+/* ---- Touch interaction helpers ---- */
+/* Buttons/controls: remove double-tap-zoom delay, keep text unselectable. */
+html[data-mobile-web="true"] .mpw-touch {
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+}
+/* Gesture surface (fullscreen preview): we own pan/pinch via pointer events. */
+html[data-mobile-web="true"] .mpw-gesture {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ---- Overlay entrance animations (bottom sheets / fullscreen preview) ---- */
+@keyframes mpw-sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+@keyframes mpw-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+html[data-mobile-web="true"] .mpw-anim-sheet {
+  animation: mpw-sheet-in 0.24s cubic-bezier(0.32, 0.72, 0.35, 1);
+}
+html[data-mobile-web="true"] .mpw-anim-fade {
+  animation: mpw-fade-in 0.18s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-mobile-web="true"] .mpw-anim-sheet,
+  html[data-mobile-web="true"] .mpw-anim-fade {
+    animation: none;
+  }
+}

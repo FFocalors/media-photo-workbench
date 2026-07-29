@@ -4,6 +4,7 @@ import { BrandLogo } from "../common/BrandLogo";
 import { useCurrentPageEventStore } from "../../stores/currentPageEventStore";
 import { toggleWindowMaximize } from "../../stores/windowStateStore";
 import { WindowControls } from "./WindowControls";
+import { isElectronRuntime } from "../../lib/runtime";
 
 interface AppTitleBarProps {
   /** Whether to show business info (mode, event, stats). Startup page hides these. */
@@ -35,6 +36,7 @@ export function AppTitleBar({
 }: AppTitleBarProps) {
   const pageEvent = useCurrentPageEventStore((s) => s.event);
   const titlebarRef = useRef<HTMLDivElement | null>(null);
+  const isElectron = isElectronRuntime();
   const dragRef = useRef<{
     pointerId: number;
     ratioX: number;
@@ -195,11 +197,14 @@ export function AppTitleBar({
         </>
       )}
 
-      {/* Spacer pushes window controls to the right */}
-      <div style={{ flex: 1 }} />
+      {/* Spacer pushes window controls to the right. In web mode the controls
+          don't render, so the spacer (and the empty area it would reserve) is
+          omitted to keep the page header compact. */}
+      {isElectron && <div style={{ flex: 1 }} />}
 
-      {/* Custom window control buttons (minimize / maximize / close) */}
-      <WindowControls />
+      {/* Custom window control buttons (minimize / maximize / close).
+          Electron only — web mode never binds any window-control IPC. */}
+      {isElectron && <WindowControls />}
     </div>
   );
 }

@@ -18,11 +18,17 @@ function withRetryParam(src: string, attempt: number): string {
 export function RetryableImage({
   src,
   alt,
-  className
+  className,
+  loading,
+  draggable
 }: {
   src: string;
   alt: string;
   className?: string;
+  /** Native lazy loading — used by the mobile photo wall so off-screen thumbs
+      only load as they approach the viewport. Omit on desktop (unchanged). */
+  loading?: "lazy" | "eager";
+  draggable?: boolean;
 }) {
   const [attempt, setAttempt] = useState(0);
   const retryTimer = useRef<number | null>(null);
@@ -57,6 +63,9 @@ export function RetryableImage({
     <img
       alt={alt}
       className={className}
+      decoding="async"
+      draggable={draggable}
+      loading={loading}
       onError={handleError}
       src={displaySrc}
     />

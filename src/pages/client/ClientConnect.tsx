@@ -1,7 +1,7 @@
 import { ArrowLeft, CheckCircle2, LinkIcon, PenTool, Wifi } from "lucide-react";
 import type { ReactNode } from "react";
-import { useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { QRCodeCard } from "../../components/common/QRCodeCard";
 import { Notice, TransientNotice } from "../../components/ui/States";
 import {
@@ -16,6 +16,8 @@ import { getClientName, setClientName } from "../../lib/clientIdentity";
 import { cn } from "../../lib/cn";
 import { registerClientPresence } from "../../lib/socket";
 import { WindowShell } from "../../components/shell/WindowShell";
+import { BrandLogo } from "../../components/common/BrandLogo";
+import { useMobileWebLayout } from "../../hooks/useMobileWebLayout";
 
 const CONNECTION_TIMEOUT_MS = 6000;
 
@@ -27,6 +29,8 @@ type ConnectionMessage = {
 
 export function ClientConnectPage() {
   const navigate = useNavigate();
+  const isMobileWeb = useMobileWebLayout();
+  const [searchParams] = useSearchParams();
   const recentHosts = useMemo(() => getRecentClientHosts(), []);
   const [hostAddress, setHostAddress] = useState(recentHosts[0] || getClientApiBase() || "http://127.0.0.1:3030");
   const [userName, setUserName] = useState(localStorage.getItem("mediaPhotoWorkbench.clientUserName") || "外拍同学");
@@ -34,6 +38,7 @@ export function ClientConnectPage() {
   const [testing, setTesting] = useState(false);
   const [health, setHealth] = useState<HealthData | null>(null);
   const [message, setMessage] = useState<ConnectionMessage | null>(null);
+  const autoConnectAttemptedRef = useRef(false);
 
   const connected = Boolean(health);
   const normalizedDeviceName = deviceName.trim() || getClientName();
@@ -46,16 +51,18 @@ export function ClientConnectPage() {
     }
   }, [hostAddress]);
 
-  const handleConnect = async () => {
-    if (!canConnect) return;
+  const handleConnect = async (addressOverride?: string) => {
+    const target = (addressOverride ?? hostAddress).trim();
+    if (!target || !userName.trim()) return;
     setTesting(true);
     setHealth(null);
+    setMessage(null);
     const startedAt = Date.now();
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), CONNECTION_TIMEOUT_MS);
 
     try {
-      const normalized = normalizeApiBaseUrl(hostAddress);
+      const normalized = normalizeApiBaseUrl(target);
       const result = await fetchHealthFrom(normalized, { signal: controller.signal });
       if (!result.ok || !result.data) {
         setMessage(buildConnectionFailureMessage("api", result.error?.message || "主机健康检查失败。"));
@@ -69,6 +76,10 @@ export function ClientConnectPage() {
       registerClientPresence(userName.trim());
       setHealth(result.data);
       setMessage({ tone: "success", title: "连接测试通过", body: `已连接到 ${savedBase}。` });
+      // Mobile goes straight to the photo wall once connected.
+      if (isMobileWeb) {
+        navigate("/client/photos");
+      }
     } catch (err: any) {
       const elapsedMs = Date.now() - startedAt;
       setMessage(buildConnectionFailureMessage(classifyConnectionError(err, elapsedMs), err?.message));
@@ -77,6 +88,159 @@ export function ClientConnectPage() {
       setTesting(false);
     }
   };
+
+  // Mobile: auto-connect on entry. A `?host=` / `?api=` deep link always wins;
+  // otherwise reconnect to the saved / same-origin / most-recent host. The
+  // disconnect button links here with `?stay=1` so the user can switch hosts
+  // without being bounced straight back to the wall.
+  useEffect(() => {
+    if (!isMobileWeb || autoConnectAttemptedRef.current) return;
+    autoConnectAttemptedRef.current = true;
+
+    const deepLink = searchParams.get("host") || searchParams.get("api");
+    if (deepLink) {
+      setHostAddress(deepLink);
+      void handleConnect(deepLink);
+      return;
+    }
+
+    const stay = searchParams.get("stay") === "1" || searchParams.get("manual") === "1";
+    if (stay) return;
+
+    const candidate = getClientApiBase() || recentHosts[0] || "";
+    if (candidate) {
+      setHostAddress(candidate);
+      void handleConnect(candidate);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMobileWeb]);
+
+  if (isMobileWeb) {
+    return (
+      <main className="mpw-min-h-screen bg-[#F8F9FA] text-slate-900 mpw-pt-safe">
+        <div className="mx-auto flex w-full max-w-md flex-col gap-5 px-5 pb-[max(env(safe-area-inset-bottom),24px)] pt-6">
+          <header className="flex items-center gap-3">
+            <BrandLogo size="md" className="h-12 w-12 rounded-xl" />
+            <div className="min-w-0 flex-1">
+              <h1 className="text-xl font-bold text-slate-900">连接到主机</h1>
+              <p className="mt-0.5 text-xs text-slate-500">手机轻量筛片 · 选片 / 打星 / 备注 / 下载</p>
+            </div>
+            <span className={cn("flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium", connected ? "bg-emerald-50 text-emerald-600" : "bg-slate-100 text-slate-500")}>
+              <span className={cn("h-1.5 w-1.5 rounded-full", connected ? "bg-emerald-500" : "bg-slate-400")} />
+              {connected ? "已连接" : "未连接"}
+            </span>
+          </header>
+
+          <section className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="font-semibold text-slate-900">主机地址</h2>
+              <Wifi className="text-blue-600" size={20} />
+            </div>
+            <input
+              autoCapitalize="off"
+              autoComplete="off"
+              autoCorrect="off"
+              className="w-full rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-base text-slate-700 outline-none focus:border-blue-500"
+              inputMode="url"
+              onChange={(event) => setHostAddress(event.target.value)}
+              placeholder="http://192.168.137.1:3030"
+              spellCheck={false}
+              value={hostAddress}
+            />
+            {recentHosts.length > 0 && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {recentHosts.map((host) => (
+                  <button
+                    className="mpw-touch rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-500 active:border-blue-200 active:text-blue-600"
+                    key={host}
+                    onClick={() => setHostAddress(host)}
+                    type="button"
+                  >
+                    {host}
+                  </button>
+                ))}
+              </div>
+            )}
+            <button
+              className={cn("mpw-touch mt-4 w-full rounded-xl py-3 text-base font-semibold text-white", canConnect ? "bg-blue-600 active:bg-blue-700" : "cursor-not-allowed bg-slate-300")}
+              disabled={!canConnect || testing}
+              onClick={() => handleConnect()}
+              type="button"
+            >
+              {testing ? "正在连接主机..." : connected ? "重新连接" : "连接主机"}
+            </button>
+            {!canConnect && (
+              <Notice className="mt-4" tone="warning" title="连接信息不完整">
+                请输入主机地址和姓名。主机地址需要完整格式，例如 http://192.168.137.1:3030。
+              </Notice>
+            )}
+            <TransientNotice className="mt-4" message={message} onDismiss={() => setMessage(null)} />
+          </section>
+
+          <section className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
+            <h2 className="mb-4 font-semibold text-slate-900">协作身份</h2>
+            <div className="space-y-4">
+              <label className="block">
+                <span className="mb-1.5 block text-xs font-medium text-slate-500">姓名（必填）</span>
+                <input
+                  className="w-full rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-base text-slate-700 outline-none focus:border-blue-500"
+                  onChange={(event) => setUserName(event.target.value)}
+                  value={userName}
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1.5 block text-xs font-medium text-slate-500">设备名称</span>
+                <input
+                  className="w-full rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-base text-slate-700 outline-none focus:border-blue-500"
+                  onBlur={() => setDeviceNameState(setClientName(deviceName))}
+                  onChange={(event) => {
+                    setDeviceNameState(event.target.value);
+                    if (event.target.value.trim()) setClientName(event.target.value);
+                  }}
+                  value={deviceName}
+                />
+                <span className="mt-1.5 block text-xs leading-5 text-slate-400">用于主机端识别你的上传和操作记录。</span>
+              </label>
+            </div>
+          </section>
+
+          {connected && (
+            <button
+              className="mpw-touch w-full rounded-xl bg-emerald-600 py-3 text-base font-semibold text-white active:bg-emerald-700"
+              onClick={() => navigate("/client/photos")}
+              type="button"
+            >
+              进入图片墙
+            </button>
+          )}
+
+          <section className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
+            <h2 className="mb-3 font-semibold text-slate-900">连接状态</h2>
+            <div className="space-y-3">
+              <StatusLine active={health?.server.status === "running"} label="主机服务" />
+              <StatusLine active={health?.database.status === "connected"} label="数据库" />
+              <StatusLine active={Boolean(health?.repository.exists && health.repository.readable && health.repository.writable)} label="图片仓库" />
+            </div>
+          </section>
+
+          <QRCodeCard
+            description="同一局域网的电脑或其他设备可扫码访问；手机请直接输入上方地址连接。"
+            emptyText="请输入完整主机地址"
+            label="扫码连接（辅助）"
+            size={110}
+            value={qrAddress}
+          />
+
+          <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4">
+            <p className="text-xs leading-5 text-amber-800">
+              连不上时，请让主机开启 Windows 热点，手机连接该热点后访问
+              <span className="font-medium"> 192.168.137.1:3030</span>，并检查 Windows 防火墙。
+            </p>
+          </div>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <WindowShell showBusinessInfo={false}>
@@ -119,7 +283,7 @@ export function ClientConnectPage() {
                 <button
                   className={cn("rounded-lg px-5 py-2 text-sm font-medium text-white", canConnect ? "bg-blue-600 hover:bg-blue-700" : "cursor-not-allowed bg-slate-300")}
                   disabled={!canConnect || testing}
-                  onClick={handleConnect}
+                  onClick={() => handleConnect()}
                   type="button"
                 >
                   {testing ? "连接中..." : "连接测试"}
