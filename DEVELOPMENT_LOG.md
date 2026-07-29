@@ -27,6 +27,13 @@
 ---
 
 ## 开发记录
+### v2.1.0 窗口外壳、客户端与现场传图整合
+- **日期**：2026-07-29
+- **开发者 / 工具**：Codex
+- **完成内容**：将 `integration/window-shell-connected-clients` 合并到 `main`，整合自定义窗口外壳、顶部活动摘要、已连接客户端面板和移动端轻量筛片；同时纳入 v1.2.2 以来的 IIS/FTP 自动配置、ACL、活动切换、提权进度与便携包结构修复。
+- **版本策略**：项目版本统一为 `2.1.0`，源码使用 `v2.1.0` Tag 标记；Windows ZIP 需基于该 Tag 重新构建并完成异机验证后再创建 GitHub Release。
+- **验证方式**：集成分支合并前 `pnpm lint` 与 `pnpm build` 通过；合并后执行 TypeScript、生产构建、相机 FTP 自动测试和差异检查。
+
 ### v1.2.2 异机 TEMP ACL 初始化失败修复
 - **日期**：2026-07-26
 - **现场问题**：异机初始化在 UAC 前返回 `TEMP_ACL_FAILED / stage=unknown`，只显示 API operationId，并错误显示“已尝试回滚”。旧执行器仅使用 `%TEMP%`，通过账户名一次性调用 `icacls`；TEMP 重定向、非 NTFS/受控目录、域或 Microsoft 账户解析以及安全软件策略差异都会直接阻断。

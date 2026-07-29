@@ -2,9 +2,9 @@
 
 ## 当前阶段说明
 
-当前阶段为 **v1.2.2** 内部异机测试阶段。`v1.2.0-alpha.1` 的现场传图稳定性与使用体验修复已合并到 `main`；当前局域网相机 FTP 继续使用“Windows IIS FTP + 当前 FTP 活动 watcher + 自动导入”单一架构。
+当前阶段为 **v2.1.0** 集成发布阶段。窗口外壳、已连接客户端、移动端轻量图片墙与现场传图稳定性修复已合并到 `main`；当前局域网相机 FTP 继续使用“Windows IIS FTP + 当前 FTP 活动 watcher + 自动导入”单一架构。
 
-本阶段延续生产模式访问方式：打包后 Express 托管前端 `dist/`，前端页面、`/api` 接口和 Socket.IO 复用同一个后端端口。开发模式仍使用 Vite `5173` 访问前端、`3030-3040` 访问后端 API。本轮只生成 Windows ZIP 便携包用于异机测试，不打 Tag、不创建 GitHub Release，不改变现有 API 路径和核心业务语义。
+本阶段延续生产模式访问方式：打包后 Express 托管前端 `dist/`，前端页面、`/api` 接口和 Socket.IO 复用同一个后端端口。开发模式仍使用 Vite `5173` 访问前端、`3030-3040` 访问后端 API。`v2.1.0` 以 Git Tag 标记源码；ZIP 与 GitHub Release 在产物复测后单独发布，不改变现有 API 路径和核心业务语义。
 
 前端入口仍位于“导入图片 > 相机 FTP”tab，`/api/camera-ftp/*` 命名空间保持不变。IIS binding 为 `*:{controlPort}:`，控制端口默认 `21` 且可配置，PASV 默认 `50000-50100`，当前 FTP 活动根目录为 `working/{event_slug}/原图/相机FTP/`。该目录同时是 IIS 上传目录、相机原图最终目录、watcher 目录和 `images.original_path` 所在目录；稳定后原地导入，不复制第二份原图。
 

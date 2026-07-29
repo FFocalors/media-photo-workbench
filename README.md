@@ -10,18 +10,18 @@ Media Photo Workbench / 融媒体图片工作台 是面向校园融媒体中心�
 
 ## 当前版本
 
-- 当前版本：`v1.2.2`
-- 版本主题：现场传图稳定性与使用体验重构
+- 当前版本：`v2.1.0`
+- 版本主题：窗口外壳、已连接客户端、移动端轻量筛片与现场传图稳定性整合
 - `v1.1.0` 仅作为内部开发节点，不创建正式发布；项目从 `v1.1.0-alpha.4` 直接进入本版本线
-- 当前内部测试 ZIP 已包含本机 FTP 控制、活动切换、接收目录 ACL、提权临时目录 ACL 回退、进度终态和打包目录结构修复
+- 当前版本已整合自定义窗口外壳、已连接客户端面板、移动端轻量图片墙，以及 IIS FTP 自动配置、活动切换、ACL、提权进度和便携包目录结构修复
 - 后续稳定版仍以 Windows ZIP 便携包作为主要交付方式
 
 ## 当前交付状态
 
-`v1.2.2` 是合并到 `main` 后的内部测试版本，尚未创建 Tag 或 GitHub Release。当前已重新生成包含最新修复和精简根目录结构的异机测试包：
+`v2.1.0` 已完成源码集成并以 Git Tag 标记。Windows ZIP 便携包应基于该 Tag 重新生成，文件名为：
 
 ```text
-MediaPhotoWorkbench-v1.2.2-x64.zip
+MediaPhotoWorkbench-v2.1.0-x64.zip
 ```
 
 当前不推荐 NSIS 安装包，也不提供 Web Installer。
@@ -64,9 +64,9 @@ MediaPhotoWorkbench-v1.2.2-x64.zip
 - Windows 热点常见主机地址候选为 `192.168.137.1`，实际地址和端口以主机首页 / 相机 FTP 页面检测结果为准。
 - 必要时检查 Windows 防火墙是否允许本软件访问专用网络。
 
-## 相机 FTP 传输（v1.2.2）
+## 相机 FTP 传输（v2.1.0）
 
-v1.2.2 延续 Windows IIS FTP 单一架构。工作台负责检测、初始化、修复、启停和显式接管 IIS FTP 站点；普通启动不要求管理员权限，只有修改 Windows 功能、IIS、本地账户、ACL 或防火墙时才会显示 UAC。
+v2.1.0 延续 Windows IIS FTP 单一架构。工作台负责检测、初始化、修复、启停和显式接管 IIS FTP 站点；普通启动不要求管理员权限，只有修改 Windows 功能、IIS、本地账户、ACL 或防火墙时才会显示 UAC。
 
 当前自动配置统一采用 `Preflight（只读）→ Plan → Apply（一次 UAC）→ Verify → Commit / Rollback`。setup、repair、start、restart 和 adopt-site 只改变目标意图，底层都由同一 IIS reconciliation 事务完成；start 发现配置缺失时会先修复再启动。Plan 会把项目分成“已符合 / 将创建 / 将更新 / 将修复 / 需要确认 / 阻塞”，只有无关 IIS 站点、外部程序、非工作台账户等不能安全处理的资源才阻止执行。高风险 ACL 收紧、服务器级 PASV 和显式接管会在计划确认弹窗中逐项说明。
 
@@ -293,7 +293,7 @@ pnpm build
 pnpm dist:portable
 ```
 
-`pnpm dist:portable` 会生成 Windows ZIP 便携包到 `release-pack/`。ZIP 根目录只保留 `Media Photo Workbench.exe` 启动入口和 `runtime/` 运行环境目录；用户双击根目录入口即可启动。本轮生成 `v1.2.2` 内部测试包供异机验证，不打 Tag、不创建 GitHub Release。
+`pnpm dist:portable` 会生成 Windows ZIP 便携包到 `release-pack/`。ZIP 根目录只保留 `Media Photo Workbench.exe` 启动入口和 `runtime/` 运行环境目录；用户双击根目录入口即可启动。`v2.1.0` 的 ZIP 应从对应 Tag 构建并完成异机验证后再作为 Release 附件发布。
 
 Electron Builder 会通过 `extraResources` 把 `scripts/windows/*.ps1` 放入打包资源目录，供 IIS 状态与显式管理操作使用。普通应用启动仍使用非管理员权限，不应修改 NSIS 为默认提权。
 
