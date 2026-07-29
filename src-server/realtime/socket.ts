@@ -60,6 +60,7 @@ export interface RealtimeArchivePayload {
 export interface ClientPresence {
   clientId: string;
   clientName: string;
+  displayName?: string;
   role: "client";
   connectedAt: string;
   lastSeenAt: string;
@@ -84,12 +85,15 @@ function normalizeClientPayload(payload: any, socket: Socket): ClientPresence | 
   const clientName = typeof payload?.clientName === "string" && payload.clientName.trim()
     ? payload.clientName.trim().slice(0, 80)
     : `客户端-${suffix}`;
+  const trimmedDisplay = typeof payload?.displayName === "string" ? payload.displayName.trim() : "";
+  const displayName = trimmedDisplay ? trimmedDisplay.slice(0, 80) : undefined;
   const existing = clientsBySocketId.get(socket.id);
   const timestamp = nowIso();
 
   return {
     clientId,
     clientName,
+    displayName,
     role: "client",
     connectedAt: existing?.connectedAt || timestamp,
     lastSeenAt: timestamp,

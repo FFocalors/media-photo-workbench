@@ -58,6 +58,23 @@
 - 统一任务中心层级、收起交互和全局瞬时通知；通知自动消失并带轻量渐隐动画。
 - 本轮只生成 Windows ZIP 便携包供异机测试，不创建 Tag 或 GitHub Release，不生成 NSIS 安装包。
 
+### feat/custom-window-shell - 自定义透明窗口外壳与只读顶部状态栏
+
+- Electron 窗口改为 `transparent: true` + `titleBarStyle: 'hidden'` + `titleBarOverlay` 组合，实现自定义透明大圆角窗口并保留原生最小化/最大化/关闭按钮。
+- 默认菜单栏（文件/编辑/视图/窗口/帮助）已隐藏；开发环境仍可通过 F12 / Ctrl+Shift+I 打开 DevTools。
+- 新增 `WindowShell` 组件统一管理窗口圆角、阴影和最大化状态切换：窗口化时显示 24px 圆角和柔和阴影，最大化时铺满屏幕、圆角和阴影归零。
+- 新增只读 `AppTitleBar`（48px 高度），显示应用图标、应用名称、运行模式、当前活动名称、已导入数量和已修数量；所有业务内容不可点击，空白区域支持窗口拖动。
+- 新增 `currentPageEventStore` 轻量 Zustand Store，各页面选择活动后同步更新标题栏上下文；使用 owner token 防止异步页面切换竞态。
+- 新增 `windowStateStore` 管理窗口最大化/全屏状态，通过 Electron IPC 实时同步。
+- 新增 `GET /api/events/:id/summary` 轻量活动摘要接口，返回 `total_images`（排除逻辑删除）和 `edited_images`（`edited_path != ''`），纯 SQL COUNT，无文件系统访问。
+- 标题栏通过 Socket.IO 事件（image-created / image-updated / image-deleted-logical）节流刷新统计，不使用定时轮询。
+- 左侧栏（主机和客户端）改为独立圆角矩形容器，四边留有间距，最大化后仍保留圆角和间距。
+- 启动页使用同一窗口外壳但只显示应用图标和名称，不显示业务状态。
+- 已接入 Overview、PhotoWall、Import、Retouch、Export、Archive 和客户端页面的活动上下文同步。
+- 透明窗口方案依赖 Windows 11 DWM 圆角和 Electron 33.4.11 透明能力；已在代码中预留降级模式记录点。
+- 已知风险：透明窗口在多显示器不同 DPI、Snap Layout 和非 Windows 11 环境下可能存在兼容差异，需后续实际环境验证。
+- HostLayout.tsx 的底部管理员/TaskCenter 区域保持原样，与 feature/connected-clients-panel 并行分支的手动合并待后续进行。
+
 ### v1.2.0-alpha.1 - 现场传图稳定性与使用体验重构
 
 - 从 `v1.1.0-alpha.4` 直接进入 `v1.2.0-alpha.1`；`v1.1.0` 仅作为内部开发节点，不创建 Tag、Release 或发布包。

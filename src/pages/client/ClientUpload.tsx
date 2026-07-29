@@ -7,6 +7,7 @@ import { getClientName, setClientName } from "../../lib/clientIdentity";
 import { cn } from "../../lib/cn";
 import { subscribeRealtimeTaskEvent } from "../../lib/socket";
 import { formatTaskDuration, getTaskStats, taskStatusLabel } from "../../lib/taskStats";
+import { useCurrentPageEventStore } from "../../stores/currentPageEventStore";
 
 const visibleStatuses = new Set(["active", "reviewing", "draft"]);
 
@@ -30,6 +31,18 @@ export function ClientUploadPage() {
   const totalSize = useMemo(() => files.reduce((sum, file) => sum + file.size, 0), [files]);
   const displayTask = activeTask ?? createInitialUploadTask(startedTask);
   const taskStats = getTaskStats(displayTask);
+
+  const setCurrentPageEvent = useCurrentPageEventStore((s) => s.setCurrentPageEvent);
+  const clearCurrentPageEvent = useCurrentPageEventStore((s) => s.clearCurrentPageEvent);
+
+  const selectedEventName = events.find((e) => e.id === selectedEventId)?.name ?? null;
+
+  useEffect(() => {
+    if (selectedEventId && selectedEventName) {
+      setCurrentPageEvent({ eventId: selectedEventId, eventName: selectedEventName }, "client-upload");
+    }
+    return () => { clearCurrentPageEvent("client-upload"); };
+  }, [selectedEventId, selectedEventName, setCurrentPageEvent, clearCurrentPageEvent]);
 
   const loadEvents = useCallback(async () => {
     setLoadingEvents(true);

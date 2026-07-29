@@ -17,6 +17,7 @@ import {
 import { cn } from "../../lib/cn";
 import { subscribeRealtimeTaskEvent } from "../../lib/socket";
 import { formatTaskDuration, getTaskStats } from "../../lib/taskStats";
+import { useCurrentPageEventStore } from "../../stores/currentPageEventStore";
 
 const visibleStatuses = new Set(["active", "reviewing", "draft"]);
 const supportedEditedExtensions = new Set([".jpg", ".jpeg"]);
@@ -122,6 +123,16 @@ export function ClientRetouchPage() {
   const [message, setMessage] = useState<{ tone: "success" | "warning" | "danger" | "info"; title: string; body: string } | null>(null);
 
   const selectedEvent = useMemo(() => events.find((event) => event.id === selectedEventId), [events, selectedEventId]);
+  const selectedEventName = selectedEvent?.name ?? null;
+  const setCurrentPageEvent = useCurrentPageEventStore((s) => s.setCurrentPageEvent);
+  const clearCurrentPageEvent = useCurrentPageEventStore((s) => s.clearCurrentPageEvent);
+
+  useEffect(() => {
+    if (selectedEventId && selectedEventName) {
+      setCurrentPageEvent({ eventId: selectedEventId, eventName: selectedEventName }, "client-retouch");
+    }
+    return () => { clearCurrentPageEvent("client-retouch"); };
+  }, [selectedEventId, selectedEventName, setCurrentPageEvent, clearCurrentPageEvent]);
 
   const loadEvents = useCallback(async () => {
     setLoading(true);

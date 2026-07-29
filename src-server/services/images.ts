@@ -598,3 +598,33 @@ export function recordImageDownload(image: ImageRow, type: ImageDownloadType, fi
     file_path: filePath
   });
 }
+
+export interface EventSummary {
+  event_id: string;
+  total_images: number;
+  edited_images: number;
+}
+
+/**
+ * Lightweight event summary for the title bar.
+ * Uses SQL COUNT only — no filesystem access.
+ *
+ * "已导入": total non-deleted images (is_deleted = 0).
+ * "已修": images where edited_path is non-empty (covers edited, publish, published).
+ */
+export function getEventSummary(eventId: string): EventSummary {
+  const db = getDatabase();
+  const row = db.prepare(`
+    SELECT
+      COUNT(*) AS total_images,
+      SUM(CASE WHEN edited_path != '' THEN 1 ELSE 0 END) AS edited_images
+    FROM images
+    WHERE event_id = ? AND is_deleted = 0
+  `).get(eventId) as { total_images: number; edited_images: number };
+
+  return {
+    event_id: eventId,
+    total_images: row?.total_images ?? 0,
+    edited_images: row?.edited_images ?? 0
+  };
+}

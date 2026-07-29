@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCurrentPageEventStore } from "../../stores/currentPageEventStore";
 import { FilterSidebar } from "../../components/gallery/FilterSidebar";
 import { GalleryToolbar } from "../../components/gallery/GalleryToolbar";
 import { MetadataPanel } from "../../components/gallery/MetadataPanel";
@@ -106,6 +107,18 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
   const [confirmAction, setConfirmAction] = useState<"delete" | "restore" | "purge" | null>(null);
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
   const [message, setMessage] = useState<PhotoWallMessage | null>(null);
+
+  const setCurrentPageEvent = useCurrentPageEventStore((s) => s.setCurrentPageEvent);
+  const clearCurrentPageEvent = useCurrentPageEventStore((s) => s.clearCurrentPageEvent);
+
+  const selectedEventName = events.find((e) => e.id === selectedEventId)?.name ?? null;
+
+  useEffect(() => {
+    if (selectedEventId && selectedEventName) {
+      setCurrentPageEvent({ eventId: selectedEventId, eventName: selectedEventName }, "photo-wall");
+    }
+    return () => { clearCurrentPageEvent("photo-wall"); };
+  }, [selectedEventId, selectedEventName, setCurrentPageEvent, clearCurrentPageEvent]);
 
   const activePhoto = photos.find((photo) => photo.id === activePhotoId) ?? null;
   const previewPhotos = useMemo(() => {
@@ -836,25 +849,10 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
 
   return (
     <div className="relative flex h-full min-w-0 flex-1 overflow-hidden bg-[#F8F9FA]">
+      <div className="flex min-h-0 min-w-0 flex-1 items-stretch overflow-hidden rounded-xl border border-slate-100 bg-white shadow-sm">
       <FilterSidebar {...filterSidebarProps} className="hidden xl:flex" />
-      {filterPanelOpen && (
-        <>
-          <button
-            aria-label="关闭筛选"
-            className="absolute inset-0 z-30 bg-slate-900/20 xl:hidden"
-            onClick={() => setFilterPanelOpen(false)}
-            type="button"
-          />
-          <FilterSidebar
-            {...filterSidebarProps}
-            className="absolute inset-y-0 left-0 z-40 flex w-72 shadow-xl xl:hidden"
-            showClose
-            onClose={() => setFilterPanelOpen(false)}
-          />
-        </>
-      )}
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex h-full min-w-0 min-h-0 flex-1 flex-col">
         <GalleryToolbar
           filteredCount={photos.length}
           search={search}
@@ -897,9 +895,9 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
           onDismiss={() => setMessage(null)}
         />
 
-        <div className="flex-1 overflow-y-auto p-4">
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
           {loading ? (
-            <div className="flex h-full min-h-[360px] items-center justify-center rounded-xl border border-slate-100 bg-white text-sm text-slate-400">正在读取图片...</div>
+            <div className="flex h-full min-h-[360px] items-center justify-center text-sm text-slate-400">正在读取图片...</div>
           ) : (
             <PhotoGrid
               activeId={activePhotoId}
@@ -949,6 +947,25 @@ export function PhotoWallPage({ mode = "host" }: { mode?: "host" | "client" }) {
       </div>
 
       <MetadataPanel {...metadataPanelProps} className="hidden 2xl:flex" />
+      </div>
+
+      {filterPanelOpen && (
+        <>
+          <button
+            aria-label="关闭筛选"
+            className="absolute inset-0 z-30 bg-slate-900/20 xl:hidden"
+            onClick={() => setFilterPanelOpen(false)}
+            type="button"
+          />
+          <FilterSidebar
+            {...filterSidebarProps}
+            className="absolute inset-y-0 left-0 z-40 flex w-72 shadow-xl xl:hidden"
+            showClose
+            onClose={() => setFilterPanelOpen(false)}
+          />
+        </>
+      )}
+
       {metadataPanelOpen && (
         <>
           <button

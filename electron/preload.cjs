@@ -86,5 +86,32 @@ contextBridge.exposeInMainWorld("mediaPhotoWorkbench", {
     }
   },
   inspectDroppedPaths: (paths) => ipcRenderer.invoke("drag:inspect-paths", paths),
-  openPath: (path) => ipcRenderer.invoke("shell:open-path", path)
+  openPath: (path) => ipcRenderer.invoke("shell:open-path", path),
+
+  /** 获取主进程确认的当前窗口状态。 */
+  getWindowState: () => ipcRenderer.invoke("window:get-state"),
+
+  /**
+   * 监听窗口状态变化（最大化 / 还原 / 全屏）。
+   * 返回取消监听函数，组件卸载时应调用。
+   * @param {(state: { maximized: boolean, fullscreen: boolean, bounds: object | null, mode: "native" | "manual" }) => void} callback
+   * @returns {() => void} unsubscribe
+   */
+  onWindowStateChanged: (callback) => {
+    const handler = (_event, state) => {
+      try { callback(state); } catch (_) { /* swallow */ }
+    };
+    ipcRenderer.on("window-state-changed", handler);
+    return () => { ipcRenderer.removeListener("window-state-changed", handler); };
+  },
+
+  // Window control commands (frame:false requires custom buttons)
+  windowMinimize: () => ipcRenderer.invoke("window:minimize"),
+  windowMaximizeToggle: () => ipcRenderer.invoke("window:toggle-maximize"),
+  windowClose: () => ipcRenderer.invoke("window:close"),
+
+  // Custom title-bar drag (title bar is no-drag so DOM dblclick works; the main
+  // process moves/restores the window and follows the cursor during the gesture).
+  beginTitlebarDrag: (payload) => ipcRenderer.invoke("window:begin-titlebar-drag", payload),
+  endTitlebarDrag: () => ipcRenderer.invoke("window:end-titlebar-drag")
 });

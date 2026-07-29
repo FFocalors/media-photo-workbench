@@ -20,7 +20,7 @@ import {
   importSelectedImageFiles,
   scanImportFolder
 } from "../services/imageImport";
-import { getImageDtoById, listEventImages, listEventTrashedImages, listEventUploaders } from "../services/images";
+import { getImageDtoById, getEventSummary, listEventImages, listEventTrashedImages, listEventUploaders } from "../services/images";
 import { getLogger } from "../utils/logger";
 import { emitImageCreated } from "../realtime/socket";
 import { parseMultipartForm } from "../utils/multipart";
@@ -462,6 +462,30 @@ router.get("/:id/uploaders", (req, res) => {
   } catch (err) {
     getLogger().error({ err }, "获取活动上传者列表失败");
     sendError(res, "LIST_EVENT_UPLOADERS_FAILED", "获取活动上传者列表失败", 500);
+  }
+});
+
+/**
+ * GET /api/events/:id/summary
+ * Lightweight summary for the title bar: total_images and edited_images.
+ * No filesystem access — pure SQL COUNT.
+ */
+router.get("/:id/summary", (req, res) => {
+  try {
+    const event = getEventById(req.params.id);
+    if (!event) {
+      sendError(res, "EVENT_NOT_FOUND", "活动不存在", 404);
+      return;
+    }
+    if (event.status === "deleted") {
+      sendError(res, "EVENT_DELETED", "活动已删除", 404);
+      return;
+    }
+    const summary = getEventSummary(req.params.id);
+    sendSuccess(res, summary);
+  } catch (err) {
+    getLogger().error({ err }, "获取活动摘要失败");
+    sendError(res, "EVENT_SUMMARY_FAILED", "获取活动摘要失败", 500);
   }
 });
 

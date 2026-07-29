@@ -20,6 +20,7 @@ import {
 import { cn } from "../../lib/cn";
 import { Notice, StatusPill, TransientNotice } from "../../components/ui/States";
 import { subscribeClientsUpdated, subscribeRealtimeImageEvent, subscribeRealtimeTaskEvent, type RealtimeImagePayload } from "../../lib/socket";
+import { useCurrentPageEventStore } from "../../stores/currentPageEventStore";
 
 type LiveActivity = {
   id: string;
@@ -84,6 +85,16 @@ export function OverviewPage() {
   useEffect(() => {
     void loadOverview();
   }, [loadOverview]);
+
+  // Sync current event to global title bar context
+  const setCurrentPageEvent = useCurrentPageEventStore((s) => s.setCurrentPageEvent);
+  const clearCurrentPageEvent = useCurrentPageEventStore((s) => s.clearCurrentPageEvent);
+  useEffect(() => {
+    if (currentEvent) {
+      setCurrentPageEvent({ eventId: currentEvent.id, eventName: currentEvent.name }, "overview");
+    }
+    return () => { clearCurrentPageEvent("overview"); };
+  }, [currentEvent, setCurrentPageEvent, clearCurrentPageEvent]);
 
   useEffect(() => {
     const pushActivity = (activity: LiveActivity) => {
@@ -430,15 +441,20 @@ export function OverviewPage() {
               </div>
               {onlineClients.length > 0 ? (
                 <div className="space-y-2">
-                  {onlineClients.map((client) => (
-                    <div className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2" key={client.clientId}>
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium text-slate-800" title={client.clientName}>{client.clientName}</p>
-                        <p className="mt-0.5 truncate text-xs text-slate-400">{client.address || "局域网客户端"}</p>
+                  {onlineClients.map((client) => {
+                    const name = client.displayName?.trim() || client.clientName || "未命名客户端";
+                    return (
+                      <div className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2" key={client.clientId}>
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-slate-800" title={name}>{name}</p>
+                          <p className="mt-0.5 truncate text-xs text-slate-400" title={client.clientName}>
+                            {client.clientName || client.address || "局域网客户端"}
+                          </p>
+                        </div>
+                        <span className="ml-3 h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
                       </div>
-                      <span className="ml-3 h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ) : (
                 <p className="rounded-xl bg-slate-50 px-3 py-3 text-sm leading-6 text-slate-400">暂无客户端在线。</p>

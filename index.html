@@ -2,7 +2,17 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      viewport-fit=cover lets the layout extend under the iPhone notch / home
+      indicator so we can pad with env(safe-area-inset-*). interactive-widget=
+      resizes-content keeps fixed bottom sheets above the software keyboard.
+      User scaling is intentionally left enabled — the fullscreen preview relies
+      on pinch-to-zoom.
+    -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
+    />
     <title>融媒体图片工作台 · Media Photo Workbench</title>
   </head>
   <body>

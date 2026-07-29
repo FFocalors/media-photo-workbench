@@ -8,6 +8,7 @@ import { subscribeRealtimeTaskEvent } from "../../lib/socket";
 import { getOperationalStatusSemantic } from "../../lib/statusSemantics";
 import { formatTaskDuration, getTaskStats, taskStatusLabel } from "../../lib/taskStats";
 import { CameraFtpImportPanel } from "../../components/import/CameraFtpImportPanel";
+import { useCurrentPageEventStore } from "../../stores/currentPageEventStore";
 
 type MessageState = {
   tone: "success" | "warning" | "danger" | "info";
@@ -38,6 +39,16 @@ export function ImportPage() {
   const [message, setMessage] = useState<MessageState | null>(null);
 
   const selectedEvent = useMemo(() => events.find((event) => event.id === selectedEventId), [events, selectedEventId]);
+  const selectedEventName = selectedEvent?.name ?? null;
+  const setCurrentPageEvent = useCurrentPageEventStore((s) => s.setCurrentPageEvent);
+  const clearCurrentPageEvent = useCurrentPageEventStore((s) => s.clearCurrentPageEvent);
+
+  useEffect(() => {
+    if (selectedEventId && selectedEventName) {
+      setCurrentPageEvent({ eventId: selectedEventId, eventName: selectedEventName }, "import");
+    }
+    return () => { clearCurrentPageEvent("import"); };
+  }, [selectedEventId, selectedEventName, setCurrentPageEvent, clearCurrentPageEvent]);
   const hasSelectedFiles = sourceMode === "files" && selectedFiles.length > 0;
   const canStartImport = sourceMode === "folder" ? Boolean(scanResult && scanResult.count > 0) : hasSelectedFiles;
   const displayTask = activeTask ?? createInitialImportTask(startedTask);
