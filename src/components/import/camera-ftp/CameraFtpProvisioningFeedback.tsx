@@ -1,5 +1,8 @@
 import { AlertCircle, CheckCircle2, Loader2, Settings2 } from "lucide-react";
-import type { CameraFtpProvisioningPlanData } from "../../../lib/api";
+import type {
+  CameraFtpAdminOperationData,
+  CameraFtpProvisioningPlanData
+} from "../../../lib/api";
 import { cn } from "../../../lib/cn";
 import {
   getOperationalStatusSemantic,
@@ -52,15 +55,82 @@ function issueLevelSemantic(level: IssueLevel): StatusSemantic {
   return { ...semantic, label: ISSUE_LEVEL_LABELS[level] };
 }
 
-export function CameraFtpProvisioningProgress({ phases }: { phases: CameraFtpProvisioningPhasePresentation[] }) {
+function formatElapsed(milliseconds: number): string {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes > 0 ? `${minutes} 分 ${seconds} 秒` : `${seconds} 秒`;
+}
+
+function formatEstimate(operation: CameraFtpAdminOperationData | null): string {
+  if (!operation || operation.estimateExceeded) return "暂时无法准确估计";
+  const min = operation.estimatedRemainingMinMs;
+  const max = operation.estimatedRemainingMaxMs;
+  if (min === null || max === null) return "暂时无法准确估计";
+  const minMinutes = Math.max(0, Math.ceil(min / 60_000));
+  const maxMinutes = Math.max(minMinutes, Math.ceil(max / 60_000));
+  if (maxMinutes === 0) return "预计不到 1 分钟";
+  if (minMinutes === 0) return maxMinutes === 1 ? "预计不到 1 分钟" : `预计约不到 1–${maxMinutes} 分钟`;
+  if (minMinutes === maxMinutes) return `预计约 ${maxMinutes} 分钟`;
+  return `预计约 ${minMinutes}–${maxMinutes} 分钟`;
+}
+
+export function CameraFtpProvisioningProgress({
+  phases,
+  operation
+}: {
+  phases: CameraFtpProvisioningPhasePresentation[];
+  operation: CameraFtpAdminOperationData | null;
+}) {
   const current = phases.find((phase) => phase.status === "running") || phases[phases.length - 1];
+  const waitingAfterTimeout = operation?.state === "timed_out_waiting";
+  const progressPercent = Math.max(0, Math.min(100, operation?.progressPercent ?? 0));
+  const title = waitingAfterTimeout ? "管理员操作仍可能在后台执行" : "正在执行完整 FTP 配置计划";
   return (
-    <section className="rounded-2xl border border-blue-100 bg-blue-50 p-5">
+    <section className={cn(
+      "rounded-2xl border p-5",
+      waitingAfterTimeout ? "border-amber-200 bg-amber-50" : "border-blue-100 bg-blue-50"
+    )}>
       <div className="flex items-start gap-3">
-        <Loader2 className="mt-0.5 shrink-0 animate-spin text-blue-600" size={20} />
+        <Loader2 className={cn("mt-0.5 shrink-0 animate-spin", waitingAfterTimeout ? "text-amber-600" : "text-blue-600")} size={20} />
         <div className="min-w-0 flex-1">
-          <h3 className="font-semibold text-blue-900">正在执行完整 FTP 配置计划</h3>
-          <p className="mt-1 text-sm leading-6 text-blue-800">{current?.label}。如出现 Windows 用户账户控制窗口，请确认本次工作台操作。</p>
+          <h3 className={cn("font-semibold", waitingAfterTimeout ? "text-amber-900" : "text-blue-900")}>{title}</h3>
+          <p className={cn("mt-1 text-sm leading-6", waitingAfterTimeout ? "text-amber-800" : "text-blue-800")}>
+            {current?.label}。{waitingAfterTimeout
+              ? "工作台不会强制结束可能正在修改 Windows 的进程；确认进程结束前不能重复执行。"
+              : "如出现 Windows 用户账户控制窗口，请确认本次工作台操作。"}
+          </p>
+          <div className="mt-4">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <span className={waitingAfterTimeout ? "text-amber-800" : "text-blue-800"}>
+                已等待 {formatElapsed(operation?.elapsedMs ?? 0)}
+              </span>
+              <span className={waitingAfterTimeout || operation?.estimateExceeded ? "font-medium text-amber-700" : "text-blue-700"}>
+                {operation?.estimateExceeded && !waitingAfterTimeout ? "比通常耗时更长，Windows 仍在处理" : formatEstimate(operation)}
+              </span>
+            </div>
+            <div
+              aria-label={`${current?.label || "FTP 配置"}，${progressPercent}%`}
+              aria-valuemax={100}
+              aria-valuemin={0}
+              aria-valuenow={operation?.indeterminate ? undefined : progressPercent}
+              className={cn("relative h-2.5 overflow-hidden rounded-full", waitingAfterTimeout ? "bg-amber-100" : "bg-blue-100")}
+              role="progressbar"
+            >
+              <div
+                className={cn(
+                  "h-full rounded-full transition-[width] duration-500",
+                  waitingAfterTimeout ? "bg-amber-500" : "bg-blue-600",
+                  operation?.indeterminate && "animate-pulse"
+                )}
+                style={{ width: `${Math.max(progressPercent, operation?.indeterminate ? 8 : 0)}%` }}
+              />
+            </div>
+            <div className="mt-1.5 flex items-center justify-between text-[11px] text-slate-500">
+              <span>{operation?.stage ? `当前阶段：${current?.label.replace(/^正在/, "") || "Windows 管理配置"}` : "正在等待管理员进程报告真实阶段"}</span>
+              <span>{progressPercent}%</span>
+            </div>
+          </div>
           <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
             {phases.map((phase, index) => (
               <div className="flex items-center gap-2 rounded-lg border border-blue-100 bg-white/80 px-3 py-2 text-xs" key={phase.id}>

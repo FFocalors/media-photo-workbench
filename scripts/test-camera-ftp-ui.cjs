@@ -108,10 +108,108 @@ async function main() {
     assert.equal(running.restart, true);
     assert.equal(running.repair, true);
 
+    const partialRunning = ui.getCameraFtpButtonState({
+      status: {
+        initialized: true,
+        passwordConfigured: true,
+        activeEvent: { valid: true },
+        site: { started: null }
+      },
+      busy: false,
+      selectedEvent: true,
+      credentialFormValid: false,
+      portFormValid: true,
+      serviceReady: true
+    });
+    assert.equal(
+      partialRunning.stop,
+      true,
+      "a verified managed listener must remain stoppable when ordinary inspection cannot read site.started"
+    );
+
+    const orphanedRunningSite = ui.getCameraFtpButtonState({
+      status: {
+        initialized: true,
+        passwordConfigured: true,
+        activeEvent: null,
+        site: { started: null }
+      },
+      busy: false,
+      selectedEvent: true,
+      credentialFormValid: false,
+      portFormValid: true,
+      serviceReady: true
+    });
+    assert.equal(
+      orphanedRunningSite.stop,
+      true,
+      "an owned running site must remain stoppable after its saved event is deleted"
+    );
+    assert.equal(
+      orphanedRunningSite.restart,
+      true,
+      "an owned running site may be runtime-restarted after its saved event is deleted"
+    );
+    assert.equal(
+      orphanedRunningSite.repair,
+      false,
+      "provisioning repair must still require a valid receive event"
+    );
+
+    const orphanedStoppedSite = ui.getCameraFtpButtonState({
+      status: {
+        initialized: true,
+        passwordConfigured: true,
+        activeEvent: null,
+        site: { started: false }
+      },
+      busy: false,
+      selectedEvent: true,
+      credentialFormValid: false,
+      portFormValid: true,
+      serviceReady: false
+    });
+    assert.equal(orphanedStoppedSite.stop, false);
+    assert.equal(
+      orphanedStoppedSite.restart,
+      false,
+      "a stopped orphaned site must not be reactivated before choosing a valid receive event"
+    );
+
     assert.equal(
       typeof ui.applyCameraFtpStatusObservation,
       "function",
       "camera FTP status observations must be reduced by a pure function"
+    );
+    assert.equal(
+      ui.isCameraFtpRuntimeReady({
+        initialized: true,
+        site: { started: null },
+        service: { running: true },
+        port: { listening: true, ownedByMicrosoftFtp: true }
+      }),
+      true,
+      "a managed IIS FTP listener must remain operational when ordinary permissions cannot read the site object"
+    );
+    assert.equal(
+      ui.isCameraFtpRuntimeReady({
+        initialized: true,
+        site: { started: false },
+        service: { running: true },
+        port: { listening: true, ownedByMicrosoftFtp: true }
+      }),
+      false,
+      "an explicit stopped-site observation must override listener inference"
+    );
+    assert.equal(
+      ui.isCameraFtpRuntimeReady({
+        initialized: true,
+        site: { started: null },
+        service: { running: false },
+        port: { listening: true, ownedByMicrosoftFtp: true }
+      }),
+      false,
+      "a stopped FTPSVC must never be presented as operational"
     );
     const fullInspectionAt = "2026-07-15T02:00:00.000Z";
     const ordinaryInspectionAt = "2026-07-15T02:01:00.000Z";
@@ -195,6 +293,54 @@ async function main() {
     assert.equal(afterStalePoll.current.inspectedAt, refreshedAt);
     assert.equal(afterStalePoll.lastFullInspection.inspectedAt, fullInspectionAt);
 
+    const adminOperationBase = {
+      operationId: "22222222-2222-4222-8222-222222222222",
+      scriptName: "iis-ftp-setup.ps1",
+      phaseCount: 7,
+      indeterminate: false,
+      elapsedMs: 20_000,
+      estimatedRemainingMinMs: 0,
+      estimatedRemainingMaxMs: 120_000,
+      estimateExceeded: false,
+      safeToRetry: false
+    };
+    const advancedAdminOperation = {
+      ...adminOperationBase,
+      state: "running",
+      stage: "configure_firewall",
+      phaseIndex: 4,
+      progressPercent: 70
+    };
+    const staleAdminOperation = {
+      ...adminOperationBase,
+      state: "running",
+      stage: "uac_requested",
+      phaseIndex: 0,
+      progressPercent: 2,
+      elapsedMs: 25_000
+    };
+    assert.deepEqual(
+      ui.mergeCameraFtpAdminOperationObservation(advancedAdminOperation, staleAdminOperation),
+      { ...advancedAdminOperation, elapsedMs: 25_000 },
+      "late progress polling must not move the phase or percentage backwards"
+    );
+    const completedAdminOperation = {
+      ...adminOperationBase,
+      state: "completed",
+      stage: "completed",
+      phaseIndex: 6,
+      progressPercent: 100,
+      elapsedMs: 26_000,
+      estimatedRemainingMinMs: null,
+      estimatedRemainingMaxMs: null,
+      safeToRetry: true
+    };
+    assert.strictEqual(
+      ui.mergeCameraFtpAdminOperationObservation(completedAdminOperation, staleAdminOperation),
+      completedAdminOperation,
+      "a late running response must not replace completed progress in React state"
+    );
+
     const validPorts = ui.validateCameraFtpPortSettings("2021", "50000", "50100");
     assert.equal(validPorts.valid, true);
     assert.equal(validPorts.controlPort, 2021);
@@ -269,6 +415,35 @@ async function main() {
     assert.match(uacCancelled.title, /授权已取消/);
     assert.doesNotMatch(uacCancelled.body, /canceled|IIS_CONFIG_FAILED/i);
 
+    const protectedTempFailure = ui.buildCameraFtpErrorPresentation({
+      ok: false,
+      data: null,
+      error: {
+        code: "TEMP_ACL_FAILED",
+        message: "Unable to create protected temporary directory.",
+        rollbackStatus: "not_required",
+        details: {
+          operationId: "99999999-9999-4999-8999-999999999999",
+          stage: "secure_temp_directory",
+          rollbackAttempted: false,
+          rollbackSucceeded: null,
+          diagnostics: {
+            safeToRetry: true,
+            systemStateChanged: false,
+            attempts: [
+              { rootKind: "system_temp", step: "remove_inheritance", exitCode: 5 },
+              { rootKind: "local_app_data", step: "create_directory" }
+            ]
+          }
+        }
+      }
+    }, "Failed to initialize Windows IIS FTP.");
+    assert.equal(protectedTempFailure.stage, "保护管理员临时目录");
+    assert.equal(protectedTempFailure.rollbackAttempted, false);
+    assert.equal(protectedTempFailure.rollbackSummary, "未修改系统，无需回滚");
+    assert.match(protectedTempFailure.advice, /icacls\.exe/);
+    assert.doesNotMatch(protectedTempFailure.technicalDetails, /unknown/);
+
     const secret = "Do-Not-Expose-This!42";
     const firewallFailure = ui.buildCameraFtpErrorPresentation({
       ok: false,
@@ -323,6 +498,29 @@ async function main() {
     assert.doesNotMatch(structuredTopLevelFailure.technicalDetails, new RegExp(secret.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     assert.match(structuredTopLevelFailure.technicalDetails, /已隐藏/);
 
+    const failedBeforeSnapshot = ui.buildCameraFtpErrorPresentation({
+      ok: false,
+      data: null,
+      error: {
+        code: "FTP_EVENT_NOT_FOUND",
+        message: "FTP 接收活动不存在。",
+        rollbackStatus: "success",
+        details: {
+          stage: "snapshot_current_state",
+          rollbackAttempted: false,
+          rollback: {
+            attempted: false,
+            status: "success",
+            succeeded: true,
+            items: []
+          }
+        }
+      }
+    });
+    assert.equal(failedBeforeSnapshot.rollbackAttempted, false);
+    assert.equal(failedBeforeSnapshot.rollbackSucceeded, undefined);
+    assert.match(failedBeforeSnapshot.rollbackSummary, /无需回滚/);
+
     const adminRequiredNotice = ui.buildCameraFtpErrorPresentation({
       ok: false,
       data: null,
@@ -347,6 +545,40 @@ async function main() {
     });
     assert.equal(unknownStateNotice.tone, "info");
     assert.equal(unknownStateNotice.retryable, false);
+
+    const elevatedTimeout = ui.buildCameraFtpErrorPresentation({
+      ok: false,
+      data: null,
+      operationId: "api-timeout-operation-001",
+      error: {
+        code: "ELEVATED_SCRIPT_TIMEOUT",
+        title: "管理员配置仍在执行或状态待确认",
+        message: "等待达到上限",
+        impact: "管理员进程已经启动，可能仍在修改 Windows 组件。",
+        nextAction: "等待后台进程结束后重新检测。",
+        rollbackStatus: "unknown",
+        retryable: false,
+        details: {
+          childOperationId: "child-timeout-operation-001",
+          scriptName: "iis-ftp-setup.ps1",
+          stage: "enable_iis_features",
+          rollbackAttempted: false,
+          rollbackSucceeded: null,
+          conflict: {
+            elapsedMs: 1_200_000,
+            processId: 4321,
+            lastProgressAt: "2026-07-23T00:00:00.000Z",
+            safeToRetry: false
+          }
+        }
+      }
+    });
+    assert.equal(elevatedTimeout.retryable, false);
+    assert.match(elevatedTimeout.stage, /启用 IIS FTP 组件/);
+    assert.match(elevatedTimeout.rollbackSummary, /状态未知/);
+    assert.match(elevatedTimeout.technicalDetails, /已等待：1200 秒/);
+    assert.match(elevatedTimeout.technicalDetails, /管理员进程 PID：4321/);
+    assert.match(elevatedTimeout.technicalDetails, /可安全重试：否/);
 
     const correlatedFailure = ui.buildCameraFtpErrorPresentation({
       ok: false,
@@ -658,6 +890,12 @@ async function main() {
     assert.match(panelSource, /管理员诊断（只读）/);
     assert.match(panelSource, /配置并启动 FTP/);
     assert.match(panelSource, /自动配置并启动 FTP/);
+    assert.match(
+      panelSource,
+      /const runtimeOnlyRestart = kind === "restart" && !activeEvent/,
+      "an orphaned runtime restart must not present a provisioning plan for a newly selected event"
+    );
+    assert.match(panelSource, /本次只重启工作台管理的 IIS FTP 站点/);
     assert.doesNotMatch(panelSource, /自动修复并启动 FTP/);
     assert.match(panelSource, /相机 FTP 已启动/);
     assert.match(panelSource, /最近有相机连接/);
@@ -699,16 +937,35 @@ async function main() {
     assert.match(panelSource, /cameraFtpPlanCanApply/);
     assert.match(panelSource, /CameraFtpProvisioningPlanSummary/);
     assert.match(panelSource, /CameraFtpProvisioningProgress/);
+    assert.match(panelSource, /fetchCameraFtpAdminOperation/);
+    assert.match(panelSource, /}, 1000\);/, "admin operation progress must poll once per second");
+    assert.doesNotMatch(panelSource, /}, 1400\);/, "provisioning progress must not use the former simulated timer");
+    assert.match(panelSource, /adminOperationBlocking/);
+    assert.match(panelSource, /adminOperation\?\.safeToRetry === false/);
     assert.match(panelSource, /CameraFtpIssueCenter/);
     assert.match(provisioningFeedbackSource, /查看全部配置项/);
     assert.match(provisioningFeedbackSource, /查看普通信息与自动修复项/);
     assert.match(provisioningFeedbackSource, /max-h-52[\s\S]*overflow-y-auto/);
+    assert.match(provisioningFeedbackSource, /已等待/);
+    assert.match(provisioningFeedbackSource, /预计约/);
+    assert.match(provisioningFeedbackSource, /比通常耗时更长，Windows 仍在处理/);
+    assert.match(provisioningFeedbackSource, /aria-valuemax=\{100\}/);
+    assert.match(provisioningFeedbackSource, /aria-valuemin=\{0\}/);
+    assert.match(provisioningFeedbackSource, /aria-valuenow=\{operation\?\.indeterminate \? undefined : progressPercent\}/);
+    assert.match(provisioningFeedbackSource, /暂时无法准确估计/);
     assert.doesNotMatch(panelSource, /mergePartialCameraFtpStatus|preserveUnknown/, "old full fields must never be merged into a newer partial status");
     assert.match(panelSource, /applyCameraFtpStatusObservation/);
     assert.match(panelSource, /lastFullInspection/);
     assert.match(panelSource, /当前普通检测/);
     assert.match(panelSource, /最近管理员完整检测/);
     assert.match(panelSource, /operationInProgressRef/);
+    assert.match(panelSource, /statusPollInFlightRef/);
+    assert.match(panelSource, /}, 15000\);/, "background status polling must not continuously queue full IIS probes");
+    assert.match(panelSource, /isCameraFtpRuntimeReady\(status\)/);
+    assert.match(panelSource, /border-red-200 bg-white[\s\S]*text-red-700[\s\S]*停止 FTP/,
+      "the primary stop action must use a restrained red border and text treatment");
+    assert.match(panelSource, /<ActionButton danger disabled=\{!buttonState\.stop\}/,
+      "the advanced stop action must reuse the danger button treatment");
     assert.match(panelSource, /applyDuringOperation/);
     assert.match(panelSource, /待切换，尚未生效/);
     assert.match(panelSource, /正在切换到/);
@@ -725,6 +982,8 @@ async function main() {
     assert.match(apiSource, /\/api\/camera-ftp\/\$\{path\}/);
     assert.match(apiSource, /"provisioning-plan"/);
     assert.match(apiSource, /CameraFtpProvisioningPlanItemStatus/);
+    assert.match(apiSource, /export interface CameraFtpAdminOperationData/);
+    assert.match(apiSource, /\/api\/camera-ftp\/admin-operation/);
     assert.match(apiSource, /export interface ApiError[\s\S]*rollbackStatus\?: string;[\s\S]*technicalDetails\?: string;/);
     assert.match(apiSource, /title: looksLikeHtml \? "接口路由异常" : "接口响应异常"/);
     assert.match(apiSource, /repairCameraFtp\(input: \{ password\?: string/);
@@ -784,6 +1043,7 @@ async function main() {
         "structured_top_level_error_with_legacy_compatibility",
         "admin_required_and_unknown_state_use_neutral_tone",
         "non_retryable_error_hides_retry_action",
+        "elevated_timeout_real_stage_and_retry_lock",
         "structured_stage_error",
         "onedrive_path_error_localization",
         "technical_detail_redaction",

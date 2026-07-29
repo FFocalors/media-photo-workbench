@@ -27,6 +27,51 @@
 ---
 
 ## 开发记录
+### v1.2.2 异机 TEMP ACL 初始化失败修复
+- **日期**：2026-07-26
+- **现场问题**：异机初始化在 UAC 前返回 `TEMP_ACL_FAILED / stage=unknown`，只显示 API operationId，并错误显示“已尝试回滚”。旧执行器仅使用 `%TEMP%`，通过账户名一次性调用 `icacls`；TEMP 重定向、非 NTFS/受控目录、域或 Microsoft 账户解析以及安全软件策略差异都会直接阻断。
+- **完成内容**：从 `whoami /user` 提取当前用户 SID；按当前 SID、Administrators、SYSTEM 分步授予权限，再关闭继承并验证 ACL。系统 TEMP 无法安全使用时自动回退到 `%LOCALAPPDATA%/MediaPhotoWorkbench/secure-temp/elevated`，恢复和过期清理同时扫描所有候选目录。
+- **错误语义**：所有候选均失败时返回 `secure_temp_directory`、父子 operationId、脱敏候选类型/步骤/退出码和 `rollbackAttempted=false`；明确说明管理员脚本尚未启动、系统未修改。前端显示“保护管理员临时目录”和对应检查建议，不再显示 unknown 或虚假回滚。
+- **测试**：新增 SID 解析、首选目录不可创建后安全回退、所有目录阻断、无路径/密码泄露和 UI 回滚语义夹具；定向测试、`pnpm lint`、完整 `pnpm test:camera-ftp`（171.1 秒）及生产构建通过。自动测试未启动 UAC，也未修改真实 IIS、账户、防火墙或 FTP 目录 ACL。
+- **打包结果**：重新生成结构化根目录的 `MediaPhotoWorkbench-v1.2.2-x64.zip`，大小 `383,693,008` 字节（`365.92 MiB`），SHA-256 为 `F701DC4C9FE609E5A6DD1D420C26C443092DB60EA609CA53A96F787AFECE40F7`。ASAR 内部核对确认包含 `secure_temp_directory`、LOCALAPPDATA 回退、SID 解析及未修改系统语义。
+
+### v1.2.2 便携 ZIP 根目录结构优化
+- **日期**：2026-07-23
+- **完成内容**：将标准 Electron 解包目录整体收纳到 ZIP 的 `runtime/` 子目录，根目录只保留带应用图标的 `Media Photo Workbench.exe` 轻量启动入口和 `runtime/` 文件夹。启动入口会以 `runtime/` 为工作目录透明启动真实 Electron 程序，并透传命令行参数；运行环境缺失时显示明确错误。
+- **打包实现**：`dist:portable` 先生成 `win-unpacked`，再由 `scripts/package-portable.cjs` 编译 Windows GUI 启动器并使用 electron-builder 自带的 7-Zip 生成最终 ZIP，避免人工移动文件导致结构漂移。NSIS 打包路径保持不变。
+- **验证结果**：`pnpm lint`、`git diff --check` 和完整 `pnpm dist:portable` 通过；根目录入口实际拉起 `runtime/Media Photo Workbench.exe` 及 Electron 子进程。最终 ZIP 根目录严格为 2 项，包含 55 个 locale、6 个 IIS 脚本和 `app.asar` v1.2.2，未包含运行数据或 `.idea/`。
+- **打包结果**：`MediaPhotoWorkbench-v1.2.2-x64.zip` 大小为 `383,691,072` 字节（`365.92 MiB`），SHA-256 为 `18C3EB8E53B5D9D194EC1C1CD8E4ADA3F22306F174172C2366FE84471C94CAD5`。
+- **交付边界**：继续只生成 ZIP 内部测试包，不创建 Tag、GitHub Release 或 NSIS 安装包；运行数据、日志、真实仓库和 `.idea/` 仍不得进入产物。
+
+### v1.2.2 本机孤立 FTP 站点控制修复（已纳入内部测试包）
+- **日期**：2026-07-23
+- **问题定位**：本机配置保存的 `activeEventId` 对应活动已经不存在，但工作台托管 IIS FTP 站点仍在运行。前端错误地要求 `activeEvent.valid=true` 才允许停止/重启，后端停止流程也先调用 `allowedEvent`，因此两个按钮被锁死或接口在 UAC 前失败；本次 `admin-operation` 实测为 `idle`，不是提权超时遗留锁。
+- **完成内容**：停止操作改为只依赖托管 Site ID、站点名和账户归属，可在活动缺失时安全停止站点；运行中的孤立站点允许执行运行时重启，但不修改 IIS physicalPath、不恢复 watcher，也不自动关联页面下拉框中的活动。孤立站点停止后不能直接重新启动，必须先明确选择新的接收活动。
+- **活动切换补充**：从“旧 `activeEventId` 已失效”的孤立站点切换到有效活动时，快照阶段不再强制读取旧活动记录；优先使用现有 watcher 目录，否则由管理员 IIS 状态按托管 Site ID 读取真实 physicalPath 和站点运行状态，再执行原子切换。快照前失败时明确显示“未修改系统，无需回滚”，不再把空回滚报告误写为已尝试回滚。
+- **ACL 根因与修复**：本机 `tighten_directory_acl` 的 6 条真实 ACE 包含“显式账户 Allow + 继承 Everyone Deny + 多条继承 Allow”。旧代码把 `[ordered]` 字典交给 Windows PowerShell 5.1 的 `Sort-Object -Property order`，实际没有按键值稳定排序，重建结果把 Deny 放到 Allow 后面，因而被系统判为 non-canonical。现改为分别收集原始 Deny/Allow ACE，按 Deny 在前、Allow 在后的规范顺序写入，继续保留原始 AccessMask 和 ACE 二进制语义。
+- **进度终态修复**：现场日志确认管理员 `repair` 实际在约 33 秒内完成，FTPSVC、站点、监听、ACL、watcher 和 Node 最终验证均成功；一个更早开始的 `/admin-operation` 请求却在完成后返回，把内存中的 `completed/100%` 覆盖成 `running/request_created/0%`。后端现按 operationId 合并且禁止终态/阶段/百分比回退，并在读取状态文件后复核操作是否仍活跃；前端再以相同规则防御迟到响应。
+- **状态写入与性能**：UAC launcher 不再在管理员 runner 已启动后补写 `uac_accepted`，runner 也不再在业务脚本开始后补写 `process_started`，避免两个父进程覆盖更晚真实阶段；`process_completed` 映射为 98%，仅 Node 提交完成后进入 100%。健康环境的 setup 将首次 feature/restart/service 快照同时用于初始化判断和功能幂等分支，全部功能已启用时不再重复执行 Windows Optional Feature 查询；缺失/Pending/unknown 路径保持完整检测。
+- **测试**：新增“活动缺失 + 站点运行/停止”按钮矩阵、运行时重启跳过 provisioning plan、后端停止不依赖活动路径和孤立 watcher 关闭合同；增加与本机完全同形的 6-ACE 匿名回归夹具。对本机目标目录执行只读内存重建得到 `Canonical=true / Removed=2 / Remaining=4 / FirstAceType=AccessDenied / BroadRemaining=0`。`pnpm test:camera-ftp-powershell`、完整 `pnpm test:camera-ftp`、`pnpm lint` 与 `pnpm build` 通过；测试未写入真实 IIS、账户、ACL、防火墙或服务。
+- **交付边界**：本机验证通过后已重新生成 v1.2.2 ZIP，当前包包含本节修复；仍需在其他 Windows 11 电脑验证。暂不创建 Tag 或 GitHub Release。
+
+### v1.2.2 IIS/FTP 提权长任务、真实进度与恢复
+- **日期**：2026-07-23
+- **开发者 / 工具**：Codex
+- **完成内容**：将 setup/repair/start/restart/adopt 的 provisioning 上限扩展到 20 分钟；新增管理员脚本真实阶段状态、只读 `GET /api/camera-ftp/admin-operation`、真实节点进度、已等待时间与阶段区间估算。达到上限后保留后台进程监控并锁定重试，不强杀、不误报回滚、不建议盲目重启。
+- **恢复与安全**：状态文件使用原子替换，只包含操作标识、脚本、阶段、PID 与时间；排除密码、完整路径、确认和输入。工作台重启后按 PID 恢复监控，进程消失时标记 abandoned，迟到结果只用于诊断；继续配置必须重新检测、重新规划并重新输入密码/确认。
+- **兼容性**：现有 setup、repair、start、restart、adopt 请求体与路径不变；普通状态、停止和账户操作保留短超时。`WINDOWS_RESTART_REQUIRED` 仍只由 IIS 功能 Pending 或启用命令明确要求触发，提权超时不会转换为重启建议。
+- **测试**：新增 20 分钟策略、StatusPath/OperationId、PowerShell 5.1 原子进度、半写状态恢复、敏感字段排除、真实 UI 阶段、等待/估算、超时重试锁和 API 合同回归。`pnpm test:camera-ftp` 全套、`pnpm lint`、`pnpm build` 与 `git diff --check` 均通过；自动测试未修改真实 IIS。
+- **打包结果**：`pnpm dist:portable` 成功生成 `MediaPhotoWorkbench-v1.2.2-x64.zip`，大小 `382,545,739` 字节（`364.82 MiB`），SHA-256 为 `D0821A60EFFF2FC81CA32B26B9CE3E775472BE997326C9F7661461B5BAB761D2`。包内版本、主程序、locale、6 个 IIS 脚本和运行时目录排除检查通过，并排除了第三方依赖内的 `.idea/` 元数据。
+- **交付边界**：只生成 `MediaPhotoWorkbench-v1.2.2-x64.zip` 内部测试包；不创建 Tag、GitHub Release 或 NSIS 安装包；不纳入 `.idea/`。
+
+### v1.2.1 内部测试包准备
+- **日期**：2026-07-18
+- **开发者 / 工具**：Codex
+- **完成内容**：将已合并到 `main` 的 IIS/FTP 初始化、服务状态、停止控制、任务中心与全局通知修复统一为 `v1.2.1`，准备 Windows ZIP 便携包供异机验证。
+- **交付边界**：只生成 `MediaPhotoWorkbench-v1.2.1-x64.zip` 内部测试包；不提交、不推送、不创建 Tag 或 GitHub Release，不生成 NSIS 安装包。
+- **验证计划**：执行 `pnpm dist:portable`，检查 ZIP 中的主程序、`resources/`、`locales/` 和敏感运行时目录排除情况，并记录 SHA-256。
+- **打包结果**：`pnpm dist:portable` 成功；生成 `release-pack/MediaPhotoWorkbench-v1.2.1-x64.zip`，大小 `364.82 MiB`，SHA-256 为 `3AC674EA6332CAAC3CCB47B0223C45069D652D9CB0FB2A0C5D9AF301FDE5BA40`。ZIP 结构、IIS PowerShell 脚本、`app.asar` 内版本和运行时数据目录排除检查均通过，仅保留既有主 JS chunk 体积提示。
+
 ### v1.2.0-alpha.1 阶段一：稳定性与体验重构启动基线
 - **启动时间**：2026-07-15 21:47:33 +08:00
 - **开发者 / 工具**：Codex
@@ -77,6 +122,36 @@
 - **数据一致性复核**：活动永久删除在首次移动前以 fsync + 同目录原子 rename 写入不可变 purge journal，再把受控 working/archive 目录在同一父目录原子隔离；数据库事务失败时恢复原路径，数据库提交后才删除隔离目录。启动时先于 API 和 watcher 扫描 journal：活动记录仍存在则恢复目录，记录已删除则继续清理；阶段标记损坏或缺失不覆盖 SQLite 提交真相。提交后文件清理失败返回明确的部分成功和保留路径，前端不再显示“全部清理成功”。
 - **自动测试**：新增配置迁移、数据库迁移、活动永久删除故障、日志轮转和运行时诊断/operationId 五组临时环境测试；活动删除 6 项覆盖仓库外路径、数据库回滚、提交后清理失败及重试、提交前/提交后进程边界恢复。另补充 malformed JSON、无效/状态冲突 envelope、复合敏感字段、本地路径、父子 operationId、中性权限提示和不可重试按钮的 UI 行为断言，全部纳入 `pnpm test:camera-ftp`。测试不执行真实 setup/repair/adopt/control/credentials，不修改 IIS、账户、ACL、防火墙或服务。
 - **交付边界**：本轮未执行压力测试、多设备接入、发布打包、提交、推送、Tag 或 Release；Windows/IIS 真机验证保留到下一阶段人工清单。
+
+### v1.2.0-alpha.1 阶段七：IIS / FTP 未初始化与未启动状态自动配置
+- **日期**：2026-07-16
+- **运行环境状态机**：统一采集 Windows 功能与重启标记、IIS 管理 DLL、`applicationHost.config` 可读性、FTPSVC 及其真实依赖、站点/binding/监听/PASV、防火墙、账户和 ACL；输出 `initializationState / resumeState / completedStages / nextStage / safeToRetry`。功能启用后有限等待服务注册、配置生成和管理 API 可读，区分待重启、组件安装不完整、配置未初始化与系统配置损坏。
+- **最小服务修复**：依据 `ServicesDependedOn` 递归启动真实依赖，只把被禁用的依赖恢复到所需最低启动类型；FTPSVC 快照保存原启动类型、状态、PID、服务身份与依赖状态。Pending 分层超时并采集相关系统事件，不强杀进程；不硬编码启动 W3SVC。发现非工作台自动启动 FTP 站点时，启动共享 FTPSVC 前必须明确确认。
+- **回滚与 ACL**：账户、ACL、站点、PASV、防火墙和服务修改前保存快照，失败后逆序回滚；无关 FTP 站点依赖共享服务时不自动停止 FTPSVC。ACL canonicalize/tighten 改为复制 raw ACE 和 AccessMask，兼容 `268435456` 与负数 GENERIC 位，不通过 `FileSystemRights` 重建；无法安全处理的 ACE 在写入前返回 `FTP_ACL_UNSUPPORTED_ACE`。
+- **重启续配**：配置 schema 升至 v2，`pendingProvisioning` 仅保存操作类型、活动、用户名、端口、PASV 和目标站点；密码、风险确认与管理员结果均不持久化。重启后重新全量检测、重新生成计划并要求再次输入密码；提供只清除续配提示且不修改 Windows/IIS 的 API。
+- **兼容接口**：状态和操作响应只增加可选字段，保留原路径与旧字段；新增初始化、依赖、Pending、组件损坏、ACL 特殊 ACE 和共享服务确认错误码。前端显示继续配置状态、下一阶段和可重试性，并将共享服务/ACL 风险作为一次性显式确认传入。
+- **自动验证**：PowerShell 5.1 parser、原始 ACL 通用权限夹具、初始化状态矩阵、31 项 provisioning、配置 v1→v2 与密码脱敏迁移通过；最终完整 `pnpm test:camera-ftp` 通过（94.3 秒），TypeScript/Vite 构建通过。测试只使用纯逻辑、Mock、状态夹具、临时目录及既有普通权限只读状态探测，未调用真实 IIS 修改入口。
+- **未完成事项**：仍需在可还原 Windows 11 虚拟机逐项验证 IIS 全关闭、仅 FTP 缺失、首次 FTPSVC 启动、Disabled/Manual/Pending、依赖服务异常、重启续配、管理 DLL/配置延迟、无关站点、端口冲突和 ACL 故障；通过前不生成内部测试包，不发布 GitHub Release。
+
+### v1.2.0-alpha.1 修正：Windows 待重启标记误阻断 IIS 配置
+- **日期**：2026-07-17
+- **现场根因**：本机 IIS FTP 功能、管理 DLL 和 FTPSVC 已就绪，但其他软件留下的 `PendingFileRenameOperations` 被旧状态机当作 IIS 必须重启；同时普通权限读取受保护的 `applicationHost.config` 返回 Access Denied，旧文件存在性判断可能再把它误报为尚未生成。
+- **重启判定**：系统级 CBS、Windows Update 和待重命名文件标记改为只读诊断提示，不再直接产生 `restart_pending`。只有 IIS 功能状态为 Pending，或本轮功能启用命令明确返回 `RestartNeeded=true`，才在后续系统修改前返回 `WINDOWS_RESTART_REQUIRED`。若组件等待超时且同时存在系统待重启痕迹，错误详情才谨慎建议重启，不把建议伪装成强制结论。
+- **配置就绪判定**：管理 DLL 和 `applicationHost.config` 改为实际只读打开；Access Denied 证明受保护资源存在，记录为 `exists=true / readable=false / ADMIN_REQUIRED`，不再误判为文件缺失。真正的 FileNotFound/DirectoryNotFound 才进入初始化等待或组件不完整分支。
+- **验证边界**：新增纯 restart resolver 与状态矩阵回归，覆盖无关待重命名文件、IIS 相关待重命名文件、显式 IIS 重启及受保护文件源码合同；`pnpm test:camera-ftp-powershell`、31 项 provisioning、完整 `pnpm test:camera-ftp`（110.4 秒）、`pnpm build`（18.8 秒）和 `git diff --check` 均通过。普通权限只读复核返回 `state=ready`，同时保留 `systemPending=true / pending=false / iisRequired=false`；自动验证不修改真实 IIS、FTPSVC、账户、ACL、防火墙或站点。
+
+### v1.2.0-alpha.1 修正：FTPSVC 已运行仍误报启动失败
+- **日期**：2026-07-17
+- **现场证据**：repair 操作 `2477f14e-b96d-487b-8312-e931a587c080` 在 `start_ftp_service` 失败，但结构化快照确认 FTPSVC 始终为 `Running/Auto`、PID 6200，控制端口 1024 已由 FTPSVC 监听。真实异常是 PowerShell 5.1 的 `ParameterBindingValidationException`：“Visited 参数为空集合”，不是 Windows 服务启动失败。
+- **根因与修复**：依赖图首次调用传入新建的空 `HashSet` 和空 `List`，参数同时标记 Mandatory，PowerShell 5.1 在函数体执行前拒绝绑定。两个集合参数现显式允许空集合；FTPSVC 已为 `Running/Automatic` 时增加幂等快速返回，不再执行冗余依赖遍历或 Start-Service。
+- **测试**：PowerShell 5.1 回归真实构造空 HashSet/List 并调用依赖图，断言仅登记 visited、不启动服务；另以 mock 断言健康 FTPSVC 返回零变更且不调用依赖图。专项 PowerShell、完整 `pnpm test:camera-ftp`（108.1 秒）、`pnpm build`（19.8 秒）和 `git diff --check` 通过。本机非提权幂等复核前后均为 `Running/Auto/PID 6200`，返回变更数 0；未修改真实服务状态。
+
+### v1.2.0-alpha.1 修正：FTP 运行态假停止与最终监听检测过慢
+
+- **现场根因**：FTPSVC 始终为 Running，`netstat` 也持续显示 `0.0.0.0:1024` 由同一 FTPSVC PID 监听；普通权限 `Get-NetTCPConnection -LocalPort 1024` 却返回 Access Denied。旧状态脚本吞掉异常并返回空监听，5 秒轮询随后把运行中的 FTP 误显示为停止。自动配置的监听等待还会每 250ms 重跑服务 CIM、全机监听、IIS binding、排除端口和候选端口扫描，放大最终验证耗时。
+- **修复**：新增目标端口只读探测，NetTCP 被拒绝时回退 `netstat`，两条路径都失败才返回 unknown；前端对已初始化且 FTPSVC/目标 listener 明确健康的 partial 状态保持运行展示，明确 stopped 仍优先。轮询改为 15 秒并禁止并发，管理层缓存延长为 30 秒，探测超时保留最近可信状态并标记 `IIS_STATUS_CHECK_STALE`。监听等待只轮询目标端口，冲突时才计算候选端口；功能、重启、服务快照在同次状态/最终验证中复用。
+- **验证**：普通权限本机只读复测由旧逻辑等待满 15 秒并误报 `listening=false`，修复后约 1.2 秒返回 `detectionSource=netstat / listening=true / serviceRunning=true`，且健康路径候选端口数为 0。PowerShell 5.1 合同、UI、31 项 provisioning、watcher、故障注入、状态语义、阶段六安全测试、`pnpm build` 与 `git diff --check` 通过；完整套件中的 IIS/elevated 两项在测试临时 IPC 目录清理处被本机 Windows `EPERM` 阻断，未出现业务断言失败，自动验证未修改真实 IIS、FTPSVC、账户、ACL、防火墙或站点。
+- **停止按钮门禁修正**：普通权限检测可用 FTPSVC/目标 listener 推断 `serviceReady=true`，但 `site.started` 仍可能为 null；旧按钮只认 `site.started=true`，造成页面显示运行中却无法停止。停止按钮现统一使用 `serviceReady`，后端继续通过 UAC 和 managed Site ID 精确停止目标站点，不停止共享 FTPSVC。
 
 ### v1.2.0-alpha.1 图片墙任务中心交互修复
 - **日期**：2026-07-16

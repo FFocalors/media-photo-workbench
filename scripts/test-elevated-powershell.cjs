@@ -73,15 +73,28 @@ exit 1
 `);
 
   const previousScripts = process.env.MPW_WINDOWS_SCRIPTS_DIR;
+  const previousElevatedTempRoot = process.env.MPW_ELEVATED_TEMP_ROOT;
   const previousTemp = process.env.TEMP;
   const previousTmp = process.env.TMP;
+  const previousLocalAppData = process.env.LOCALAPPDATA;
+  const preferredElevatedRoot = path.join(ipcTemp, "MediaPhotoWorkbench", "elevated");
   process.env.MPW_WINDOWS_SCRIPTS_DIR = scriptsDir;
+  process.env.MPW_ELEVATED_TEMP_ROOT = preferredElevatedRoot;
   process.env.TEMP = ipcTemp;
   process.env.TMP = ipcTemp;
   const secret = "Never-Log-This-Password!42";
   try {
     assert.match(powerShell.windowsPowerShellExecutable(), /WindowsPowerShell[\\/]v1\.0[\\/]powershell\.exe$/i);
     assert.equal(powerShell.powershellLiteral("C:\\中文 path\\O'Brien"), "'C:\\中文 path\\O''Brien'");
+    assert.equal(
+      powerShell.parseWindowsUserSid('"WORKSTATION\\\\camera","S-1-5-21-100-200-300-1001"'),
+      "S-1-5-21-100-200-300-1001"
+    );
+    assert.equal(powerShell.parseWindowsUserSid("no SID"), null);
+    assert.deepEqual(
+      powerShell.elevatedOperationRootCandidates(process.env, ipcTemp)[0],
+      { path: preferredElevatedRoot, kind: "configured" }
+    );
 
     const delayed = await powerShell.runPowerShellJsonScript("mock-delayed-result.ps1", {
       action: "delayed",
@@ -114,6 +127,41 @@ exit 1
       (error) => error.code === "ELEVATED_RESULT_INVALID_JSON" && !JSON.stringify(error).includes(secret)
     );
 
+    const blockedRootFile = path.join(tempRoot, "not-a-directory");
+    fs.writeFileSync(blockedRootFile, "block directory creation", "utf8");
+    process.env.MPW_ELEVATED_TEMP_ROOT = path.join(blockedRootFile, "configured");
+    const fallback = await powerShell.runPowerShellJsonScript(
+      "mock-delayed-result.ps1",
+      { action: "fallback", path: "fallback", note: "fallback root" },
+      { timeoutMs: 10_000 }
+    );
+    assert.equal(fallback.note, "fallback root", "an unusable configured temp root must fall back safely");
+
+    process.env.TEMP = blockedRootFile;
+    process.env.TMP = blockedRootFile;
+    process.env.LOCALAPPDATA = blockedRootFile;
+    await assert.rejects(
+      powerShell.runPowerShellJsonScript(
+        "mock-delayed-result.ps1",
+        { action: "all-temp-roots-blocked", password: secret },
+        { timeoutMs: 10_000 }
+      ),
+      (error) => error.code === "TEMP_ACL_FAILED"
+        && error.diagnostics.stage === "secure_temp_directory"
+        && error.diagnostics.rollbackAttempted === false
+        && error.diagnostics.details.systemStateChanged === false
+        && Array.isArray(error.diagnostics.details.attempts)
+        && error.diagnostics.details.attempts.length >= 2
+        && Boolean(error.diagnostics.operationId)
+        && !JSON.stringify(error).includes(secret)
+        && !JSON.stringify(error.diagnostics).includes(blockedRootFile)
+    );
+    process.env.MPW_ELEVATED_TEMP_ROOT = preferredElevatedRoot;
+    process.env.TEMP = ipcTemp;
+    process.env.TMP = ipcTemp;
+    if (previousLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+    else process.env.LOCALAPPDATA = previousLocalAppData;
+
     await assert.rejects(
       powerShell.runPowerShellJsonScript("mock-timeout.ps1", { action: "timeout" }, { timeoutMs: 5_000 }),
       (error) => error.code === "ELEVATED_SCRIPT_TIMEOUT" && Boolean(error.diagnostics.stage)
@@ -135,17 +183,83 @@ exit 1
     assert.equal(powerShell.redactDiagnosticText(`{"SecureStringValue":"${secret}","stage":"test"}`).includes(secret), false);
     assert.equal(powerShell.redactDiagnosticText(`{"ftpPassword":"${secret}`).includes(secret), false);
 
+    const operationBase = {
+      operationId: "11111111-1111-4111-8111-111111111111",
+      scriptName: "iis-ftp-setup.ps1",
+      phaseCount: 7,
+      indeterminate: false,
+      elapsedMs: 30_000,
+      estimatedRemainingMinMs: 0,
+      estimatedRemainingMaxMs: 120_000,
+      estimateExceeded: false,
+      safeToRetry: false
+    };
+    const advanced = {
+      ...operationBase,
+      state: "running",
+      stage: "start_ftp_service",
+      phaseIndex: 5,
+      progressPercent: 80
+    };
+    const stale = {
+      ...operationBase,
+      state: "running",
+      stage: "request_created",
+      phaseIndex: 0,
+      progressPercent: 0,
+      elapsedMs: 35_000
+    };
+    assert.deepEqual(
+      powerShell.mergeElevatedAdminOperationStatus(advanced, stale),
+      { ...advanced, elapsedMs: 35_000 },
+      "a late progress read must not move the administrator operation backwards"
+    );
+    const completed = {
+      ...operationBase,
+      state: "completed",
+      stage: "completed",
+      phaseIndex: 6,
+      progressPercent: 100,
+      elapsedMs: 36_000,
+      estimatedRemainingMinMs: null,
+      estimatedRemainingMaxMs: null,
+      safeToRetry: true
+    };
+    assert.strictEqual(
+      powerShell.mergeElevatedAdminOperationStatus(completed, stale),
+      completed,
+      "a late running observation must not replace an already committed terminal state"
+    );
+
     await powerShell.cleanupStaleElevatedOperationDirs(Date.now() + 20 * 60 * 1000);
-    const elevatedRoot = path.join(ipcTemp, "MediaPhotoWorkbench", "elevated");
+    const elevatedRoot = preferredElevatedRoot;
     const leftovers = fs.existsSync(elevatedRoot)
       ? fs.readdirSync(elevatedRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory())
       : [];
     assert.equal(leftovers.length, 0, "all success/failure/timeout operation directories must be cleaned");
 
     const executorSource = fs.readFileSync(path.join(root, "src-server", "utils", "elevatedPowerShell.ts"), "utf8");
+    const managerSource = fs.readFileSync(path.join(root, "src-server", "services", "iisFtpManager.ts"), "utf8");
+    const routeSource = fs.readFileSync(path.join(root, "src-server", "routes", "cameraFtp.ts"), "utf8");
     assert.match(executorSource, /`\\uFEFF\$\{elevatedRunnerScript\(\)\}`/);
     assert.match(executorSource, /statusPath/);
     assert.equal(executorSource.includes("pwsh.exe"), false);
+    assert.equal(powerShell.PROVISIONING_TIMEOUT_MS, 20 * 60 * 1000);
+    assert.match(managerSource, /iis-ftp-setup\.ps1[\s\S]*timeoutMs: PROVISIONING_TIMEOUT_MS/);
+    assert.match(executorSource, /'-StatusPath'/);
+    assert.match(executorSource, /'-OperationId'/);
+    assert.match(executorSource, /function recoverElevatedOperationState/);
+    assert.match(executorSource, /processMayExist\(status\.processId\)/);
+    assert.match(executorSource, /"timed_out_waiting"/);
+    assert.match(executorSource, /"abandoned"/);
+    assert.match(executorSource, /safeToRetry: false/);
+    assert.match(executorSource, /temporaryPath[\s\S]*Move-Item/);
+    assert.doesNotMatch(executorSource, /Write-Status -Stage 'uac_accepted'/);
+    assert.doesNotMatch(executorSource, /Write-Status -Stage 'process_started'/);
+    assert.match(executorSource, /process_completed:\s*\{\s*phaseIndex:\s*6,\s*progressPercent:\s*98/);
+    assert.match(executorSource, /if \(!stillActive\)/);
+    assert.match(routeSource, /router\.get\("\/admin-operation"/);
+    assert.match(routeSource, /requestPath === "\/admin-operation"/);
 
     console.log(JSON.stringify({
       suite: "elevatedPowerShell",
@@ -160,17 +274,28 @@ exit 1
         "invalid_json_diagnostics",
         "invalid_schema_diagnostics",
         "temporary_cleanup",
+        "sid_based_temp_acl",
+        "alternate_secure_temp_root",
+        "all_temp_roots_blocked_diagnostics",
         "secret_redaction",
-        "windows_powershell_5_1_bom"
+        "windows_powershell_5_1_bom",
+        "twenty_minute_provisioning_timeout",
+        "real_stage_status_and_recovery_contract",
+        "monotonic_progress_and_terminal_state",
+        "admin_operation_api_contract"
       ]
     }, null, 2));
   } finally {
     if (previousScripts === undefined) delete process.env.MPW_WINDOWS_SCRIPTS_DIR;
     else process.env.MPW_WINDOWS_SCRIPTS_DIR = previousScripts;
+    if (previousElevatedTempRoot === undefined) delete process.env.MPW_ELEVATED_TEMP_ROOT;
+    else process.env.MPW_ELEVATED_TEMP_ROOT = previousElevatedTempRoot;
     if (previousTemp === undefined) delete process.env.TEMP;
     else process.env.TEMP = previousTemp;
     if (previousTmp === undefined) delete process.env.TMP;
     else process.env.TMP = previousTmp;
+    if (previousLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+    else process.env.LOCALAPPDATA = previousLocalAppData;
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 }

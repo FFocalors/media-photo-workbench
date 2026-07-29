@@ -3,7 +3,7 @@ import crypto from "crypto";
 import path from "path";
 import { getLogger } from "../utils/logger";
 
-export const CONFIG_SCHEMA_VERSION = 1 as const;
+export const CONFIG_SCHEMA_VERSION = 2 as const;
 
 export interface AppConfig {
   schemaVersion: number;
@@ -40,6 +40,18 @@ export interface CameraFtpConfig {
   firewallControlRuleName: string;
   firewallPassiveRuleName: string;
   passwordResetRequired: boolean;
+  pendingProvisioning: CameraFtpPendingProvisioning | null;
+}
+
+export interface CameraFtpPendingProvisioning {
+  action: "setup" | "repair" | "start" | "restart" | "adopt";
+  eventId: string;
+  username: string;
+  controlPort: number;
+  passivePortStart: number;
+  passivePortEnd: number;
+  targetSiteName: string;
+  createdAt: string;
 }
 
 export const DEFAULT_CAMERA_FTP_PROVIDER = "iis" as const;
@@ -103,7 +115,8 @@ const DEFAULT_CONFIG: AppConfig = {
     passivePortEnd: DEFAULT_CAMERA_FTP_PASV_MAX,
     firewallControlRuleName: DEFAULT_CAMERA_FTP_CONTROL_FIREWALL_RULE,
     firewallPassiveRuleName: DEFAULT_CAMERA_FTP_PASSIVE_FIREWALL_RULE,
-    passwordResetRequired: false
+    passwordResetRequired: false,
+    pendingProvisioning: null
   }
 };
 
@@ -216,7 +229,7 @@ function invalidCurrentConfig(field: string): never {
   );
 }
 
-function assertCurrentConfigShape(raw: JsonObject): void {
+function assertCurrentConfigShape(raw: JsonObject, allowMissingPendingProvisioning = false): void {
   const server = isJsonObject(raw.server) ? raw.server : invalidCurrentConfig("server");
   const repository = isJsonObject(raw.repository) ? raw.repository : invalidCurrentConfig("repository");
   const database = isJsonObject(raw.database) ? raw.database : invalidCurrentConfig("database");
@@ -265,6 +278,18 @@ function assertCurrentConfigShape(raw: JsonObject): void {
   if (typeof cameraFtp.passwordResetRequired !== "boolean") {
     invalidCurrentConfig("cameraFtp.passwordResetRequired");
   }
+  if (cameraFtp.pendingProvisioning === undefined && allowMissingPendingProvisioning) return;
+  if (cameraFtp.pendingProvisioning !== null) {
+    if (!isJsonObject(cameraFtp.pendingProvisioning)) invalidCurrentConfig("cameraFtp.pendingProvisioning");
+    const pending = cameraFtp.pendingProvisioning as JsonObject;
+    if (!["setup", "repair", "start", "restart", "adopt"].includes(String(pending.action))) invalidCurrentConfig("cameraFtp.pendingProvisioning.action");
+    for (const key of ["eventId", "username", "targetSiteName", "createdAt"]) {
+      if (typeof pending[key] !== "string") invalidCurrentConfig(`cameraFtp.pendingProvisioning.${key}`);
+    }
+    for (const key of ["controlPort", "passivePortStart", "passivePortEnd"]) {
+      if (!validPort(pending[key])) invalidCurrentConfig(`cameraFtp.pendingProvisioning.${key}`);
+    }
+  }
 }
 
 function assertLegacyConfigFieldTypes(raw: JsonObject): void {
@@ -310,7 +335,15 @@ function assertLegacyConfigFieldTypes(raw: JsonObject): void {
 }
 
 const CONFIG_MIGRATIONS: Record<number, (raw: JsonObject) => JsonObject> = {
-  0: (raw) => ({ ...raw, schemaVersion: CONFIG_SCHEMA_VERSION })
+  0: (raw) => ({ ...raw, schemaVersion: 1 }),
+  1: (raw) => ({
+    ...raw,
+    schemaVersion: CONFIG_SCHEMA_VERSION,
+    cameraFtp: {
+      ...(isJsonObject(raw.cameraFtp) ? raw.cameraFtp : {}),
+      pendingProvisioning: null
+    }
+  })
 };
 
 export interface ConfigMigrationResult {
@@ -334,6 +367,9 @@ export function migrateConfigDocument(raw: unknown): ConfigMigrationResult {
   const fromVersion = configSchemaVersion(raw);
   if (fromVersion === 0) {
     assertLegacyConfigFieldTypes(raw);
+  }
+  else if (fromVersion === 1) {
+    assertCurrentConfigShape(raw, true);
   }
   const scrubbed = scrubLegacyFtpPlaintextSecrets(raw);
   let working = scrubbed.value as JsonObject;
@@ -407,6 +443,24 @@ export function normalizeCameraFtpConfig(raw: any): CameraFtpConfig {
       passivePortEnd = passivePortStart + passiveRangeSize;
     }
   }
+  const pendingSource = isJsonObject(source?.pendingProvisioning) ? source.pendingProvisioning : null;
+  const pendingAction = pendingSource && ["setup", "repair", "start", "restart", "adopt"].includes(String(pendingSource.action))
+    ? String(pendingSource.action) as CameraFtpPendingProvisioning["action"]
+    : null;
+  const pendingProvisioning: CameraFtpPendingProvisioning | null = pendingSource && pendingAction
+    ? {
+        action: pendingAction,
+        eventId: typeof pendingSource.eventId === "string" ? pendingSource.eventId.trim() : "",
+        username: typeof pendingSource.username === "string" && pendingSource.username.trim()
+          ? pendingSource.username.trim().slice(0, 80)
+          : DEFAULT_CAMERA_FTP_USERNAME,
+        controlPort: validPort(Number(pendingSource.controlPort)) ? Number(pendingSource.controlPort) : controlPort,
+        passivePortStart: validPort(Number(pendingSource.passivePortStart)) ? Number(pendingSource.passivePortStart) : passivePortStart,
+        passivePortEnd: validPort(Number(pendingSource.passivePortEnd)) ? Number(pendingSource.passivePortEnd) : passivePortEnd,
+        targetSiteName: typeof pendingSource.targetSiteName === "string" ? pendingSource.targetSiteName.trim().slice(0, 120) : "",
+        createdAt: typeof pendingSource.createdAt === "string" ? pendingSource.createdAt : ""
+      }
+    : null;
   return {
     provider: DEFAULT_CAMERA_FTP_PROVIDER,
     siteName: typeof source?.siteName === "string" && source.siteName.trim()
@@ -431,7 +485,8 @@ export function normalizeCameraFtpConfig(raw: any): CameraFtpConfig {
     firewallPassiveRuleName: typeof source?.firewallPassiveRuleName === "string" && source.firewallPassiveRuleName.trim()
       ? source.firewallPassiveRuleName.trim().slice(0, 160)
       : DEFAULT_CONFIG.cameraFtp.firewallPassiveRuleName,
-    passwordResetRequired: legacyPasswordDetected || source?.passwordResetRequired === true
+    passwordResetRequired: legacyPasswordDetected || source?.passwordResetRequired === true,
+    pendingProvisioning
   };
 }
 

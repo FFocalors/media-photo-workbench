@@ -1,6 +1,8 @@
 param(
     [string]$InputPath,
-    [string]$OutputPath
+    [string]$OutputPath,
+    [string]$StatusPath,
+    [string]$OperationId
 )
 
 $commonPath = Join-Path $PSScriptRoot 'iis-ftp-common.ps1'
@@ -24,8 +26,9 @@ function Invoke-MpwIisFtpStatus {
         $options = Get-MpwNormalizedOptions -InputObject $inputObject
         $warnings = [Collections.Generic.List[object]]::new()
 
+        # Environment.OSVersion is sufficient for the supported-platform gate.
+        # Avoid a Win32_OperatingSystem CIM round-trip on every background poll.
         $os = $null
-        try { $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop } catch {}
         $isWindows = $env:OS -eq 'Windows_NT'
         $buildNumber = if ($null -ne $os) { [int]$os.BuildNumber } else { [Environment]::OSVersion.Version.Build }
         $isWindows11 = $isWindows -and $buildNumber -ge 22000
@@ -34,7 +37,9 @@ function Invoke-MpwIisFtpStatus {
         $currentStage = 'inspect_windows_environment'
         $features = @(Get-MpwWindowsFeaturesStatus)
         $service = Get-MpwFtpServiceStatus
-        $port = Get-MpwPortStatus -Port $options.ControlPort -PassiveStart $options.PassivePortStart -PassiveEnd $options.PassivePortEnd
+        $restartPending = Get-MpwWindowsRestartPendingStatus
+        $initialization = Get-MpwIisInitializationReadiness -Features $features -RestartPending $restartPending -Service $service
+        $port = Get-MpwPortStatus -Port $options.ControlPort -PassiveStart $options.PassivePortStart -PassiveEnd $options.PassivePortEnd -FtpServiceStatus $service
         $account = Get-MpwLocalAccountStatus -Username $options.Username
         $network = Get-MpwNetworkAddressStatus
         $controlFirewall = Get-MpwFirewallRuleModel -InternalName $script:MpwControlFirewallInternalName -DisplayName $options.FirewallControlRuleName -LegacyDisplayNames @('MPW IIS FTP Control')
@@ -62,6 +67,10 @@ function Invoke-MpwIisFtpStatus {
             $selectedSite = if ($null -ne $namedSiteIdentity) { $sites | Where-Object { [long]$_.id -eq [long]$namedSiteIdentity.id } | Select-Object -First 1 } else { $null }
             $resolvedSiteName = if ($null -ne $namedSiteIdentity) { [string]$namedSiteIdentity.name } else { $options.SiteName }
             $adoptionCandidates = @(Find-MpwPortSites -Manager $manager -Port $options.ControlPort -ExcludeSiteName $resolvedSiteName)
+            if ($adoptionCandidates.Count -gt 0 -and @($port.availablePorts).Count -eq 0) {
+                $port.availablePorts = @(Get-MpwAvailableControlPorts -PreferredPort 21 -PassiveStart $options.PassivePortStart -PassiveEnd $options.PassivePortEnd -Count 5)
+                $port.recommendation = if ($port.availablePorts.Count -gt 0) { "Use available control port $($port.availablePorts[0]) after confirmation." } else { 'No available control port was found.' }
+            }
             $ports = Get-MpwGlobalPassivePorts -Manager $manager
             $passivePorts = [ordered]@{
                 detection = 'available'
@@ -330,6 +339,21 @@ function Invoke-MpwIisFtpStatus {
         $port.adoptable = if ($iisDetection -eq 'available') { [bool](@($conflictItems | Where-Object { $_.type -eq 'site' -and $_.adoptable -eq $true }).Count -eq 1) } else { $null }
         $port.conflict = if ($iisDetection -eq 'available') { [bool]($portConflict -or $sameNameOwnershipConflict -or $adoptionCandidates.Count -gt 0) } else { if ($portConflict) { $true } else { $null } }
         $portConflict = $port.conflict
+        $selectedSiteId = if ($null -ne $siteData -and $siteData.exists -eq $true) { [long]$siteData.id } else { 0 }
+        $unrelatedAutoStartSites = @($sites | Where-Object {
+            [bool](Get-MpwInputValue -InputObject $_ -Name 'serverAutoStart' -DefaultValue $false) -and
+            ($selectedSiteId -le 0 -or [long]$_.id -ne $selectedSiteId)
+        } | ForEach-Object { [ordered]@{ id = [long]$_.id; name = [string]$_.name; state = [string]$_.state } })
+        $initializationState = if ($iisErrorCode -eq 'IIS_SYSTEM_CONFIGURATION_DAMAGED') { 'blocked' }
+            elseif ($iisErrorCode -in @('IIS_CONFIGURATION_NOT_READY', 'IIS_MANAGEMENT_API_NOT_READY')) { 'config_not_ready' }
+            elseif ([string]$initialization.state -eq 'ready' -and $siteData.exists -eq $false) { 'site_missing' }
+            else { [string]$initialization.state }
+        $completedStages = [Collections.Generic.List[string]]::new()
+        if (@($features | Where-Object { [string]$_.state -ne 'Enabled' }).Count -eq 0) { [void]$completedStages.Add('windows_features') }
+        if ([bool]$initialization.managementApi.exists -and [bool]$initialization.configuration.exists) { [void]$completedStages.Add('iis_configuration') }
+        if ($service.exists -eq $true) { [void]$completedStages.Add('ftp_service_registered') }
+        if ($service.running -eq $true) { [void]$completedStages.Add('ftp_service_running') }
+        if ($siteData.exists -eq $true) { [void]$completedStages.Add('ftp_site') }
         $data = [ordered]@{
             provider = 'iis'
             platform = [ordered]@{
@@ -349,6 +373,24 @@ function Invoke-MpwIisFtpStatus {
                 managementTools = $managementFeature
             }
             service = $service
+            serviceDependencies = @($service.dependencies)
+            unrelatedAutoStartSites = $unrelatedAutoStartSites
+            initializationState = $initializationState
+            resumeState = if ($initializationState -eq 'restart_pending') { 'restart_required' } elseif ($initializationState -eq 'blocked') { 'blocked' } else { 'none' }
+            completedStages = @($completedStages)
+            nextStage = switch ($initializationState) {
+                'features_missing' { 'windows_features' }
+                'restart_pending' { 'windows_restart' }
+                'config_not_ready' { 'iis_configuration' }
+                'service_missing' { 'ftp_service_registration' }
+                'service_disabled' { 'ftp_service_startup' }
+                'service_stopped' { 'ftp_service_start' }
+                'service_pending' { 'ftp_service_wait' }
+                'site_missing' { 'ftp_site' }
+                'blocked' { 'manual_repair' }
+                default { 'verification' }
+            }
+            safeToRetry = [bool]($initializationState -ne 'blocked')
             site = [ordered]@{
                 id = if ($siteData.exists -eq $true) { [long]$siteData.id } else { $null }
                 exists = $siteData.exists

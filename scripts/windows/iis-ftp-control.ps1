@@ -1,6 +1,8 @@
 param(
     [string]$InputPath,
-    [string]$OutputPath
+    [string]$OutputPath,
+    [string]$StatusPath,
+    [string]$OperationId
 )
 
 $commonPath = Join-Path $PSScriptRoot 'iis-ftp-common.ps1'
@@ -19,6 +21,8 @@ function Invoke-MpwIisFtpControl {
     $siteSnapshot = $null
     $newAclSnapshot = $null
     $newPath = $null
+    $newPathExistedBefore = $false
+    $targetDirectoryMutationAttempted = $false
     $setPathCommitted = $false
     $serviceSnapshot = $null
     $siteRuntimeSnapshot = $null
@@ -73,13 +77,27 @@ function Invoke-MpwIisFtpControl {
             Throw-MpwFailure -Code 'IIS_SITE_ADOPTION_REQUIRED' -Message 'The configured IIS FTP site identity, managed account marker, or authorization does not match and cannot be controlled before explicit adoption.'
         }
         if ($action -ne 'stop') {
+            $siteModelBefore = Get-MpwFtpSiteModel -Manager $manager -Site $site
+            $authorizationBefore = Get-MpwFtpAuthorizationEvaluation -Rules @($siteModelBefore.authorization) -Username $options.Username
+            if (-not $authorizationBefore.correct) {
+                Throw-MpwFailure -Code 'FTP_AUTHORIZATION_MISMATCH' -Message 'The managed IIS FTP authorization is incomplete or contains a deny rule that applies to the camera account.' -Details ([ordered]@{
+                    managedAllow = [bool]$authorizationBefore.managedAllow
+                    conflictingDeny = [bool]$authorizationBefore.conflictingDeny
+                    conflicts = @($authorizationBefore.conflicts)
+                    recommendation = 'Run Repair IIS FTP configuration before starting, restarting, or switching the receive activity.'
+                })
+            }
+        }
+        if ($action -ne 'stop') {
             $otherPortSites = @(Find-MpwPortSites -Manager $manager -Port $options.ControlPort -ExcludeSiteName $options.SiteName)
             if ($otherPortSites.Count -gt 0) {
                 Throw-MpwFailure -Code 'IIS_SITE_PORT_CONFLICT' -Message 'Another IIS FTP site uses the configured control port. It was not modified.' -Details ([ordered]@{ port = $options.ControlPort; source = 'iisSite'; canChangePort = $true; availablePorts = @(Get-MpwAvailableControlPorts -PreferredPort 21 -PassiveStart $options.PassivePortStart -PassiveEnd $options.PassivePortEnd -Count 5); recommendation = 'Choose another available control port.'; candidates = @($otherPortSites | ForEach-Object { [ordered]@{ siteName = $_.name; physicalPath = $_.physicalPath; bindings = $_.bindings; state = $_.state; adoptable = $false } }) })
             }
         }
-        if ($action -eq 'start' -or $action -eq 'restart') {
-            $serviceSnapshot = Get-MpwFtpServiceStatus
+        if ($action -eq 'start' -or $action -eq 'stop' -or $action -eq 'restart') {
+            if ($action -ne 'stop') {
+                $serviceSnapshot = Get-MpwFtpServiceMutationSnapshot
+            }
             $siteRuntimeSnapshot = Get-MpwFtpSiteRuntimeState -Site $site
         }
         [void]$steps.Add([ordered]@{ name = 'preflight'; status = 'success'; message = 'The IIS FTP site and requested action were validated.' })
@@ -93,14 +111,15 @@ function Invoke-MpwIisFtpControl {
                 $siteRuntimeMutationAttempted = $true
                 Start-MpwSite -Site $site
                 $currentStage = 'verify_ftp_listener'
-                $listener = Wait-MpwPortListener -Port $options.ControlPort -PassiveStart $options.PassivePortStart -PassiveEnd $options.PassivePortEnd -TimeoutMilliseconds 5000
+                $listener = Wait-MpwPortListener -Port $options.ControlPort -PassiveStart $options.PassivePortStart -PassiveEnd $options.PassivePortEnd -TimeoutMilliseconds $script:MpwFtpListenerTimeoutMilliseconds
                 if (-not $listener.listening -or $listener.usedByOtherProcess) {
-                    Throw-MpwFailure -Code 'IIS_FTP_LISTENER_START_FAILED' -Message 'The IIS FTP site started but did not produce the expected Microsoft FTP Service listener.' -Command 'Get-NetTCPConnection' -Details ([ordered]@{ port = $options.ControlPort; siteName = $options.SiteName; siteState = Get-MpwFtpSiteRuntimeState -Site $site; listening = [bool]$listener.listening; pid = $listener.pid; processName = [string]$listener.processName; technicalMessage = 'The configured control port did not become an FTPSVC listener within 5 seconds.' })
+                    Throw-MpwFailure -Code 'IIS_FTP_LISTENER_START_FAILED' -Message 'The IIS FTP site started but did not produce the expected Microsoft FTP Service listener.' -Command 'Get-NetTCPConnection' -Details ([ordered]@{ port = $options.ControlPort; siteName = $options.SiteName; siteState = Get-MpwFtpSiteRuntimeState -Site $site; listening = [bool]$listener.listening; pid = $listener.pid; processName = [string]$listener.processName; technicalMessage = "The configured control port did not become an FTPSVC listener within $([int]($script:MpwFtpListenerTimeoutMilliseconds / 1000)) seconds." })
                 }
                 [void]$steps.Add([ordered]@{ name = 'start'; status = 'success'; message = 'The IIS FTP site is running.' })
             }
             'stop' {
                 $currentStage = 'stop_ftp_site'
+                $siteRuntimeMutationAttempted = $true
                 Stop-MpwSite -Site $site
                 [void]$steps.Add([ordered]@{ name = 'stop'; status = 'success'; message = 'The IIS FTP site is stopped; the shared FTPSVC service was not stopped.' })
             }
@@ -114,9 +133,9 @@ function Invoke-MpwIisFtpControl {
                 $currentStage = 'start_ftp_site'
                 Start-MpwSite -Site $site
                 $currentStage = 'verify_ftp_listener'
-                $listener = Wait-MpwPortListener -Port $options.ControlPort -PassiveStart $options.PassivePortStart -PassiveEnd $options.PassivePortEnd -TimeoutMilliseconds 5000
+                $listener = Wait-MpwPortListener -Port $options.ControlPort -PassiveStart $options.PassivePortStart -PassiveEnd $options.PassivePortEnd -TimeoutMilliseconds $script:MpwFtpListenerTimeoutMilliseconds
                 if (-not $listener.listening -or $listener.usedByOtherProcess) {
-                    Throw-MpwFailure -Code 'IIS_FTP_LISTENER_START_FAILED' -Message 'The restarted IIS FTP site did not produce the expected Microsoft FTP Service listener.' -Command 'Get-NetTCPConnection' -Details ([ordered]@{ port = $options.ControlPort; siteName = $options.SiteName; siteState = Get-MpwFtpSiteRuntimeState -Site $site; listening = [bool]$listener.listening; pid = $listener.pid; processName = [string]$listener.processName; technicalMessage = 'The configured control port did not become an FTPSVC listener within 5 seconds.' })
+                    Throw-MpwFailure -Code 'IIS_FTP_LISTENER_START_FAILED' -Message 'The restarted IIS FTP site did not produce the expected Microsoft FTP Service listener.' -Command 'Get-NetTCPConnection' -Details ([ordered]@{ port = $options.ControlPort; siteName = $options.SiteName; siteState = Get-MpwFtpSiteRuntimeState -Site $site; listening = [bool]$listener.listening; pid = $listener.pid; processName = [string]$listener.processName; technicalMessage = "The configured control port did not become an FTPSVC listener within $([int]($script:MpwFtpListenerTimeoutMilliseconds / 1000)) seconds." })
                 }
                 [void]$steps.Add([ordered]@{ name = 'restart'; status = 'success'; message = 'The IIS FTP site restarted successfully.' })
             }
@@ -124,21 +143,36 @@ function Invoke-MpwIisFtpControl {
                 $currentStage = 'snapshot_current_state'
                 $siteSnapshot = Get-MpwSiteSnapshot -Manager $manager -Site $site
                 $siteWasStarted = [string]$siteSnapshot.state -eq 'Started'
-                if ([IO.Directory]::Exists($newPath)) {
+                $siteRuntimeSnapshot = [string]$siteSnapshot.state
+                $newPathExistedBefore = [IO.Directory]::Exists($newPath)
+                if ($newPathExistedBefore) {
                     $newAclSnapshot = Get-MpwDirectoryAclSnapshot -PhysicalPath $newPath
+                }
+                if ($siteWasStarted) {
+                    $serviceSnapshot = Get-MpwFtpServiceMutationSnapshot
                 }
                 [void]$steps.Add([ordered]@{ name = 'snapshot_current_state'; status = 'success'; message = 'The current Site ID, physicalPath and runtime state were captured.' })
 
                 $currentStage = 'prepare_target_directory'
+                $targetDirectoryMutationAttempted = $true
                 $newPath = Assert-MpwPhysicalPath -PhysicalPath $newPath -Create
                 [void]$steps.Add([ordered]@{ name = 'prepare_target_directory'; status = 'success'; message = 'The target camera FTP original directory is ready.' })
 
                 $currentStage = 'update_target_acl'
                 [void](Grant-MpwDirectoryAccess -PhysicalPath $newPath -Username $options.Username)
+                $targetAclStatus = Get-MpwDirectoryAclStatus -PhysicalPath $newPath -Username $options.Username
+                if ($targetAclStatus.readWriteAllowed -ne $true) {
+                    Throw-MpwFailure -Code 'FTP_TARGET_ACL_UPDATE_FAILED' -Message 'The target directory ACL does not provide effective Modify access to the managed FTP account.' -Details ([ordered]@{
+                        deniedModifyMask = $targetAclStatus.deniedModifyMask
+                        effectivePrincipalSids = @($targetAclStatus.effectivePrincipalSids)
+                        recommendation = 'Remove or adjust the applicable Windows Deny rule, then retry the activity switch.'
+                    })
+                }
                 [void]$steps.Add([ordered]@{ name = 'update_target_acl'; status = 'success'; message = 'The managed FTP account has verified access to the target directory.' })
 
                 if ($siteWasStarted) {
                     $currentStage = 'stop_ftp_site'
+                    $siteRuntimeMutationAttempted = $true
                     Stop-MpwSite -Site $site
                     [void]$steps.Add([ordered]@{ name = 'stop_ftp_site'; status = 'success'; message = 'The managed FTP site was stopped before changing physicalPath.' })
                 }
@@ -151,6 +185,7 @@ function Invoke-MpwIisFtpControl {
 
                 if ($siteWasStarted) {
                     $currentStage = 'restart_ftp_site'
+                    $serviceMutationAttempted = $true
                     Start-MpwFtpService
                     Start-MpwSite -Site $site
                     [void]$steps.Add([ordered]@{ name = 'restart_ftp_site'; status = 'success'; message = 'The managed FTP site was restored to Started.' })
@@ -168,7 +203,7 @@ function Invoke-MpwIisFtpControl {
                 $stateMatches = if ($siteWasStarted) { (Get-MpwFtpSiteRuntimeState -Site $site) -eq 'Started' } else { (Get-MpwFtpSiteRuntimeState -Site $site) -eq 'Stopped' }
                 $listenerMatches = $true
                 if ($siteWasStarted) {
-                    $listenerAfterPathSwitch = Wait-MpwPortListener -Port $options.ControlPort -PassiveStart $options.PassivePortStart -PassiveEnd $options.PassivePortEnd -TimeoutMilliseconds 15000
+                    $listenerAfterPathSwitch = Wait-MpwPortListener -Port $options.ControlPort -PassiveStart $options.PassivePortStart -PassiveEnd $options.PassivePortEnd -TimeoutMilliseconds $script:MpwFtpListenerTimeoutMilliseconds
                     $listenerMatches = [bool]($listenerAfterPathSwitch.listening -and -not $listenerAfterPathSwitch.usedByOtherProcess)
                 }
                 if (-not $pathMatches -or -not $aclAfter.readWriteAllowed -or -not $stateMatches -or -not $listenerMatches) {
@@ -241,9 +276,17 @@ function Invoke-MpwIisFtpControl {
         }
         elseif ($action -eq 'set-path') {
             [void]$rollbackItems.Add([ordered]@{ stage = 'rollback_physical_path'; status = 'not_required'; message = 'physicalPath was not committed.' })
-            [void]$rollbackItems.Add([ordered]@{ stage = 'rollback_site_state'; status = 'not_required'; message = 'The site state was not changed.' })
+            if (-not $siteRuntimeMutationAttempted) {
+                [void]$rollbackItems.Add([ordered]@{ stage = 'rollback_site_state'; status = 'not_required'; message = 'The site runtime state was not changed.' })
+            }
         }
-        if (($action -eq 'start' -or $action -eq 'restart') -and $siteRuntimeMutationAttempted -and $null -ne $site -and $null -ne $siteRuntimeSnapshot) {
+        $requiresStandaloneRuntimeRollback = (
+            $action -eq 'start' -or
+            $action -eq 'stop' -or
+            $action -eq 'restart' -or
+            ($action -eq 'set-path' -and -not $setPathCommitted)
+        )
+        if ($requiresStandaloneRuntimeRollback -and $siteRuntimeMutationAttempted -and $null -ne $site -and $null -ne $siteRuntimeSnapshot) {
             try {
                 $expectedRuntimeState = [string]$siteRuntimeSnapshot
                 $currentRuntimeState = Get-MpwFtpSiteRuntimeState -Site $site
@@ -264,7 +307,7 @@ function Invoke-MpwIisFtpControl {
                 [void]$rollbackWarnings.Add([ordered]@{ code = 'FTP_SITE_RUNTIME_ROLLBACK_FAILED'; message = 'The managed FTP site runtime state could not be fully restored.'; technicalMessage = [string]$_.Exception.Message })
             }
         }
-        if (($action -eq 'start' -or $action -eq 'restart') -and $serviceMutationAttempted -and $null -ne $serviceSnapshot) {
+        if (($action -eq 'start' -or $action -eq 'restart' -or $action -eq 'set-path') -and $serviceMutationAttempted -and $null -ne $serviceSnapshot) {
             try {
                 $serviceRollback = Restore-MpwFtpServiceSnapshot -Snapshot $serviceSnapshot -Manager $manager -TargetSiteId ([long]$site.Id) -TargetSiteName $options.SiteName
                 foreach ($serviceWarning in @($serviceRollback.warnings)) { [void]$rollbackWarnings.Add($serviceWarning) }
@@ -294,6 +337,16 @@ function Invoke-MpwIisFtpControl {
                 [void]$rollbackWarnings.Add([ordered]@{ code = $aclRollbackCode; message = 'The target FTP directory ACL could not be restored and verified.' })
             }
         }
+        elseif ($action -eq 'set-path' -and $targetDirectoryMutationAttempted -and -not $newPathExistedBefore -and -not [string]::IsNullOrWhiteSpace($newPath) -and [IO.Directory]::Exists($newPath)) {
+            try {
+                Remove-MpwDirectoryAccountAccess -PhysicalPath $newPath -Username $options.Username
+                [void]$rollbackItems.Add([ordered]@{ stage = 'rollback_target_acl'; status = 'success'; message = 'The explicit managed account ACE was removed from the newly created target directory.' })
+            }
+            catch {
+                [void]$rollbackItems.Add([ordered]@{ stage = 'rollback_target_acl'; status = 'failed'; code = 'FTP_ACL_ROLLBACK_FAILED'; message = [string]$_.Exception.Message })
+                [void]$rollbackWarnings.Add([ordered]@{ code = 'FTP_ACL_ROLLBACK_FAILED'; message = 'The managed FTP account ACE could not be removed from the newly created target directory.' })
+            }
+        }
         $safe = ConvertTo-MpwSafeException -ErrorRecord $failure
         if ($action -eq 'set-path') {
             switch ($failedStage) {
@@ -305,8 +358,8 @@ function Invoke-MpwIisFtpControl {
             }
         }
         $rollbackAttempted = [bool](
-            ($action -eq 'set-path' -and ($setPathCommitted -or $null -ne $newAclSnapshot)) -or
-            (($action -eq 'start' -or $action -eq 'restart') -and ($siteRuntimeMutationAttempted -or $serviceMutationAttempted))
+            ($action -eq 'set-path' -and ($setPathCommitted -or $null -ne $newAclSnapshot -or $targetDirectoryMutationAttempted -or $siteRuntimeMutationAttempted -or $serviceMutationAttempted)) -or
+            (($action -eq 'start' -or $action -eq 'stop' -or $action -eq 'restart') -and ($siteRuntimeMutationAttempted -or $serviceMutationAttempted))
         )
         $rollbackSucceeded = if ($rollbackAttempted) { $rollbackWarnings.Count -eq 0 } else { $null }
         $rollbackStatus = if (-not $rollbackAttempted) {

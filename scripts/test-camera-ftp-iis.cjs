@@ -1107,6 +1107,21 @@ exit 0
     assert.equal(blockedBeforeSnapshot.error.code, "FTP_UPLOAD_IN_PROGRESS");
     assert.equal(blockedBeforeSnapshot.error.diagnostics.rollbackAttempted, false);
     assert.equal(blockedBeforeSnapshot.state.activeEventId, "evt_old");
+    assert.equal(
+      orchestratorModule.resolveCameraFtpSwitchSnapshotFallbackPath({
+        repositoryPath: "D:\\repository"
+      }),
+      "",
+      "a deleted old event must fall back to authoritative IIS site inspection instead of blocking the snapshot"
+    );
+    assert.equal(
+      orchestratorModule.resolveCameraFtpSwitchSnapshotFallbackPath({
+        watcherDirectory: "D:\\repository\\working\\old\\原图\\相机FTP",
+        repositoryPath: "D:\\repository"
+      }),
+      "D:\\repository\\working\\old\\原图\\相机FTP",
+      "an existing watcher directory remains the strongest non-elevated snapshot hint"
+    );
     const incompleteRollback = await runSwitchTransactionFixture({
       failStage: "verify_switched_state",
       rollbackFailure: "rollback_watcher"
@@ -1156,7 +1171,29 @@ exit 0
     );
     assert.equal(startSource.includes("restoreCameraFtpWatcherSnapshot"), true);
 
+    const stopSource = methodSource("private async stopUnlocked", "async restart");
+    assert.equal(
+      stopSource.includes("allowedEvent(config.activeEventId)"),
+      false,
+      "stopping an owned IIS site must not depend on a still-valid receive event"
+    );
+    assert.equal(stopSource.includes("this.manager.stop("), true);
+    assert.equal(
+      stopSource.includes('physicalPath: ""'),
+      false,
+      "stop should reuse a valid event path when available and only fall back to an empty control context"
+    );
+
     const restartSource = methodSource("private async restartUnlocked", "async updateCredentials");
+    assert.equal(
+      restartSource.includes("this.manager.restartRuntime("),
+      true,
+      "a running owned site must remain runtime-restartable when its saved event no longer exists"
+    );
+    assert.ok(
+      restartSource.indexOf("stopCameraFtpWatcher(") < restartSource.indexOf("this.manager.restartRuntime("),
+      "orphaned runtime restart must not preserve a watcher for an invalid event"
+    );
     const restartManagerIndex = restartSource.indexOf("this.manager.restart(");
     const restartWatcherIndex = restartSource.indexOf("startCameraFtpWatcher(");
     assert.ok(
@@ -1164,6 +1201,28 @@ exit 0
       "restart must finish the manager's full reconcile before starting or switching the watcher"
     );
     assert.equal(restartSource.includes("restoreCameraFtpWatcherSnapshot"), true);
+
+    const switchActiveEventSource = methodSource("private async switchActiveEventUnlocked", "async clearActiveEvent");
+    const snapshotStageSource = switchActiveEventSource.slice(
+      switchActiveEventSource.indexOf("snapshotCurrentState:"),
+      switchActiveEventSource.indexOf("prepareTargetDirectory:")
+    );
+    assert.equal(
+      snapshotStageSource.includes("allowedEvent(config.activeEventId)"),
+      false,
+      "snapshotting a managed site must not require the previous saved event row to still exist"
+    );
+    assert.equal(snapshotStageSource.includes("resolveCameraFtpSwitchSnapshotFallbackPath"), true);
+
+    const managerSource = fs.readFileSync(
+      path.join(root, "src-server", "services", "iisFtpManager.ts"),
+      "utf8"
+    );
+    assert.match(
+      managerSource,
+      /baseScriptInput\(input,\s*action === "set-path"\)/,
+      "runtime start, stop and restart controls must not require a current event physicalPath"
+    );
 
     const switchSource = methodSource("private async switchActiveEventUnlocked", "async clearActiveEvent");
     assert.equal(switchSource.includes("this.manager.setPhysicalPath("), true);

@@ -46,6 +46,32 @@ $failure = [ordered]@{
 }
 Write-MpwScriptResult -OutputPath $OutputPath -Action 'repair' -Ok $false -Stage 'configure_firewall' -SiteName '测试站点' -ErrorObject $failure -Warnings @('warning') -RollbackAttempted $true -RollbackSucceeded $true
 $envelope = Get-Content -LiteralPath $OutputPath -Raw | ConvertFrom-Json
+$exchangeDirectory = [IO.Path]::GetDirectoryName($OutputPath)
+$restrictedAcl = [Security.AccessControl.DirectorySecurity]::new()
+$restrictedAcl.SetAccessRuleProtection($true, $false)
+$inheritanceFlags = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit
+foreach ($sid in @(
+  [Security.Principal.WindowsIdentity]::GetCurrent().User,
+  [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'),
+  [Security.Principal.SecurityIdentifier]::new('S-1-5-18')
+)) {
+  $restrictedAcl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+    $sid,
+    [Security.AccessControl.FileSystemRights]::FullControl,
+    $inheritanceFlags,
+    [Security.AccessControl.PropagationFlags]::None,
+    [Security.AccessControl.AccessControlType]::Allow
+  ))
+}
+[IO.Directory]::SetAccessControl($exchangeDirectory, $restrictedAcl)
+$progressStatusPath = Join-Path ([IO.Path]::GetDirectoryName($OutputPath)) 'progress.status.json'
+[IO.File]::WriteAllText($progressStatusPath, '{"operationId":', [Text.UTF8Encoding]::new($false))
+Write-MpwOperationProgress -StatusPath $progressStatusPath -OperationId '3dfe1a2f-7165-4706-84b1-c6e843cc86fb' -Action 'setup' -Stage 'enable_iis_features' -ScriptName 'iis-ftp-setup.ps1'
+$firstProgress = Get-Content -LiteralPath $progressStatusPath -Raw | ConvertFrom-Json
+Start-Sleep -Milliseconds 20
+Write-MpwOperationProgress -StatusPath $progressStatusPath -OperationId '3dfe1a2f-7165-4706-84b1-c6e843cc86fb' -Action 'setup' -Stage 'wait_iis_initialization' -ScriptName 'iis-ftp-setup.ps1'
+$secondProgressRaw = Get-Content -LiteralPath $progressStatusPath -Raw
+$secondProgress = $secondProgressRaw | ConvertFrom-Json
 $cloudPlaceholder = [pscustomobject]@{ Attributes = ([IO.FileAttributes]::Directory -bor [IO.FileAttributes]::ReparsePoint); LinkType = $null; Target = $null }
 $junction = [pscustomobject]@{ Attributes = ([IO.FileAttributes]::Directory -bor [IO.FileAttributes]::ReparsePoint); LinkType = 'Junction'; Target = 'D:\target' }
 $normalDirectory = [pscustomobject]@{ Attributes = [IO.FileAttributes]::Directory; LinkType = $null; Target = $null }
@@ -97,10 +123,11 @@ $script:fakeFtpRuntime.state = 'Stopped'
 $ftpRuntimeTimeoutFailure = $null
 try { Start-MpwSite -Site $fakePartialSite } catch { $ftpRuntimeTimeoutFailure = ConvertTo-MpwSafeException -ErrorRecord $_ }
 $script:featureEnableCalls = [Collections.Generic.List[string]]::new()
+function Test-MpwAdministrator { return $true }
 function Get-WindowsOptionalFeature {
   [CmdletBinding()]
   param([switch]$Online,[string]$FeatureName)
-  [pscustomobject]@{ FeatureName = $FeatureName; State = 'Disabled' }
+  [pscustomobject]@{ FeatureName = $FeatureName; State = $(if ($script:featureEnableCalls.Contains($FeatureName)) { 'Enabled' } else { 'Disabled' }) }
 }
 function Enable-WindowsOptionalFeature {
   [CmdletBinding()]
@@ -109,6 +136,20 @@ function Enable-WindowsOptionalFeature {
   [pscustomobject]@{ RestartNeeded = $true }
 }
 $featureRestart = Enable-MpwRequiredWindowsFeatures
+$script:featureStatusCalls = 0
+function Get-WindowsOptionalFeature {
+  [CmdletBinding()]
+  param([switch]$Online,[string]$FeatureName)
+  $script:featureStatusCalls++
+  [pscustomobject]@{ FeatureName = $FeatureName; State = 'Enabled' }
+}
+$readyFeatureSnapshot = @(
+  [ordered]@{ featureName = 'IIS-FTPServer'; state = 'Enabled'; installedHint = $true; requiresAdmin = $false },
+  [ordered]@{ featureName = 'IIS-FTPSvc'; state = 'Enabled'; installedHint = $true; requiresAdmin = $false },
+  [ordered]@{ featureName = 'IIS-FTPExtensibility'; state = 'Enabled'; installedHint = $true; requiresAdmin = $false },
+  [ordered]@{ featureName = 'IIS-ManagementScriptingTools'; state = 'Enabled'; installedHint = $true; requiresAdmin = $false }
+)
+$readyFeatureResult = Enable-MpwRequiredWindowsFeatures -CurrentFeatures $readyFeatureSnapshot
 $serviceRollbackStop = Get-MpwFtpServiceRollbackDecision -Snapshot ([ordered]@{ exists = $true; running = $false; startType = 'Manual' }) -CurrentStatus ([ordered]@{ exists = $true; running = $true; startType = 'Auto' }) -OtherStartedSites @()
 $serviceRollbackSkip = Get-MpwFtpServiceRollbackDecision -Snapshot ([ordered]@{ exists = $true; running = $false; startType = 'Auto' }) -CurrentStatus ([ordered]@{ exists = $true; running = $true; startType = 'Auto' }) -OtherStartedSites @([ordered]@{ id = 99; name = 'Unrelated FTP'; state = 'Started' })
 $serviceRollbackStart = Get-MpwFtpServiceRollbackDecision -Snapshot ([ordered]@{ exists = $true; running = $true; startType = 'Disabled' }) -CurrentStatus ([ordered]@{ exists = $true; running = $false; startType = 'Manual' }) -OtherStartedSites @()
@@ -149,6 +190,109 @@ $nonCanonicalAcl.SetSecurityDescriptorSddlForm(
   [Security.AccessControl.AccessControlSections]::Access
 )
 $canonicalAcl = ConvertTo-MpwCanonicalDirectorySecurity -Acl $nonCanonicalAcl
+$incidentAceFlags = [Security.AccessControl.AceFlags]27
+$incidentDacl = [Security.AccessControl.RawAcl]::new(2, 4)
+$incidentDacl.InsertAce(0, [Security.AccessControl.CommonAce]::new($incidentAceFlags, [Security.AccessControl.AceQualifier]::AccessAllowed, 268435456, [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'), $false, $null))
+$incidentDacl.InsertAce(1, [Security.AccessControl.CommonAce]::new($incidentAceFlags, [Security.AccessControl.AceQualifier]::AccessAllowed, 268435456, [Security.Principal.SecurityIdentifier]::new('S-1-5-18'), $false, $null))
+$incidentDacl.InsertAce(2, [Security.AccessControl.CommonAce]::new($incidentAceFlags, [Security.AccessControl.AceQualifier]::AccessAllowed, -536805376, [Security.Principal.SecurityIdentifier]::new('S-1-5-11'), $false, $null))
+$incidentDacl.InsertAce(3, [Security.AccessControl.CommonAce]::new($incidentAceFlags, [Security.AccessControl.AceQualifier]::AccessAllowed, -1610612736, [Security.Principal.SecurityIdentifier]::new('S-1-5-32-545'), $false, $null))
+$incidentRaw = [Security.AccessControl.RawSecurityDescriptor]::new(
+  [Security.AccessControl.ControlFlags]::DiscretionaryAclPresent,
+  $null,
+  $null,
+  $null,
+  $incidentDacl
+)
+$incidentAcl = [Security.AccessControl.DirectorySecurity]::new()
+$incidentAcl.SetSecurityDescriptorSddlForm($incidentRaw.GetSddlForm([Security.AccessControl.AccessControlSections]::Access), [Security.AccessControl.AccessControlSections]::Access)
+$incidentCanonical = ConvertTo-MpwCanonicalDirectorySecurity -Acl $incidentAcl -ProtectAccessRules $true -IncludeInheritedRules $true
+$incidentTightened = New-MpwCanonicalDirectorySecurityResult -Acl $incidentAcl -ProtectAccessRules $true -IncludeInheritedRules $true -RemoveBroadWriteRules $true
+$incidentCanonicalRaw = [Security.AccessControl.RawSecurityDescriptor]::new($incidentCanonical.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access))
+$incidentTightenedRaw = [Security.AccessControl.RawSecurityDescriptor]::new($incidentTightened.security.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access))
+$mixedAccountSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-21-100-200-300-1001')
+$mixedExplicitFlags = [Security.AccessControl.AceFlags]3
+$mixedInheritedDenyFlags = [Security.AccessControl.AceFlags]18
+$mixedInheritedAllowFlags = [Security.AccessControl.AceFlags]19
+$mixedDacl = [Security.AccessControl.RawAcl]::new(2, 6)
+$mixedDacl.InsertAce(0, [Security.AccessControl.CommonAce]::new($mixedExplicitFlags, [Security.AccessControl.AceQualifier]::AccessAllowed, 1245631, $mixedAccountSid, $false, $null))
+$mixedDacl.InsertAce(1, [Security.AccessControl.CommonAce]::new($mixedInheritedDenyFlags, [Security.AccessControl.AceQualifier]::AccessDenied, 64, [Security.Principal.SecurityIdentifier]::new('S-1-1-0'), $false, $null))
+$mixedDacl.InsertAce(2, [Security.AccessControl.CommonAce]::new($mixedInheritedAllowFlags, [Security.AccessControl.AceQualifier]::AccessAllowed, 1245631, [Security.Principal.SecurityIdentifier]::new('S-1-5-11'), $false, $null))
+$mixedDacl.InsertAce(3, [Security.AccessControl.CommonAce]::new($mixedInheritedAllowFlags, [Security.AccessControl.AceQualifier]::AccessAllowed, 2032127, [Security.Principal.SecurityIdentifier]::new('S-1-5-18'), $false, $null))
+$mixedDacl.InsertAce(4, [Security.AccessControl.CommonAce]::new($mixedInheritedAllowFlags, [Security.AccessControl.AceQualifier]::AccessAllowed, 2032127, [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'), $false, $null))
+$mixedDacl.InsertAce(5, [Security.AccessControl.CommonAce]::new($mixedInheritedAllowFlags, [Security.AccessControl.AceQualifier]::AccessAllowed, 2032127, [Security.Principal.SecurityIdentifier]::new('S-1-5-32-545'), $false, $null))
+$mixedRaw = [Security.AccessControl.RawSecurityDescriptor]::new(
+  [Security.AccessControl.ControlFlags]::DiscretionaryAclPresent,
+  $null,
+  $null,
+  $null,
+  $mixedDacl
+)
+$mixedAcl = [Security.AccessControl.DirectorySecurity]::new()
+$mixedAcl.SetSecurityDescriptorSddlForm($mixedRaw.GetSddlForm([Security.AccessControl.AccessControlSections]::Access), [Security.AccessControl.AccessControlSections]::Access)
+$mixedTightened = New-MpwCanonicalDirectorySecurityResult -Acl $mixedAcl -ProtectAccessRules $true -IncludeInheritedRules $true -RemoveBroadWriteRules $true
+$mixedTightenedRaw = [Security.AccessControl.RawSecurityDescriptor]::new($mixedTightened.security.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access))
+$nullDaclSddl = 'D:NO_ACCESS_CONTROL'
+$nullDaclFingerprint = Get-MpwDirectoryAclSemanticFingerprint -Sddl $nullDaclSddl
+$nullDaclSecurity = [Security.AccessControl.DirectorySecurity]::new()
+$nullDaclSecurity.SetSecurityDescriptorSddlForm($nullDaclSddl, [Security.AccessControl.AccessControlSections]::Access)
+$nullDaclFailure = $null
+try {
+  New-MpwCanonicalDirectorySecurityResult -Acl $nullDaclSecurity -ProtectAccessRules $true -IncludeInheritedRules $true -RemoveBroadWriteRules $true | Out-Null
+}
+catch {
+  $nullDaclFailure = ConvertTo-MpwSafeException -ErrorRecord $_
+}
+$effectiveAccountSid = 'S-1-5-21-100-200-300-1001'
+$effectiveDenyAcl = [Security.AccessControl.DirectorySecurity]::new()
+$effectiveDenyAcl.SetSecurityDescriptorSddlForm(
+  "D:P(D;OICI;0x2;;;BU)(A;OICI;0x1301bf;;;$effectiveAccountSid)",
+  [Security.AccessControl.AccessControlSections]::Access
+)
+$effectiveDenyResult = Get-MpwAclModifyAccessForSids -Acl $effectiveDenyAcl -PrincipalSids @($effectiveAccountSid, 'S-1-5-32-545')
+$authorizationAllowed = Get-MpwFtpAuthorizationEvaluation -Rules @(
+  [ordered]@{ accessType = 'Allow'; users = 'camera'; roles = ''; permissions = 'Read, Write' }
+) -Username 'camera'
+$authorizationDenied = Get-MpwFtpAuthorizationEvaluation -Rules @(
+  [ordered]@{ accessType = 'Allow'; users = 'camera'; roles = ''; permissions = 'Read, Write' },
+  [ordered]@{ accessType = 'Deny'; users = '*'; roles = ''; permissions = 'Write' }
+) -Username 'camera'
+$authorizationGroupOnly = Get-MpwFtpAuthorizationEvaluation -Rules @(
+  [ordered]@{ accessType = 'Allow'; users = 'BUILTIN\Users'; roles = ''; permissions = 'Read, Write' }
+) -Username 'camera'
+$nestedDependencySnapshots = @(
+  [ordered]@{
+    name = 'RPCSS'
+    dependencies = @(
+      [ordered]@{ name = 'RpcEptMapper'; dependencies = @() },
+      [ordered]@{ name = 'DcomLaunch'; dependencies = @([ordered]@{ name = 'RpcEptMapper'; dependencies = @() }) }
+    )
+  }
+)
+$flattenedDependencySnapshots = @(Get-MpwFlattenedServiceDependencySnapshots -Dependencies $nestedDependencySnapshots)
+$enabledFeatureFixture = @(
+  [ordered]@{ featureName = 'IIS-FTPServer'; state = 'Enabled' },
+  [ordered]@{ featureName = 'IIS-FTPSvc'; state = 'Enabled' },
+  [ordered]@{ featureName = 'IIS-FTPExtensibility'; state = 'Enabled' },
+  [ordered]@{ featureName = 'IIS-ManagementScriptingTools'; state = 'Enabled' }
+)
+$readyServiceFixture = [ordered]@{ exists = $true; startType = 'Auto'; pending = $false; running = $true }
+$genericRestartAdvisory = Resolve-MpwWindowsRestartPendingStatus -PendingFileRenameEntries @('\\??\\D:\\Apps\\Hermes\\cache.tmp', '')
+$iisRenameRestartAdvisory = Resolve-MpwWindowsRestartPendingStatus -PendingFileRenameEntries @('\\??\\C:\\Windows\\System32\\inetsrv\\pending.tmp')
+$initializationStates = [ordered]@{
+  featuresMissing = Resolve-MpwIisInitializationState -Features @([ordered]@{ state = 'Disabled' }) -RestartPending ([ordered]@{ pending = $false }) -ManagementApiExists $false -ConfigurationExists $false -Service ([ordered]@{ exists = $false })
+  featurePayloadRemoved = Resolve-MpwIisInitializationState -Features @([ordered]@{ state = 'DisabledWithPayloadRemoved' }) -RestartPending ([ordered]@{ pending = $false }) -ManagementApiExists $false -ConfigurationExists $false -Service ([ordered]@{ exists = $false })
+  featurePending = Resolve-MpwIisInitializationState -Features @([ordered]@{ state = 'EnablePending' }) -RestartPending ([ordered]@{ pending = $false }) -ManagementApiExists $false -ConfigurationExists $false -Service ([ordered]@{ exists = $false })
+  explicitIisRestart = Resolve-MpwIisInitializationState -Features $enabledFeatureFixture -RestartPending ([ordered]@{ pending = $false; iisRequired = $true; systemPending = $true }) -ManagementApiExists $true -ConfigurationExists $true -Service $readyServiceFixture
+  genericSystemRestartAdvisory = Resolve-MpwIisInitializationState -Features $enabledFeatureFixture -RestartPending $genericRestartAdvisory -ManagementApiExists $true -ConfigurationExists $true -Service $readyServiceFixture
+  configNotReady = Resolve-MpwIisInitializationState -Features $enabledFeatureFixture -RestartPending ([ordered]@{ pending = $false }) -ManagementApiExists $true -ConfigurationExists $false -Service $readyServiceFixture
+  serviceMissing = Resolve-MpwIisInitializationState -Features $enabledFeatureFixture -RestartPending ([ordered]@{ pending = $false }) -ManagementApiExists $true -ConfigurationExists $true -Service ([ordered]@{ exists = $false; startType = 'unknown'; pending = $false; running = $false })
+  serviceDisabled = Resolve-MpwIisInitializationState -Features $enabledFeatureFixture -RestartPending ([ordered]@{ pending = $false }) -ManagementApiExists $true -ConfigurationExists $true -Service ([ordered]@{ exists = $true; startType = 'Disabled'; pending = $false; running = $false })
+  serviceStopped = Resolve-MpwIisInitializationState -Features $enabledFeatureFixture -RestartPending ([ordered]@{ pending = $false }) -ManagementApiExists $true -ConfigurationExists $true -Service ([ordered]@{ exists = $true; startType = 'Manual'; pending = $false; running = $false })
+  servicePending = Resolve-MpwIisInitializationState -Features $enabledFeatureFixture -RestartPending ([ordered]@{ pending = $false }) -ManagementApiExists $true -ConfigurationExists $true -Service ([ordered]@{ exists = $true; startType = 'Manual'; pending = $true; running = $false })
+  ready = Resolve-MpwIisInitializationState -Features $enabledFeatureFixture -RestartPending ([ordered]@{ pending = $false }) -ManagementApiExists $true -ConfigurationExists $true -Service $readyServiceFixture
+  blocked = Resolve-MpwIisInitializationState -Features @([ordered]@{ state = 'Unavailable' }) -RestartPending ([ordered]@{ pending = $false }) -ManagementApiExists $false -ConfigurationExists $false -Service ([ordered]@{ exists = $false })
+  serviceIdentityBlocked = Resolve-MpwIisInitializationState -Features $enabledFeatureFixture -RestartPending ([ordered]@{ pending = $false }) -ManagementApiExists $true -ConfigurationExists $true -Service ([ordered]@{ exists = $true; startType = 'Manual'; pending = $false; running = $false; startName = '.\\custom-user' })
+}
 $aclFixturePath = Join-Path ([IO.Path]::GetDirectoryName($OutputPath)) 'acl-snapshot-fixture'
 [void][IO.Directory]::CreateDirectory($aclFixturePath)
 $aclSnapshotFixture = Get-MpwDirectoryAclSnapshot -PhysicalPath $aclFixturePath
@@ -219,11 +363,35 @@ function Open-MpwServerManager { $script:setupOpenManagerCalls++; Throw-MpwFailu
 function Get-MpwWindowsFeaturesStatus { return @([ordered]@{ featureName = 'IIS-FTPSvc'; state = 'Disabled'; requiresAdmin = $false }) }
 function Get-MpwFtpServiceStatus { return [ordered]@{ exists = $true; running = $false; state = 'Stopped'; startType = 'Manual' } }
 function Get-MpwDirectoryAclStatus { param($PhysicalPath,$Username) return [ordered]@{ exists = $false; readWriteAllowed = $false; broadInheritedAccess = $false; rules = @() } }
-function Enable-MpwRequiredWindowsFeatures { return [ordered]@{ enabledFeatures = @('IIS-FTPSvc'); processedFeatures = @('IIS-FTPSvc'); remainingFeatures = @('IIS-FTPExtensibility'); restartRequired = $true; restartFeature = 'IIS-FTPSvc' } }
+function Enable-MpwRequiredWindowsFeatures { param($CurrentFeatures) return [ordered]@{ enabledFeatures = @('IIS-FTPSvc'); processedFeatures = @('IIS-FTPSvc'); remainingFeatures = @('IIS-FTPExtensibility'); restartRequired = $true; restartFeature = 'IIS-FTPSvc' } }
 $setupRestartOutputPath = Join-Path ([IO.Path]::GetDirectoryName($protocolOutputPath)) 'restart gate result.json'
 $setupRestartExitCode = Invoke-MpwIisFtpSetup -InputPath (Join-Path ([IO.Path]::GetDirectoryName($protocolOutputPath)) 'synthetic-input.json') -OutputPath $setupRestartOutputPath
 $setupRestartRaw = Get-Content -LiteralPath $setupRestartOutputPath -Raw
 $setupRestartEnvelope = $setupRestartRaw | ConvertFrom-Json
+$script:dependencyStartCalls = 0
+function Wait-MpwServiceStableState {
+  param([string]$Name,[int]$TimeoutMilliseconds = 30000)
+  return [pscustomobject]@{ Name = $Name; Status = [ServiceProcess.ServiceControllerStatus]::Running; ServicesDependedOn = @() }
+}
+function Get-MpwServiceModel {
+  param([string]$Name,[bool]$IncludeDependencies = $true)
+  return [ordered]@{ exists = $true; name = $Name; state = 'Running'; startType = 'Auto'; running = $true; pending = $false; startName = 'LocalSystem'; serviceType = 'Win32OwnProcess'; dependencies = @() }
+}
+function Start-Service { param([string]$Name,$ErrorAction) $script:dependencyStartCalls++ }
+$emptyVisited = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+$emptyChanges = [Collections.Generic.List[object]]::new()
+Start-MpwServiceDependencyGraph -Name 'SyntheticRunningDependency' -Visited $emptyVisited -Changes $emptyChanges -RootService $false
+$emptyCollectionDependencyGraph = [ordered]@{
+  visitedCount = $emptyVisited.Count
+  changeCount = $emptyChanges.Count
+  startCalls = $script:dependencyStartCalls
+}
+$script:dependencyGraphCallsForHealthyService = 0
+function Get-MpwFtpServiceStatus {
+  return [ordered]@{ exists = $true; name = 'FTPSVC'; state = 'Running'; startType = 'Auto'; running = $true; pending = $false; startName = 'LocalSystem'; serviceType = 'Share Process'; dependencies = @() }
+}
+function Start-MpwServiceDependencyGraph { param($Name,$Visited,$Changes,$RootService) $script:dependencyGraphCallsForHealthyService++ }
+$healthyServiceStart = Start-MpwFtpService
 $result = [ordered]@{
   parserFailures = @($parserFailures)
   enumNormalization = $enumNormalization
@@ -259,6 +427,12 @@ $result = [ordered]@{
     remainingFeatures = @($featureRestart.remainingFeatures)
     enableCalls = @($script:featureEnableCalls)
   }
+  readyFeatureFastPath = [ordered]@{
+    statusQueryCalls = [int]$script:featureStatusCalls
+    processedFeatures = @($readyFeatureResult.processedFeatures)
+    remainingFeatures = @($readyFeatureResult.remainingFeatures)
+    restartRequired = [bool]$readyFeatureResult.restartRequired
+  }
   serviceRollback = [ordered]@{
     stopAction = [string]$serviceRollbackStop.runningStateAction
     stopStartupType = [string]$serviceRollbackStop.startupType
@@ -284,6 +458,43 @@ $result = [ordered]@{
     nonCanonicalSnapshot = -not [bool]$nonCanonicalFixtureSnapshot.canonical
     nonCanonicalRestored = [bool]$nonCanonicalFixtureRestore.succeeded
     nonCanonicalSnapshotMatched = [string]$nonCanonicalFixtureRestored.sddl -eq [string]$nonCanonicalFixtureSnapshot.sddl
+    genericMaskCanonical = [bool]$incidentCanonical.AreAccessRulesCanonical
+    genericMaskRuleCount = [int]$incidentCanonicalRaw.DiscretionaryAcl.Count
+    genericMaskValues = @($incidentCanonicalRaw.DiscretionaryAcl | ForEach-Object { [int]$_.AccessMask })
+    genericMaskRemovedCount = @($incidentTightened.removedRules).Count
+    genericMaskRemainingCount = [int]$incidentTightenedRaw.DiscretionaryAcl.Count
+    genericMaskBroadRemaining = @(Get-MpwBroadDirectoryWriteRules -Acl $incidentTightened.security).Count
+    mixedInheritanceSourceCanonical = [bool]$mixedAcl.AreAccessRulesCanonical
+    mixedInheritanceTightenedCanonical = [bool]$mixedTightened.security.AreAccessRulesCanonical
+    mixedInheritanceRemovedCount = @($mixedTightened.removedRules).Count
+    mixedInheritanceRemainingCount = [int]$mixedTightenedRaw.DiscretionaryAcl.Count
+    mixedInheritanceFirstAceType = [string]$mixedTightenedRaw.DiscretionaryAcl[0].AceType
+    mixedInheritanceBroadRemaining = @(Get-MpwBroadDirectoryWriteRules -Acl $mixedTightened.security).Count
+    nullDaclFingerprint = [string]$nullDaclFingerprint
+    nullDaclFailureCode = [string]$nullDaclFailure.code
+    effectiveGroupDenyAllowed = [bool]$effectiveDenyResult.allowed
+    effectiveGroupDenyMask = [uint64]$effectiveDenyResult.denyMask
+  }
+  authorizationEvaluation = [ordered]@{
+    allowedCorrect = [bool]$authorizationAllowed.correct
+    deniedCorrect = [bool]$authorizationDenied.correct
+    deniedConflict = [bool]$authorizationDenied.conflictingDeny
+    groupOnlyManagedAllow = [bool]$authorizationGroupOnly.managedAllow
+  }
+  nestedDependencySnapshots = [ordered]@{
+    count = $flattenedDependencySnapshots.Count
+    names = @($flattenedDependencySnapshots | ForEach-Object { [string]$_.name })
+  }
+  initializationStates = $initializationStates
+  restartAdvisories = [ordered]@{
+    genericPending = [bool]$genericRestartAdvisory.pending
+    genericSystemPending = [bool]$genericRestartAdvisory.systemPending
+    genericReasons = @($genericRestartAdvisory.systemReasons)
+    genericRenameCount = [int]$genericRestartAdvisory.pendingFileRenameCount
+    genericIisRenameCount = [int]$genericRestartAdvisory.iisRelatedPendingFileRenameCount
+    iisRenamePending = [bool]$iisRenameRestartAdvisory.pending
+    iisRenameSystemPending = [bool]$iisRenameRestartAdvisory.systemPending
+    iisRenameCount = [int]$iisRenameRestartAdvisory.iisRelatedPendingFileRenameCount
   }
   setupRestart = [ordered]@{
     exitCode = $setupRestartExitCode
@@ -298,6 +509,25 @@ $result = [ordered]@{
     preflightPresent = $null -ne $setupRestartEnvelope.data.preflight
     planPresent = $null -ne $setupRestartEnvelope.data.plan
     passwordLeaked = $setupRestartRaw.Contains('temporary-test-value')
+  }
+  serviceDependencyCollections = $emptyCollectionDependencyGraph
+  healthyServiceNoop = [ordered]@{
+    running = [bool]$healthyServiceStart.service.running
+    changeCount = @($healthyServiceStart.changes).Count
+    dependencyGraphCalls = $script:dependencyGraphCallsForHealthyService
+  }
+  operationProgress = [ordered]@{
+    operationId = [string]$secondProgress.operationId
+    action = [string]$secondProgress.operation
+    scriptName = [string]$secondProgress.scriptName
+    firstStage = [string]$firstProgress.stage
+    secondStage = [string]$secondProgress.stage
+    processId = [int]$secondProgress.processId
+    startedAtPreserved = [string]$firstProgress.startedAt -eq [string]$secondProgress.startedAt
+    stageTimeAdvanced = [DateTimeOffset]::Parse([string]$secondProgress.stageStartedAt) -gt [DateTimeOffset]::Parse([string]$firstProgress.stageStartedAt)
+    state = [string]$secondProgress.state
+    containsSecretField = $secondProgressRaw -match '(?i)password|passphrase|secret|credential'
+    containsPathField = $secondProgressRaw -match '(?i)physicalPath|inputPath|outputPath|statusPath|directory'
   }
   exitCodes = [ordered]@{
     invalidInput = Get-MpwExitCode -Code 'INVALID_PARAMETER'
@@ -371,9 +601,15 @@ exit 0
     assert.deepEqual(result.featureRestart, {
       restartRequired: true,
       restartFeature: "IIS-FTPServer",
-      enabledFeatures: ["IIS-FTPServer"],
-      remainingFeatures: ["IIS-FTPSvc", "IIS-FTPExtensibility", "IIS-ManagementScriptingTools"],
-      enableCalls: ["IIS-FTPServer"]
+      enabledFeatures: ["IIS-FTPServer", "IIS-FTPSvc", "IIS-FTPExtensibility", "IIS-ManagementScriptingTools"],
+      remainingFeatures: [],
+      enableCalls: ["IIS-FTPServer", "IIS-FTPSvc", "IIS-FTPExtensibility", "IIS-ManagementScriptingTools"]
+    });
+    assert.deepEqual(result.readyFeatureFastPath, {
+      statusQueryCalls: 0,
+      processedFeatures: ["IIS-FTPServer", "IIS-FTPSvc", "IIS-FTPExtensibility", "IIS-ManagementScriptingTools"],
+      remainingFeatures: [],
+      restartRequired: false
     });
     assert.deepEqual(result.serviceRollback, {
       stopAction: "stop",
@@ -405,7 +641,59 @@ exit 0
       snapshotMatched: true,
       nonCanonicalSnapshot: true,
       nonCanonicalRestored: true,
-      nonCanonicalSnapshotMatched: true
+      nonCanonicalSnapshotMatched: true,
+      genericMaskCanonical: true,
+      genericMaskRuleCount: 4,
+      genericMaskValues: [-536805376, 268435456, 268435456, -1610612736],
+      genericMaskRemovedCount: 1,
+      genericMaskRemainingCount: 3,
+      genericMaskBroadRemaining: 0,
+      mixedInheritanceSourceCanonical: true,
+      mixedInheritanceTightenedCanonical: true,
+      mixedInheritanceRemovedCount: 2,
+      mixedInheritanceRemainingCount: 4,
+      mixedInheritanceFirstAceType: "AccessDenied",
+      mixedInheritanceBroadRemaining: 0,
+      nullDaclFingerprint: result.aclRecovery.nullDaclFingerprint,
+      nullDaclFailureCode: "FTP_ACL_UNSUPPORTED_ACE",
+      effectiveGroupDenyAllowed: false,
+      effectiveGroupDenyMask: 2
+    });
+    assert.match(result.aclRecovery.nullDaclFingerprint, /^[a-f0-9]{64}$/);
+    assert.deepEqual(result.authorizationEvaluation, {
+      allowedCorrect: true,
+      deniedCorrect: false,
+      deniedConflict: true,
+      groupOnlyManagedAllow: false
+    });
+    assert.deepEqual(result.nestedDependencySnapshots, {
+      count: 3,
+      names: ["RPCSS", "RpcEptMapper", "DcomLaunch"]
+    });
+    assert.deepEqual(result.initializationStates, {
+      featuresMissing: "features_missing",
+      featurePayloadRemoved: "features_missing",
+      featurePending: "restart_pending",
+      explicitIisRestart: "restart_pending",
+      genericSystemRestartAdvisory: "ready",
+      configNotReady: "config_not_ready",
+      serviceMissing: "service_missing",
+      serviceDisabled: "service_disabled",
+      serviceStopped: "service_stopped",
+      servicePending: "service_pending",
+      ready: "ready",
+      blocked: "blocked",
+      serviceIdentityBlocked: "blocked"
+    });
+    assert.deepEqual(result.restartAdvisories, {
+      genericPending: false,
+      genericSystemPending: true,
+      genericReasons: ["PendingFileRenameOperations"],
+      genericRenameCount: 1,
+      genericIisRenameCount: 0,
+      iisRenamePending: false,
+      iisRenameSystemPending: true,
+      iisRenameCount: 1
     });
     assert.deepEqual(result.setupRestart, {
       exitCode: 4,
@@ -421,6 +709,30 @@ exit 0
       planPresent: true,
       passwordLeaked: false
     });
+    assert.deepEqual(result.serviceDependencyCollections, {
+      visitedCount: 1,
+      changeCount: 0,
+      startCalls: 0
+    });
+    assert.deepEqual(result.healthyServiceNoop, {
+      running: true,
+      changeCount: 0,
+      dependencyGraphCalls: 0
+    });
+    assert.deepEqual(result.operationProgress, {
+      operationId: "3dfe1a2f-7165-4706-84b1-c6e843cc86fb",
+      action: "setup",
+      scriptName: "iis-ftp-setup.ps1",
+      firstStage: "enable_iis_features",
+      secondStage: "wait_iis_initialization",
+      processId: result.operationProgress.processId,
+      startedAtPreserved: true,
+      stageTimeAdvanced: true,
+      state: "running",
+      containsSecretField: false,
+      containsPathField: false
+    });
+    assert.ok(result.operationProgress.processId > 0);
     assert.deepEqual(result.exitCodes, {
       invalidInput: 2,
       admin: 3,
@@ -448,7 +760,7 @@ exit 0
       assert.doesNotMatch(contents, retiredProviderPattern, `${name} must stay IIS-only`);
       assert.doesNotMatch(contents, retiredFixedPortPattern, `${name} must use the configured control port`);
     }
-    for (const name of ["iis-ftp-setup.ps1", "iis-ftp-adopt.ps1"]) {
+    for (const name of ["iis-ftp-setup.ps1"]) {
       assert.match(source[name], /options\.Binding/);
       assert.match(source[name], /PassivePortStart/);
       assert.match(source[name], /PassivePortEnd/);
@@ -503,11 +815,13 @@ exit 0
     assert.match(source["iis-ftp-setup.ps1"], /preflight_firewall[\s\S]*Assert-MpwFirewallRuleUpdatesAllowed/);
     assert.match(source["iis-ftp-setup.ps1"], /AllowLegacyRuleUpdate \$options\.AllowLegacyFirewallRuleUpdate/);
     assert.match(source["iis-ftp-setup.ps1"], /Restore-MpwFirewallRuleChange/);
-    assert.match(source["iis-ftp-adopt.ps1"], /preflight_firewall[\s\S]*Assert-MpwFirewallRuleUpdatesAllowed/);
-    assert.match(source["iis-ftp-adopt.ps1"], /Restore-MpwFirewallRuleChange/);
+    assert.match(source["iis-ftp-adopt.ps1"], /Invoke-MpwIisFtpSetup -InputPath \$InputPath -OutputPath \$OutputPath/);
+    assert.match(source["iis-ftp-adopt.ps1"], /\. \$setupPath/);
+    assert.doesNotMatch(source["iis-ftp-adopt.ps1"], /Enable-MpwRequiredWindowsFeatures|Ensure-MpwManagedLocalAccount|Set-MpwFtpSiteConfiguration/,
+      "the compatibility adoption entrypoint must not duplicate provisioning mutations");
     assert.doesNotMatch(source["iis-ftp-setup.ps1"], /Ensure-MpwFirewallRule[^\n]+LocalPort '21'/);
     assert.match(source["iis-ftp-control.ps1"], /start_ftp_service/);
-    for (const name of ["iis-ftp-setup.ps1", "iis-ftp-adopt.ps1", "iis-ftp-control.ps1"]) {
+    for (const name of ["iis-ftp-setup.ps1", "iis-ftp-control.ps1"]) {
       assert.match(source[name], /start_ftp_site/);
       assert.match(source[name], /verify_ftp_listener/);
     }
@@ -521,31 +835,129 @@ exit 0
     assert.match(source["iis-ftp-control.ps1"], /verify_switched_state/);
     assert.match(source["iis-ftp-control.ps1"], /rollback_physical_path/);
     assert.match(source["iis-ftp-control.ps1"], /rollback_site_state/);
+    assert.match(source["iis-ftp-control.ps1"], /Get-MpwFtpAuthorizationEvaluation -Rules @\(\$siteModelBefore\.authorization\)/);
+    assert.match(source["iis-ftp-control.ps1"], /Get-MpwDirectoryAclStatus -PhysicalPath \$newPath -Username \$options\.Username/);
+    assert.match(source["iis-ftp-control.ps1"], /\$serviceSnapshot = Get-MpwFtpServiceMutationSnapshot[\s\S]*\$siteWasStarted/);
+    assert.match(source["iis-ftp-control.ps1"], /\$action -eq 'set-path'\) -and \$serviceMutationAttempted/);
+    assert.match(source["iis-ftp-control.ps1"], /Remove-MpwDirectoryAccountAccess -PhysicalPath \$newPath -Username \$options\.Username/);
+    assert.match(source["iis-ftp-control.ps1"], /requiresStandaloneRuntimeRollback/);
     assert.match(source["iis-ftp-control.ps1"], /FTP_PHYSICAL_PATH_UPDATE_FAILED/);
     assert.match(source["iis-ftp-control.ps1"], /FTP_SITE_RESTART_FAILED/);
     assert.match(source["iis-ftp-control.ps1"], /FTP_SWITCH_VERIFY_FAILED/);
-    assert.match(source["iis-ftp-control.ps1"], /Wait-MpwPortListener[^\r\n]*15000/,
+    assert.match(source["iis-ftp-control.ps1"], /Wait-MpwPortListener[^\r\n]*\$script:MpwFtpListenerTimeoutMilliseconds/,
       "event switching must allow the IIS FTP listener time to stabilize before verification");
     assert.match(source["iis-ftp-status.ps1"], /inspect_iis_sites/);
     assert.match(source["iis-ftp-common.ps1"], /function Get-MpwFtpServiceRollbackDecision/);
+    assert.match(source["iis-ftp-common.ps1"], /function Resolve-MpwIisInitializationState/);
+    assert.match(source["iis-ftp-common.ps1"], /function Resolve-MpwWindowsRestartPendingStatus/);
+    assert.match(source["iis-ftp-common.ps1"], /Generic Windows restart markers are advisory only/);
+    assert.match(source["iis-ftp-common.ps1"], /pending = \$false[\s\S]*iisRequired = \$false/);
+    assert.match(source["iis-ftp-common.ps1"], /function Get-MpwFileReadiness/);
+    assert.match(source["iis-ftp-common.ps1"], /UnauthorizedAccessException[\s\S]*exists = \$true[\s\S]*accessDenied = \$true/);
+    assert.doesNotMatch(source["iis-ftp-common.ps1"], /restartRequired = \[bool\]\(\$restartRequired -or \$restartPendingStatus\.pending\)/);
+    assert.match(source["iis-ftp-common.ps1"], /function Wait-MpwIisInitializationReady/);
+    assert.match(source["iis-ftp-common.ps1"], /function Write-MpwOperationProgress/);
+    assert.match(source["iis-ftp-common.ps1"], /Write-MpwJsonOutput -Path \$StatusPath -Value \$progress/);
+    assert.match(source["iis-ftp-common.ps1"], /startedAt = \$startedAt/);
+    assert.doesNotMatch(
+      source["iis-ftp-common.ps1"].match(/function Write-MpwOperationProgress[\s\S]*?(?=function Write-MpwScriptResult)/)?.[0] || "",
+      /password|passphrase|physicalPath|inputPath|outputPath/i,
+      "progress files must contain only non-sensitive stage metadata"
+    );
+    for (const name of ["iis-ftp-setup.ps1", "iis-ftp-adopt.ps1", "iis-ftp-control.ps1", "iis-ftp-credentials.ps1", "iis-ftp-status.ps1"]) {
+      assert.match(source[name], /\[string\]\$StatusPath/);
+      assert.match(source[name], /\[string\]\$OperationId/);
+    }
+    for (const stage of [
+      "enable_iis_features",
+      "wait_iis_initialization",
+      "configure_local_account",
+      "configure_directory_acl",
+      "configure_iis_site",
+      "configure_passive_ports",
+      "configure_firewall",
+      "start_ftp_service",
+      "start_ftp_site",
+      "verify_ftp_listener",
+      "verify_configuration",
+      "completed"
+    ]) {
+      assert.match(
+        source["iis-ftp-setup.ps1"],
+        new RegExp(`\\$currentStage = '${stage}'\\s*\\r?\\n\\s*Publish-MpwSetupProgress`)
+      );
+    }
+    assert.match(source["iis-ftp-common.ps1"], /function Get-MpwTcpListenerConnections[\s\S]*Get-NetTCPConnection -State Listen -LocalPort \$Port[\s\S]*netstat\.exe/,
+      "ordinary listener detection must fall back to non-elevated netstat when the NetTCP CIM provider denies access");
+    assert.match(source["iis-ftp-common.ps1"], /function Wait-MpwPortListener[\s\S]*Get-MpwTcpListenerConnections -Port \$Port/);
+    assert.doesNotMatch(source["iis-ftp-common.ps1"], /\$status = Get-MpwPortStatus[^\r\n]*\r?\n\s*if \(\$status\.listening\)/,
+      "listener stabilization must not execute the full port conflict scan on every polling iteration");
+    assert.match(source["iis-ftp-common.ps1"], /\$shouldSuggestPorts = \$IncludeAvailablePorts\.IsPresent[\s\S]*if \(\$shouldSuggestPorts\)[\s\S]*Get-MpwAvailableControlPorts/,
+      "available-port enumeration must be lazy on the healthy listener path");
+    assert.match(source["iis-ftp-status.ps1"], /Get-MpwIisInitializationReadiness -Features \$features -RestartPending \$restartPending -Service \$service/,
+      "ordinary status must reuse feature, restart and service snapshots");
+    assert.match(source["iis-ftp-setup.ps1"], /Get-MpwIisInitializationReadiness -Features \$featureSnapshot -RestartPending \$restartPendingSnapshot -Service \$serviceSnapshot/,
+      "setup preflight must reuse its first feature, restart and service snapshots");
+    assert.match(source["iis-ftp-setup.ps1"], /Enable-MpwRequiredWindowsFeatures -CurrentFeatures \$featureSnapshot/,
+      "healthy setup must not re-query every enabled Windows feature");
+    assert.match(source["iis-ftp-status.ps1"], /Get-MpwPortStatus[^\r\n]*-FtpServiceStatus \$service/,
+      "ordinary status must not query FTPSVC twice");
+    assert.match(source["iis-ftp-common.ps1"], /function Start-MpwServiceDependencyGraph/);
+    assert.match(source["iis-ftp-common.ps1"], /AllowEmptyCollection\(\)\]\[Collections\.Generic\.HashSet\[string\]\]\$Visited/);
+    assert.match(source["iis-ftp-common.ps1"], /AllowEmptyCollection\(\)\]\[Collections\.Generic\.List\[object\]\]\$Changes/);
+    assert.match(source["iis-ftp-common.ps1"], /healthy FTPSVC already proves its dependency chain is running/);
+    assert.match(source["iis-ftp-common.ps1"], /function Start-MpwFtpServiceDependencies/);
+    assert.match(source["iis-ftp-common.ps1"], /ServicesDependedOn/);
+    assert.match(source["iis-ftp-common.ps1"], /IIS_DEPENDENCY_SERVICE_START_FAILED/);
+    assert.match(source["iis-ftp-common.ps1"], /IIS_FTP_SERVICE_PENDING_TIMEOUT/);
+    assert.doesNotMatch(source["iis-ftp-common.ps1"], /Start-Service -Name W3SVC/,
+      "web publishing service must not be started unless Windows reports it as a real FTPSVC dependency");
+    assert.match(source["iis-ftp-setup.ps1"], /Wait-MpwIisInitializationReady -TimeoutMilliseconds 30000 -StartRequiredDependencies \$true/);
     assert.match(source["iis-ftp-common.ps1"], /function Restore-MpwFtpServiceSnapshot/);
+    assert.match(source["iis-ftp-common.ps1"], /function Get-MpwFtpServiceMutationSnapshot/);
+    assert.match(source["iis-ftp-common.ps1"], /function Get-MpwFlattenedServiceDependencySnapshots/);
+    assert.match(source["iis-ftp-setup.ps1"], /\$serviceSnapshot = Get-MpwFtpServiceMutationSnapshot/);
+    assert.match(source["iis-ftp-control.ps1"], /\$serviceSnapshot = Get-MpwFtpServiceMutationSnapshot/);
     assert.match(source["iis-ftp-common.ps1"], /OTHER_FTP_SITES_RUNNING/);
     assert.match(source["iis-ftp-setup.ps1"], /Restore-MpwFtpServiceSnapshot -Snapshot \$serviceSnapshot/);
     assert.match(source["iis-ftp-setup.ps1"], /completedSteps = @\(\$steps\)/);
     assert.match(source["iis-ftp-setup.ps1"], /rollback = \$rollback/);
+    assert.match(source["iis-ftp-setup.ps1"], /allowSharedFtpServiceStart/);
+    assert.match(source["iis-ftp-setup.ps1"], /unrelatedAutoStartSites/);
+    assert.match(source["iis-ftp-setup.ps1"], /IIS_SHARED_FTP_SERVICE_CONFIRMATION_REQUIRED/);
+    const sharedServiceGate = source["iis-ftp-setup.ps1"].indexOf("IIS_SHARED_FTP_SERVICE_CONFIRMATION_REQUIRED");
+    const firstAccountMutation = source["iis-ftp-setup.ps1"].indexOf("$currentStage = 'configure_local_account'");
+    assert.ok(sharedServiceGate >= 0 && firstAccountMutation > sharedServiceGate,
+      "shared FTPSVC confirmation must block before account, ACL, site and firewall mutations");
     const restartGateStart = source["iis-ftp-setup.ps1"].indexOf("$currentStage = 'enable_iis_features'");
     const restartGateEnd = source["iis-ftp-setup.ps1"].indexOf("$currentStage = 'open_iis_configuration'", restartGateStart);
     assert.ok(restartGateStart >= 0 && restartGateEnd > restartGateStart);
     const restartGate = source["iis-ftp-setup.ps1"].slice(restartGateStart, restartGateEnd);
     assert.match(restartGate, /WINDOWS_RESTART_REQUIRED/);
+    assert.doesNotMatch(restartGate, /restart-pending marker requires a reboot/);
+    assert.match(restartGate, /Enable-WindowsOptionalFeature explicitly returned RestartNeeded=true/);
     assert.match(restartGate, /Write-MpwScriptResult[\s\S]*-Stage 'windows_restart_required'/);
     assert.match(restartGate, /return \(Get-MpwExitCode -Code 'WINDOWS_RESTART_REQUIRED'\)/);
     assert.match(source["iis-ftp-common.ps1"], /function Test-MpwWriteCapableFileSystemRights/);
     assert.match(source["iis-ftp-common.ps1"], /function Remove-MpwBroadDirectoryWriteAccess/);
     assert.match(source["iis-ftp-common.ps1"], /S-1-1-0[\s\S]*S-1-5-11[\s\S]*S-1-5-32-545/);
     assert.match(source["iis-ftp-common.ps1"], /function ConvertTo-MpwCanonicalDirectorySecurity/);
-    assert.match(source["iis-ftp-common.ps1"], /ConvertTo-MpwCanonicalDirectorySecurity -Acl \$acl -ProtectAccessRules \$true -IncludeInheritedRules \$true/);
+    assert.match(source["iis-ftp-common.ps1"], /New-MpwCanonicalDirectorySecurityResult -Acl \$acl -ProtectAccessRules \$true -IncludeInheritedRules \$true -RemoveBroadWriteRules \$true/);
+    assert.match(source["iis-ftp-common.ps1"], /GenericAce\]::CreateFromBinaryForm/);
+    assert.match(source["iis-ftp-common.ps1"], /Test-MpwWriteCapableAccessMask/);
+    assert.match(source["iis-ftp-common.ps1"], /FTP_ACL_UNSUPPORTED_ACE/);
+    assert.match(source["iis-ftp-common.ps1"], /function Assert-MpwPathAncestorsSafe/);
+    assert.match(source["iis-ftp-common.ps1"], /function Get-MpwFtpAuthorizationEvaluation/);
+    assert.match(source["iis-ftp-common.ps1"], /conflictingDeny/);
+    assert.match(source["iis-ftp-common.ps1"], /Get-MpwExceptionDiagnosticDetails[\s\S]*New-LocalUser/);
+    const canonicalAclHelper = source["iis-ftp-common.ps1"].match(/function ConvertTo-MpwCanonicalDirectorySecurity[\s\S]*?(?=function Grant-MpwDirectoryAccess)/)?.[0] || "";
+    assert.doesNotMatch(canonicalAclHelper, /FileSystemAccessRule\]::new/,
+      "canonical ACL rebuilding must preserve raw GENERIC access masks");
     assert.doesNotMatch(source["iis-ftp-common.ps1"], /SetAccessRuleProtection\(\$true, \$true\)/, "in-place inherited ACE conversion can create a non-canonical DACL");
+    assert.doesNotMatch(source["iis-ftp-common.ps1"], /Sort-Object -Property order/,
+      "PowerShell 5.1 must not sort OrderedDictionary ACL entries by an unresolved key");
+    assert.match(source["iis-ftp-common.ps1"], /foreach \(\$ace in @\(\$deniedAces\)\)[\s\S]*foreach \(\$ace in @\(\$allowedAces\)\)/,
+      "raw deny ACEs must be inserted before raw allow ACEs");
     assert.match(source["iis-ftp-common.ps1"], /RemoveAccessRuleSpecific\(\$rule\)/);
     assert.doesNotMatch(source["iis-ftp-common.ps1"], /RemoveAccessRuleAll/);
     assert.match(source["iis-ftp-setup.ps1"], /if \(\$allowAclTightening\)[\s\S]*Remove-MpwBroadDirectoryWriteAccess -PhysicalPath \$physicalPath/);
@@ -599,9 +1011,16 @@ exit 0
         "ftp_runtime_diagnostics_preserve_original_error",
         "windows_restart_required_terminal_gate",
         "ftpsvc_snapshot_rollback_safety",
+        "shared_ftpsvc_confirmation_gate",
+        "empty_service_dependency_collections",
+        "healthy_ftpsvc_start_is_idempotent_noop",
+        "atomic_non_sensitive_operation_progress",
         "structured_completed_steps_and_rollback",
         "explicit_acl_tightening_preserves_read_only_rules",
         "noncanonical_acl_rebuild_contract",
+        "null_dacl_and_effective_group_deny_guards",
+        "ftp_authorization_deny_evaluation",
+        "recursive_dependency_snapshot_flattening",
         "sddl_acl_snapshot_and_verified_rollback",
         "verification_failure_diff_diagnostics",
         "iis_only_guard"

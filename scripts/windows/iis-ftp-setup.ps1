@@ -1,10 +1,20 @@
 param(
     [string]$InputPath,
-    [string]$OutputPath
+    [string]$OutputPath,
+    [string]$StatusPath,
+    [string]$OperationId
 )
 
 $commonPath = Join-Path $PSScriptRoot 'iis-ftp-common.ps1'
 . $commonPath
+
+function Publish-MpwSetupProgress {
+    param(
+        [Parameter(Mandatory = $true)][string]$Action,
+        [Parameter(Mandatory = $true)][string]$Stage
+    )
+    Write-MpwOperationProgress -StatusPath $StatusPath -OperationId $OperationId -Action $Action -Stage $Stage -ScriptName 'iis-ftp-setup.ps1'
+}
 
 function Assert-MpwSetupSiteOwnership {
     param(
@@ -143,21 +153,26 @@ function Invoke-MpwIisFtpSetup {
     $targetSiteName = ''
     $confirmAdoption = $false
     $allowAclTightening = $false
+    $allowSharedFtpServiceStart = $false
     $passwordSubmitted = $false
 
     try {
         $currentStage = 'read_input'
+        Publish-MpwSetupProgress -Action $action -Stage $currentStage
         $inputObject = Read-MpwJsonInput -Path $InputPath -DeleteAfterRead
         $currentStage = 'validate_input'
-        Assert-MpwAllowedInputProperties -InputObject $inputObject -AllowedProperties @((Get-MpwCommonInputProperties) + @('password', 'targetSiteName', 'confirmAdoption', 'allowAclTightening'))
+        Publish-MpwSetupProgress -Action $action -Stage $currentStage
+        Assert-MpwAllowedInputProperties -InputObject $inputObject -AllowedProperties @((Get-MpwCommonInputProperties) + @('password', 'targetSiteName', 'confirmAdoption', 'allowAclTightening', 'allowSharedFtpServiceStart'))
         $action = Assert-MpwAction -InputObject $inputObject -AllowedActions @('setup', 'repair', 'start', 'restart', 'adopt')
         $currentStage = 'check_permissions'
+        Publish-MpwSetupProgress -Action $action -Stage $currentStage
         Assert-MpwAdministrator
         if ($env:OS -ne 'Windows_NT' -or [Environment]::OSVersion.Version.Build -lt 22000) {
             Throw-MpwFailure -Code 'UNSUPPORTED_PLATFORM' -Message 'IIS FTP management is supported only on Windows 11.'
         }
 
         $currentStage = 'validate_configuration'
+        Publish-MpwSetupProgress -Action $action -Stage $currentStage
         $options = Get-MpwNormalizedOptions -InputObject $inputObject -RequirePath
         $physicalPath = Assert-MpwPhysicalPath -PhysicalPath $options.PhysicalPath -AllowMissing
         $options.PhysicalPath = $physicalPath
@@ -166,16 +181,18 @@ function Invoke-MpwIisFtpSetup {
             $passwordSubmitted = $true
         }
         $targetSiteName = [string](Get-MpwInputValue -InputObject $inputObject -Name 'targetSiteName' -DefaultValue '')
-        foreach ($flagName in @('confirmAdoption', 'allowAclTightening')) {
+        foreach ($flagName in @('confirmAdoption', 'allowAclTightening', 'allowSharedFtpServiceStart')) {
             if (Test-MpwInputProperty -InputObject $inputObject -Name $flagName) {
                 $flagValue = Get-MpwInputValue -InputObject $inputObject -Name $flagName
                 if ($flagValue -isnot [bool]) { Throw-MpwFailure -Code 'INVALID_PARAMETER' -Message "$flagName must be a boolean." }
                 if ($flagName -eq 'confirmAdoption') { $confirmAdoption = [bool]$flagValue }
                 if ($flagName -eq 'allowAclTightening') { $allowAclTightening = [bool]$flagValue }
+                if ($flagName -eq 'allowSharedFtpServiceStart') { $allowSharedFtpServiceStart = [bool]$flagValue }
             }
         }
 
         $currentStage = 'preflight_account'
+        Publish-MpwSetupProgress -Action $action -Stage $currentStage
         $accountBefore = Get-MpwLocalAccountStatus -Username $options.Username
         if ($accountBefore.exists -eq $true -and $accountBefore.conflict -eq $true) {
             Throw-MpwFailure -Code 'FTP_ACCOUNT_CONFLICT' -Message 'The configured username is already owned by a non-managed Windows account.'
@@ -185,6 +202,7 @@ function Invoke-MpwIisFtpSetup {
         }
 
         $currentStage = 'preflight_port'
+        Publish-MpwSetupProgress -Action $action -Stage $currentStage
         $portBefore = Get-MpwPortStatus -Port $options.ControlPort -PassiveStart $options.PassivePortStart -PassiveEnd $options.PassivePortEnd
         if ($portBefore.reserved) {
             Throw-MpwFailure -Code 'FTP_CONTROL_PORT_RESERVED' -Message 'The configured FTP control port is reserved by Windows.' -Details ([ordered]@{ port = $options.ControlPort; source = 'windowsReservedPort'; reservedRange = [string]$portBefore.reservedRange; canChangePort = $true; availablePorts = @($portBefore.availablePorts); recommendation = 'Choose one of the available control ports.' })
@@ -193,10 +211,12 @@ function Invoke-MpwIisFtpSetup {
             Throw-MpwFailure -Code 'PORT_USED_BY_OTHER_PROCESS' -Message 'The configured FTP control port is owned by another process.' -Details ([ordered]@{ port = $options.ControlPort; source = 'process'; pid = $portBefore.pid; processName = [string]$portBefore.processName; canChangePort = $true; availablePorts = @($portBefore.availablePorts); recommendation = 'Do not stop the other process automatically. Choose another available control port.' })
         }
         $currentStage = 'preflight_firewall'
+        Publish-MpwSetupProgress -Action $action -Stage $currentStage
         Assert-MpwFirewallRuleUpdatesAllowed -Options $options
         [void]$steps.Add([ordered]@{ name = 'preflight'; status = 'success'; message = 'Platform, account, path, and port preflight passed.' })
 
         $currentStage = 'inspect_iis_sites'
+        Publish-MpwSetupProgress -Action $action -Stage $currentStage
         $preflightSite = $null
         $preflightSiteIdentity = $null
         $preflightSiteState = 'Unknown'
@@ -210,7 +230,7 @@ function Invoke-MpwIisFtpSetup {
         }
         catch {
             $preflightError = ConvertTo-MpwSafeException -ErrorRecord $_
-            if ($preflightError.code -ne 'IIS_FTP_NOT_INSTALLED') { throw }
+            if ($preflightError.code -notin @('IIS_FTP_NOT_INSTALLED', 'IIS_MANAGEMENT_API_NOT_READY', 'IIS_CONFIGURATION_NOT_READY')) { throw }
         }
         finally {
             if ($null -ne $preflightManager) {
@@ -220,12 +240,17 @@ function Invoke-MpwIisFtpSetup {
         }
 
         $featureSnapshot = @(Get-MpwWindowsFeaturesStatus)
-        $serviceSnapshot = Get-MpwFtpServiceStatus
+        $serviceSnapshot = Get-MpwFtpServiceMutationSnapshot
+        $restartPendingSnapshot = Get-MpwWindowsRestartPendingStatus
+        $initializationBefore = Get-MpwIisInitializationReadiness -Features $featureSnapshot -RestartPending $restartPendingSnapshot -Service $serviceSnapshot
         $aclBefore = Get-MpwDirectoryAclStatus -PhysicalPath $physicalPath -Username $options.Username
-        $featureMissing = @($featureSnapshot | Where-Object { $_.state -eq 'Disabled' }).Count -gt 0
+        $featureMissing = @($featureSnapshot | Where-Object {
+            $state = [string]$_.state
+            $state -notin @('Enabled', 'Unavailable', 'unknown') -and $state -notmatch 'Pending$'
+        }).Count -gt 0
         $featureUnknown = @($featureSnapshot | Where-Object { $_.state -eq 'unknown' }).Count -gt 0
         $planItems = [Collections.Generic.List[object]]::new()
-        [void]$planItems.Add((New-MpwProvisioningPlanItem -Id 'windows-features' -Resource 'windows_feature' -Status $(if ($featureMissing) { 'create' } elseif ($featureUnknown) { 'repair' } else { 'already_ok' }) -Reason 'Required IIS FTP Windows features are reconciled before site changes.'))
+        [void]$planItems.Add((New-MpwProvisioningPlanItem -Id 'windows-features' -Resource 'windows_feature' -Status $(if ($featureMissing) { 'create' } elseif ($featureUnknown) { 'repair' } else { 'already_ok' }) -Reason "Required IIS FTP Windows features and first-run initialization are reconciled from state $($initializationBefore.state) before site changes."))
         [void]$planItems.Add((New-MpwProvisioningPlanItem -Id 'directory' -Resource 'directory' -Status $(if ([IO.Directory]::Exists($physicalPath)) { 'already_ok' } else { 'create' }) -Reason 'The event 原图/相机FTP directory is the final upload and original location.'))
         [void]$planItems.Add((New-MpwProvisioningPlanItem -Id 'account' -Resource 'account' -Status $(if ($accountBefore.exists -eq $false) { 'create' } elseif ($accountBefore.enabled -ne $true) { 'repair' } else { 'already_ok' }) -Reason 'Only the account carrying the workbench management marker is changed.'))
         [void]$planItems.Add((New-MpwProvisioningPlanItem -Id 'iis-site' -Resource 'iis_site' -Status $(if ($null -eq $preflightSite) { 'create' } elseif ($action -eq 'adopt') { 'update' } else { 'repair' }) -Reason 'The managed site is resolved by Site ID before its display name.'))
@@ -243,7 +268,9 @@ function Invoke-MpwIisFtpSetup {
             inspectionLevel = 'full'
             platform = [ordered]@{ supported = $true; version = [Environment]::OSVersion.Version.ToString() }
             windowsFeatures = $featureSnapshot
+            initialization = $initializationBefore
             service = $serviceSnapshot
+            serviceDependencies = @(Get-MpwInputValue -InputObject $serviceSnapshot -Name 'dependencies' -DefaultValue @())
             account = $accountBefore
             port = $portBefore
             directory = [ordered]@{ path = $physicalPath; exists = [IO.Directory]::Exists($physicalPath); acl = $aclBefore }
@@ -259,13 +286,14 @@ function Invoke-MpwIisFtpSetup {
         }
 
         $currentStage = 'enable_iis_features'
-        $featureResult = Enable-MpwRequiredWindowsFeatures
+        Publish-MpwSetupProgress -Action $action -Stage $currentStage
+        $featureResult = Enable-MpwRequiredWindowsFeatures -CurrentFeatures $featureSnapshot
         if ($featureResult.restartRequired) {
             [void]$steps.Add([ordered]@{ name = 'windowsFeatures'; status = 'restart_required'; message = 'Windows enabled an IIS FTP feature and requires a restart before configuration can continue.' })
             $restartError = [ordered]@{
                 code = 'WINDOWS_RESTART_REQUIRED'
                 message = 'Windows must restart before IIS FTP configuration can continue.'
-                technicalMessage = 'Enable-WindowsOptionalFeature returned RestartNeeded=true. No IIS site, account, ACL, firewall, or FTPSVC changes were attempted after that result.'
+                technicalMessage = 'A required IIS feature is in a Pending state, or Enable-WindowsOptionalFeature explicitly returned RestartNeeded=true. No IIS site, account, ACL, firewall, or FTPSVC changes were attempted after that result.'
                 exceptionType = ''
                 command = 'Enable-WindowsOptionalFeature'
                 details = [ordered]@{
@@ -273,6 +301,7 @@ function Invoke-MpwIisFtpSetup {
                     restartFeature = [string]$featureResult.restartFeature
                     enabledFeatures = @($featureResult.enabledFeatures)
                     remainingFeatures = @($featureResult.remainingFeatures)
+                    restartPending = Get-MpwInputValue -InputObject $featureResult -Name 'restartPending' -DefaultValue ([ordered]@{ pending = $false; iisRequired = $true; reasons = @() })
                     recommendation = 'Restart Windows, reopen the workbench, and run the same setup action again.'
                 }
             }
@@ -304,11 +333,48 @@ function Invoke-MpwIisFtpSetup {
         }
         [void]$steps.Add([ordered]@{ name = 'windowsFeatures'; status = 'success'; message = 'Required IIS FTP feature state was reconciled.' })
 
+        $currentStage = 'wait_iis_initialization'
+        Publish-MpwSetupProgress -Action $action -Stage $currentStage
+        $initializationAfter = Wait-MpwIisInitializationReady -TimeoutMilliseconds 30000 -StartRequiredDependencies $true
+        if ([bool](Get-MpwInputValue -InputObject $initializationAfter.initializationDependencies -Name 'attempted' -DefaultValue $false)) {
+            $serviceMutationAttempted = $true
+        }
+        [void]$steps.Add([ordered]@{
+            name = 'iisInitialization'
+            status = 'success'
+            message = "IIS management configuration and FTPSVC registration are ready; runtime state is $($initializationAfter.state)."
+            initializationState = [string]$initializationAfter.state
+            serviceDependencies = @($initializationAfter.serviceDependencies)
+        })
+
         $currentStage = 'open_iis_configuration'
+        Publish-MpwSetupProgress -Action $action -Stage $currentStage
         $manager = Open-MpwServerManager
         $site = Assert-MpwSetupSiteOwnership -Manager $manager -Options $options -Action $action -TargetSiteName $targetSiteName -ConfirmAdoption $confirmAdoption
+        if ($null -ne $site) {
+            $authorizationBefore = Get-MpwFtpAuthorizationEvaluation -Rules @((Get-MpwFtpSiteModel -Manager $manager -Site $site).authorization) -Username $options.Username
+            if ($authorizationBefore.conflictingDeny) {
+                Throw-MpwFailure -Code 'FTP_AUTHORIZATION_MISMATCH' -Message 'The IIS FTP site contains a Deny authorization rule that applies to the managed FTP account.' -Details ([ordered]@{
+                    username = $options.Username
+                    conflicts = @($authorizationBefore.conflicts)
+                    recommendation = 'Review and remove or narrow the conflicting IIS FTP Deny rule before retrying. The workbench will not delete unrelated authorization rules automatically.'
+                })
+            }
+        }
+        $resolvedTargetId = if ($null -ne $site) { [long]$site.Id } else { 0 }
+        $unrelatedAutoStartSites = @(Get-MpwFtpSites -Manager $manager | Where-Object {
+            [bool](Get-MpwInputValue -InputObject $_ -Name 'serverAutoStart' -DefaultValue $false) -and
+            ($resolvedTargetId -le 0 -or [long]$_.id -ne $resolvedTargetId)
+        })
+        if ($serviceSnapshot.running -ne $true -and $unrelatedAutoStartSites.Count -gt 0 -and -not $allowSharedFtpServiceStart) {
+            Throw-MpwFailure -Code 'IIS_SHARED_FTP_SERVICE_CONFIRMATION_REQUIRED' -Message 'Starting FTPSVC may also activate unrelated IIS FTP sites that use serverAutoStart.' -Details ([ordered]@{
+                sites = @($unrelatedAutoStartSites | ForEach-Object { [ordered]@{ id = [long]$_.id; name = [string]$_.name; state = [string]$_.state } })
+                recommendation = 'Review these sites and explicitly confirm starting the shared Microsoft FTP Service.'
+            })
+        }
 
         $currentStage = 'prepare_receive_directory'
+        Publish-MpwSetupProgress -Action $action -Stage $currentStage
         if ([IO.Directory]::Exists($physicalPath)) {
             $aclSnapshot = Get-MpwDirectoryAclSnapshot -PhysicalPath $physicalPath
         }
@@ -321,11 +387,13 @@ function Invoke-MpwIisFtpSetup {
         }
 
         $currentStage = 'configure_local_account'
+        Publish-MpwSetupProgress -Action $action -Stage $currentStage
         $accountResult = Ensure-MpwManagedLocalAccount -Username $options.Username -Password $password
         $password = $null
         [void]$steps.Add([ordered]@{ name = 'account'; status = 'success'; message = 'The managed local FTP account is ready.' })
 
         $currentStage = 'configure_directory_acl'
+        Publish-MpwSetupProgress -Action $action -Stage $currentStage
         $aclGrantResult = Grant-MpwDirectoryAccess -PhysicalPath $physicalPath -Username $options.Username
         [void]$steps.Add([ordered]@{
             name = 'acl'
@@ -336,6 +404,7 @@ function Invoke-MpwIisFtpSetup {
         })
         if ($allowAclTightening) {
             $currentStage = 'tighten_directory_acl'
+            Publish-MpwSetupProgress -Action $action -Stage $currentStage
             $aclTighteningResult = Remove-MpwBroadDirectoryWriteAccess -PhysicalPath $physicalPath
             [void]$steps.Add([ordered]@{
                 name = 'aclTightening'
@@ -346,6 +415,7 @@ function Invoke-MpwIisFtpSetup {
         }
 
         $currentStage = 'configure_iis_site'
+        Publish-MpwSetupProgress -Action $action -Stage $currentStage
         if ($null -eq $site) {
             try {
                 $site = $manager.Sites.Add($options.SiteName, 'ftp', $options.Binding, $physicalPath)
@@ -361,11 +431,14 @@ function Invoke-MpwIisFtpSetup {
             if ($siteWasStarted) { Stop-MpwSite -Site $site }
         }
         $currentStage = 'configure_iis_site'
+        Publish-MpwSetupProgress -Action $action -Stage $currentStage
         $passiveSnapshot = Get-MpwGlobalPassivePorts -Manager $manager
         Set-MpwFtpSiteConfiguration -Manager $manager -Site $site -PhysicalPath $physicalPath -Username $options.Username -Binding $options.Binding
         $currentStage = 'configure_passive_ports'
+        Publish-MpwSetupProgress -Action $action -Stage $currentStage
         Set-MpwGlobalPassivePorts -Manager $manager -Start $options.PassivePortStart -End $options.PassivePortEnd
         $currentStage = 'commit_iis_configuration'
+        Publish-MpwSetupProgress -Action $action -Stage $currentStage
         $commitAttempted = $true
         $manager.CommitChanges()
         $committedSite = $manager.Sites[$options.SiteName]
@@ -377,17 +450,21 @@ function Invoke-MpwIisFtpSetup {
         [void]$steps.Add([ordered]@{ name = 'site'; status = 'success'; message = 'The IIS FTP site, wildcard binding, authentication, authorization, SSL policy, and passive ports are configured.' })
 
         $currentStage = 'configure_firewall'
+        Publish-MpwSetupProgress -Action $action -Stage $currentStage
         $controlFirewallResult = Ensure-MpwFirewallRule -Kind control -DisplayName $options.FirewallControlRuleName -LocalPort ([string]$options.ControlPort) -AllowLegacyRuleUpdate $options.AllowLegacyFirewallRuleUpdate
         $passiveFirewallResult = Ensure-MpwFirewallRule -Kind passive -DisplayName $options.FirewallPassiveRuleName -LocalPort "$($options.PassivePortStart)-$($options.PassivePortEnd)" -AllowLegacyRuleUpdate $options.AllowLegacyFirewallRuleUpdate
         [void]$steps.Add([ordered]@{ name = 'firewall'; status = 'success'; message = 'Windows Firewall allows FTP control and passive traffic from LocalSubnet.' })
 
         $currentStage = 'start_ftp_service'
+        Publish-MpwSetupProgress -Action $action -Stage $currentStage
         $serviceMutationAttempted = $true
         Start-MpwFtpService
         $currentStage = 'start_ftp_site'
+        Publish-MpwSetupProgress -Action $action -Stage $currentStage
         Start-MpwSite -Site $site
         $currentStage = 'verify_ftp_listener'
-        $listener = Wait-MpwPortListener -Port $options.ControlPort -PassiveStart $options.PassivePortStart -PassiveEnd $options.PassivePortEnd -TimeoutMilliseconds 15000
+        Publish-MpwSetupProgress -Action $action -Stage $currentStage
+        $listener = Wait-MpwPortListener -Port $options.ControlPort -PassiveStart $options.PassivePortStart -PassiveEnd $options.PassivePortEnd -TimeoutMilliseconds $script:MpwFtpListenerTimeoutMilliseconds
         if (-not $listener.listening -or $listener.usedByOtherProcess) {
             Throw-MpwFailure -Code 'IIS_FTP_LISTENER_START_FAILED' -Message 'The IIS FTP site started but did not produce the expected Microsoft FTP Service listener.' -Command 'Get-NetTCPConnection' -Details ([ordered]@{
                 port = $options.ControlPort
@@ -396,15 +473,17 @@ function Invoke-MpwIisFtpSetup {
                 listening = [bool]$listener.listening
                 pid = $listener.pid
                 processName = [string]$listener.processName
-                technicalMessage = 'The configured control port did not become an FTPSVC listener within 15 seconds.'
+                technicalMessage = "The configured control port did not become an FTPSVC listener within $([int]($script:MpwFtpListenerTimeoutMilliseconds / 1000)) seconds."
             })
         }
         [void]$steps.Add([ordered]@{ name = 'start'; status = 'success'; message = 'Microsoft FTP Service and the IIS FTP site are running.' })
 
         $currentStage = 'verify_configuration'
+        Publish-MpwSetupProgress -Action $action -Stage $currentStage
         $siteAfter = Get-MpwFtpSiteModel -Manager $manager -Site $site
         $aclAfter = Get-MpwDirectoryAclStatus -PhysicalPath $physicalPath -Username $options.Username
-        $authorizationOk = @($siteAfter.authorization | Where-Object { $_.accessType -eq 'Allow' -and $_.users -eq $options.Username -and $_.permissions -match 'Read' -and $_.permissions -match 'Write' }).Count -gt 0
+        $authorizationEvaluation = Get-MpwFtpAuthorizationEvaluation -Rules @($siteAfter.authorization) -Username $options.Username
+        $authorizationOk = [bool]$authorizationEvaluation.correct
         $bindingOk = @($siteAfter.bindings | Where-Object { $_.protocol -eq 'ftp' -and $_.bindingInformation -eq $options.Binding }).Count -eq 1
         $expectedPhysicalPath = $physicalPath.TrimEnd('\')
         $actualPhysicalPath = [IO.Path]::GetFullPath([string]$siteAfter.physicalPath).TrimEnd('\')
@@ -417,7 +496,7 @@ function Invoke-MpwIisFtpSetup {
             (New-MpwVerificationCheck -Id 'anonymousDisabled' -Code 'IIS_AUTH_CONFIGURATION_MISMATCH' -Passed (-not [bool]$siteAfter.authentication.anonymousEnabled) -Expected $false -Actual ([bool]$siteAfter.authentication.anonymousEnabled)),
             (New-MpwVerificationCheck -Id 'sslControlPolicy' -Code 'IIS_AUTH_CONFIGURATION_MISMATCH' -Passed ([string]$siteAfter.ssl.controlChannelPolicy -eq 'SslAllow') -Expected 'SslAllow' -Actual ([ordered]@{ normalized = [string]$siteAfter.ssl.controlChannelPolicy; raw = [string]$siteAfter.ssl.rawControlChannelPolicy })),
             (New-MpwVerificationCheck -Id 'sslDataPolicy' -Code 'IIS_AUTH_CONFIGURATION_MISMATCH' -Passed ([string]$siteAfter.ssl.dataChannelPolicy -eq 'SslAllow') -Expected 'SslAllow' -Actual ([ordered]@{ normalized = [string]$siteAfter.ssl.dataChannelPolicy; raw = [string]$siteAfter.ssl.rawDataChannelPolicy })),
-            (New-MpwVerificationCheck -Id 'authorization' -Code 'FTP_AUTHORIZATION_MISMATCH' -Passed ([bool]$authorizationOk) -Expected ([ordered]@{ username = [string]$options.Username; accessType = 'Allow'; permissions = 'Read, Write' }) -Actual @($siteAfter.authorization)),
+            (New-MpwVerificationCheck -Id 'authorization' -Code 'FTP_AUTHORIZATION_MISMATCH' -Passed ([bool]$authorizationOk) -Expected ([ordered]@{ username = [string]$options.Username; accessType = 'Allow'; permissions = 'Read, Write'; conflictingDeny = $false }) -Actual ([ordered]@{ rules = @($siteAfter.authorization); evaluation = $authorizationEvaluation })),
             (New-MpwVerificationCheck -Id 'aclReadWrite' -Code 'FTP_ACCOUNT_PERMISSION_FAILED' -Passed ($aclAfter.readWriteAllowed -eq $true) -Expected $true -Actual $aclAfter),
             (New-MpwVerificationCheck -Id 'aclCanonical' -Code 'FTP_DIRECTORY_ACL_NONCANONICAL' -Passed ([bool]$aclDiagnosticsAfter.canonical) -Expected $true -Actual ([bool]$aclDiagnosticsAfter.canonical)),
             (New-MpwVerificationCheck -Id 'aclTightening' -Code 'FTP_DIRECTORY_ACL_TIGHTENING_MISMATCH' -Passed (-not $allowAclTightening -or $aclAfter.broadInheritedAccess -ne $true) -Expected (-not $allowAclTightening) -Actual ([bool]$aclAfter.broadInheritedAccess))
@@ -517,6 +596,7 @@ function Invoke-MpwIisFtpSetup {
             rollback = [ordered]@{ attempted = $false; status = 'not_required'; succeeded = $null; items = @(); warnings = @() }
         }
         $currentStage = 'completed'
+        Publish-MpwSetupProgress -Action $action -Stage $currentStage
         Write-MpwScriptResult -OutputPath $OutputPath -Action $action -Ok $true -Stage $currentStage -SiteName $options.SiteName -Data $data -Warnings @($warnings)
         return 0
     }

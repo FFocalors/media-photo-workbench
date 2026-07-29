@@ -1,7 +1,7 @@
 import { spawn } from "child_process";
 import fs from "fs-extra";
 import path from "path";
-import { getConfig, saveConfig, type CameraFtpConfig } from "../config/config";
+import { getConfig, saveConfig, type CameraFtpConfig, type CameraFtpPendingProvisioning } from "../config/config";
 import { getDatabase } from "../db/database";
 import { getWindowsNetworkAddresses, type WindowsNetworkAddresses } from "../utils/windowsNetworkAddresses";
 import { safeLog } from "../utils/logger";
@@ -75,6 +75,14 @@ export interface CameraFtpStatus {
   platform: IisFtpSystemStatus["platform"];
   windowsFeatures: IisFtpSystemStatus["windowsFeatures"];
   service: IisFtpSystemStatus["service"];
+  serviceDependencies: IisFtpSystemStatus["serviceDependencies"];
+  unrelatedAutoStartSites: IisFtpSystemStatus["unrelatedAutoStartSites"];
+  initializationState: IisFtpSystemStatus["initializationState"];
+  resumeState: IisFtpSystemStatus["resumeState"];
+  completedStages: string[];
+  nextStage: string;
+  safeToRetry: boolean;
+  pendingProvisioning: CameraFtpPendingProvisioning | null;
   site: IisFtpSystemStatus["site"];
   binding: IisFtpSystemStatus["binding"];
   authentication: IisFtpSystemStatus["authentication"];
@@ -145,6 +153,55 @@ export interface CameraFtpProvisioningPlanRequest {
   passivePortEnd: number;
   targetSiteName?: string;
   targetSiteId?: number | null;
+}
+
+function persistPendingProvisioningForRestart(
+  error: any,
+  pending: CameraFtpPendingProvisioning
+): boolean {
+  if (!["WINDOWS_RESTART_REQUIRED", "ELEVATED_SCRIPT_TIMEOUT", "ELEVATED_STATE_UNKNOWN"].includes(error?.code)) {
+    return false;
+  }
+  const current = getConfig().cameraFtp;
+  saveConfig({
+    cameraFtp: {
+      ...current,
+      pendingProvisioning: pending
+    }
+  });
+  safeLog("info", {
+    action: pending.action,
+    eventId: pending.eventId,
+    controlPort: pending.controlPort,
+    passivePortStart: pending.passivePortStart,
+    passivePortEnd: pending.passivePortEnd
+  }, error?.code === "WINDOWS_RESTART_REQUIRED"
+    ? "Windows 重启后继续的 IIS FTP 配置目标已保存（不含密码）"
+    : "管理员操作状态不确定；已保存重新检测后继续的 IIS FTP 配置目标（不含密码）");
+  return true;
+}
+
+function newPendingProvisioning(
+  action: CameraFtpPendingProvisioning["action"],
+  input: {
+    eventId: string;
+    username: string;
+    controlPort: number;
+    passivePortStart: number;
+    passivePortEnd: number;
+    targetSiteName?: string;
+  }
+): CameraFtpPendingProvisioning {
+  return {
+    action,
+    eventId: input.eventId,
+    username: input.username,
+    controlPort: input.controlPort,
+    passivePortStart: input.passivePortStart,
+    passivePortEnd: input.passivePortEnd,
+    targetSiteName: input.targetSiteName || "",
+    createdAt: new Date().toISOString()
+  };
 }
 
 export class CameraFtpSwitchLock {
@@ -299,6 +356,22 @@ export function resolveCameraFtpReceivePath(repositoryPath: string, eventSlug: s
     throw Object.assign(new Error("请先配置图片仓库路径。"), { code: "REPOSITORY_NOT_READY" });
   }
   return getEventWorkspacePaths(repositoryPath, eventSlug).cameraFtpReceiveDir;
+}
+
+export function resolveCameraFtpSwitchSnapshotFallbackPath(input: {
+  watcherDirectory?: string;
+  repositoryPath: string;
+  oldEvent?: Pick<EventRow, "slug">;
+}): string {
+  const watcherDirectory = input.watcherDirectory?.trim() || "";
+  if (watcherDirectory) return watcherDirectory;
+  if (input.oldEvent && input.repositoryPath) {
+    return resolveCameraFtpReceivePath(input.repositoryPath, input.oldEvent.slug);
+  }
+  // Status inspection and elevated IIS inspection can recover the authoritative
+  // physicalPath from the managed Site ID. A deleted old event must not block
+  // taking that site snapshot before switching to a valid target event.
+  return "";
 }
 
 function eventFtpPath(event: EventRow): string {
@@ -628,6 +701,16 @@ export class CameraFtpOrchestrator {
     return this.buildStatus(getConfig().cameraFtp, options);
   }
 
+  async clearPendingProvisioning(): Promise<CameraFtpStatus> {
+    const config = getConfig().cameraFtp;
+    if (!config.pendingProvisioning) return this.buildStatus(config);
+    const nextConfig = saveConfig({
+      cameraFtp: { ...config, pendingProvisioning: null }
+    }).cameraFtp;
+    safeLog("info", { previousAction: config.pendingProvisioning.action }, "已清除待继续的 IIS FTP 配置目标；未修改 Windows 或 IIS");
+    return this.buildStatus(nextConfig, { forceSystemRefresh: true });
+  }
+
   /**
    * Read-only phase of the provisioning transaction.  It deliberately does
    * not create the receive directory, start the watcher, save config, or ask
@@ -742,6 +825,11 @@ export class CameraFtpOrchestrator {
       ...(config.activeEventId && !activeEvent ? ["保存的 FTP 接收活动已不存在，请重新选择。"] : []),
       ...(activeEvent && !["draft", "active", "reviewing"].includes(activeEvent.status)
         ? ["保存的 FTP 接收活动当前不可接收文件，请切换活动。"]
+        : []),
+      ...(config.pendingProvisioning
+        ? [system.initializationState === "restart_pending"
+            ? "IIS FTP 配置正在等待 Windows 重启，重启后可继续。"
+            : "存在未完成的 IIS FTP 配置目标，请重新输入密码并继续配置。"]
         : [])
     ]));
     const initialized = config.accountManaged && config.managedSiteId > 0;
@@ -759,6 +847,20 @@ export class CameraFtpOrchestrator {
       platform: system.platform,
       windowsFeatures: system.windowsFeatures,
       service: system.service,
+      serviceDependencies: system.serviceDependencies,
+      unrelatedAutoStartSites: system.unrelatedAutoStartSites,
+      initializationState: system.initializationState,
+      resumeState: config.pendingProvisioning
+        ? (system.initializationState === "blocked"
+            ? "blocked"
+            : system.initializationState === "restart_pending"
+              ? "restart_required"
+              : "ready_to_continue")
+        : system.resumeState,
+      completedStages: system.completedStages,
+      nextStage: system.nextStage,
+      safeToRetry: system.safeToRetry,
+      pendingProvisioning: config.pendingProvisioning,
       site: system.site,
       binding: system.binding,
       authentication: system.authentication,
@@ -846,6 +948,7 @@ export class CameraFtpOrchestrator {
     passivePortEnd: number;
     allowLegacyFirewallRuleUpdate?: boolean;
     allowAclTightening?: boolean;
+    allowSharedFtpServiceStart?: boolean;
   }): Promise<CameraFtpOperationResponse> {
     return this.switchLock.runExclusive(() => this.setupUnlocked(input));
   }
@@ -860,6 +963,7 @@ export class CameraFtpOrchestrator {
     passivePortEnd: number;
     allowLegacyFirewallRuleUpdate?: boolean;
     allowAclTightening?: boolean;
+    allowSharedFtpServiceStart?: boolean;
   }): Promise<CameraFtpOperationResponse> {
     this.setBaseUrl(input.baseUrl);
     const config = getConfig().cameraFtp;
@@ -890,7 +994,8 @@ export class CameraFtpOrchestrator {
         physicalPath: ftpPath,
         password: input.password,
         allowLegacyFirewallRuleUpdate: input.allowLegacyFirewallRuleUpdate === true,
-        allowAclTightening: input.allowAclTightening === true
+        allowAclTightening: input.allowAclTightening === true,
+        allowSharedFtpServiceStart: input.allowSharedFtpServiceStart === true
       });
       const actualSiteName = result.systemStatus?.site.name || setupConfig.siteName;
       const nextConfig: CameraFtpConfig = {
@@ -898,7 +1003,8 @@ export class CameraFtpOrchestrator {
         siteName: actualSiteName,
         managedSiteId: result.systemStatus?.site.id || config.managedSiteId,
         accountManaged: true,
-        passwordResetRequired: false
+        passwordResetRequired: false,
+        pendingProvisioning: null
       };
       await this.commitProvisioningNodeState({
         previousConfig: config,
@@ -920,6 +1026,13 @@ export class CameraFtpOrchestrator {
       });
       return { operation: managerOperation(result, "setup"), status: await this.buildStatus(nextConfig, { systemStatus: result.systemStatus }) };
     } catch (error: any) {
+      persistPendingProvisioningForRestart(error, newPendingProvisioning("setup", {
+        eventId: event.id,
+        username: input.username.trim(),
+        controlPort: input.controlPort,
+        passivePortStart: input.passivePortStart,
+        passivePortEnd: input.passivePortEnd
+      }));
       if (oldWatcherStopped) {
         try {
           await restoreCameraFtpWatcherSnapshot(watcherSnapshot, "setup_system_rollback");
@@ -945,6 +1058,7 @@ export class CameraFtpOrchestrator {
     passivePortEnd: number;
     allowLegacyFirewallRuleUpdate?: boolean;
     allowAclTightening?: boolean;
+    allowSharedFtpServiceStart?: boolean;
   }): Promise<CameraFtpOperationResponse> {
     return this.switchLock.runExclusive(() => this.repairUnlocked(input));
   }
@@ -957,6 +1071,7 @@ export class CameraFtpOrchestrator {
     passivePortEnd: number;
     allowLegacyFirewallRuleUpdate?: boolean;
     allowAclTightening?: boolean;
+    allowSharedFtpServiceStart?: boolean;
   }): Promise<CameraFtpOperationResponse> {
     this.setBaseUrl(input.baseUrl);
     const config = getConfig().cameraFtp;
@@ -972,18 +1087,32 @@ export class CameraFtpOrchestrator {
       passivePortStart: input.passivePortStart,
       passivePortEnd: input.passivePortEnd
     };
-    const result = await this.manager.repair({
-      config: repairConfig,
-      physicalPath: ftpPath,
-      password: input.password,
-      allowLegacyFirewallRuleUpdate: input.allowLegacyFirewallRuleUpdate === true,
-      allowAclTightening: input.allowAclTightening === true
-    });
+    let result: IisFtpActionResult;
+    try {
+      result = await this.manager.repair({
+        config: repairConfig,
+        physicalPath: ftpPath,
+        password: input.password,
+        allowLegacyFirewallRuleUpdate: input.allowLegacyFirewallRuleUpdate === true,
+        allowAclTightening: input.allowAclTightening === true,
+        allowSharedFtpServiceStart: input.allowSharedFtpServiceStart === true
+      });
+    } catch (error: any) {
+      persistPendingProvisioningForRestart(error, newPendingProvisioning("repair", {
+        eventId: event.id,
+        username: config.username,
+        controlPort: input.controlPort,
+        passivePortStart: input.passivePortStart,
+        passivePortEnd: input.passivePortEnd
+      }));
+      throw error;
+    }
     const nextConfig: CameraFtpConfig = {
       ...repairConfig,
       managedSiteId: result.systemStatus?.site.id || config.managedSiteId,
       accountManaged: Boolean(input.password) || result.systemStatus?.account.managed === true || config.accountManaged,
-      passwordResetRequired: input.password ? false : config.passwordResetRequired
+      passwordResetRequired: input.password ? false : config.passwordResetRequired,
+      pendingProvisioning: null
     };
     await this.commitProvisioningNodeState({
       previousConfig: config,
@@ -1015,6 +1144,7 @@ export class CameraFtpOrchestrator {
     passivePortEnd: number;
     allowLegacyFirewallRuleUpdate?: boolean;
     allowAclTightening?: boolean;
+    allowSharedFtpServiceStart?: boolean;
   }): Promise<CameraFtpOperationResponse> {
     return this.switchLock.runExclusive(() => this.adoptSiteUnlocked(input));
   }
@@ -1067,6 +1197,7 @@ export class CameraFtpOrchestrator {
     passivePortEnd: number;
     allowLegacyFirewallRuleUpdate?: boolean;
     allowAclTightening?: boolean;
+    allowSharedFtpServiceStart?: boolean;
   }): Promise<CameraFtpOperationResponse> {
     this.setBaseUrl(input.baseUrl);
     const config = getConfig().cameraFtp;
@@ -1084,21 +1215,36 @@ export class CameraFtpOrchestrator {
       passivePortStart: input.passivePortStart,
       passivePortEnd: input.passivePortEnd
     };
-    const result = await this.manager.adoptSite({
-      config: adoptionConfig,
-      physicalPath: ftpPath,
-      targetSiteName: input.siteName,
-      password: input.password,
-      allowLegacyFirewallRuleUpdate: input.allowLegacyFirewallRuleUpdate === true,
-      allowAclTightening: input.allowAclTightening === true
-    });
+    let result: IisFtpActionResult;
+    try {
+      result = await this.manager.adoptSite({
+        config: adoptionConfig,
+        physicalPath: ftpPath,
+        targetSiteName: input.siteName,
+        password: input.password,
+        allowLegacyFirewallRuleUpdate: input.allowLegacyFirewallRuleUpdate === true,
+        allowAclTightening: input.allowAclTightening === true,
+        allowSharedFtpServiceStart: input.allowSharedFtpServiceStart === true
+      });
+    } catch (error: any) {
+      persistPendingProvisioningForRestart(error, newPendingProvisioning("adopt", {
+        eventId: event.id,
+        username,
+        controlPort: input.controlPort,
+        passivePortStart: input.passivePortStart,
+        passivePortEnd: input.passivePortEnd,
+        targetSiteName: input.siteName.trim()
+      }));
+      throw error;
+    }
     const actualSiteName = result.systemStatus?.site.name || input.siteName.trim();
     const nextConfig: CameraFtpConfig = {
       ...adoptionConfig,
       siteName: actualSiteName,
       managedSiteId: result.systemStatus?.site.id || 0,
       accountManaged: Boolean(input.password) || result.systemStatus?.account.managed === true || config.accountManaged,
-      passwordResetRequired: input.password ? false : config.passwordResetRequired
+      passwordResetRequired: input.password ? false : config.passwordResetRequired,
+      pendingProvisioning: null
     };
     await this.commitProvisioningNodeState({
       previousConfig: config,
@@ -1153,11 +1299,11 @@ export class CameraFtpOrchestrator {
     };
   }
 
-  async start(input: { baseUrl: string; allowAclTightening?: boolean }): Promise<CameraFtpOperationResponse> {
+  async start(input: { baseUrl: string; allowAclTightening?: boolean; allowSharedFtpServiceStart?: boolean }): Promise<CameraFtpOperationResponse> {
     return this.switchLock.runExclusive(() => this.startUnlocked(input));
   }
 
-  private async startUnlocked(input: { baseUrl: string; allowAclTightening?: boolean }): Promise<CameraFtpOperationResponse> {
+  private async startUnlocked(input: { baseUrl: string; allowAclTightening?: boolean; allowSharedFtpServiceStart?: boolean }): Promise<CameraFtpOperationResponse> {
     this.setBaseUrl(input.baseUrl);
     const config = getConfig().cameraFtp;
     assertCameraFtpInitialized(config, { requirePassword: true });
@@ -1168,12 +1314,27 @@ export class CameraFtpOrchestrator {
     try {
       // Manager start is a full provisioning reconcile, not a blind runtime
       // toggle. Keep the old watcher intact until IIS has passed verification.
-      const result = await this.manager.start({ config, physicalPath: ftpPath, allowAclTightening: input.allowAclTightening === true });
+      const result = await this.manager.start({
+        config,
+        physicalPath: ftpPath,
+        allowAclTightening: input.allowAclTightening === true,
+        allowSharedFtpServiceStart: input.allowSharedFtpServiceStart === true
+      });
       await startCameraFtpWatcher(watcherContext(event, ftpPath, this.baseUrl));
+      const nextConfig = config.pendingProvisioning
+        ? saveConfig({ cameraFtp: { ...config, pendingProvisioning: null } }).cameraFtp
+        : config;
       this.lastKnownManagedSiteStarted = result.systemStatus?.site.started ?? true;
       writeOperationLog(event.id, "camera_ftp_iis_started", { site_name: config.siteName });
-      return { operation: managerOperation(result, "start"), status: await this.buildStatus(config, { systemStatus: result.systemStatus }) };
+      return { operation: managerOperation(result, "start"), status: await this.buildStatus(nextConfig, { systemStatus: result.systemStatus }) };
     } catch (error: any) {
+      persistPendingProvisioningForRestart(error, newPendingProvisioning("start", {
+        eventId: event.id,
+        username: config.username,
+        controlPort: config.controlPort,
+        passivePortStart: config.passivePortStart,
+        passivePortEnd: config.passivePortEnd
+      }));
       this.lastKnownManagedSiteStarted = previousLastKnownStarted;
       try {
         await restoreCameraFtpWatcherSnapshot(watcherSnapshot, "start_reconcile_rollback");
@@ -1200,24 +1361,51 @@ export class CameraFtpOrchestrator {
   private async stopUnlocked(): Promise<CameraFtpOperationResponse> {
     const config = getConfig().cameraFtp;
     assertCameraFtpInitialized(config);
-    const event = allowedEvent(config.activeEventId);
-    const ftpPath = eventFtpPath(event);
+    const event = config.activeEventId ? getEventById(config.activeEventId) : undefined;
+    const ftpPath = event && getConfig().repository.path ? eventFtpPath(event) : "";
     const result = await this.manager.stop({ config, physicalPath: ftpPath });
     this.lastKnownManagedSiteStarted = false;
     // The watcher intentionally remains active so already-landed files can
     // finish stability checks and import while IIS is stopped.
-    writeOperationLog(event.id, "camera_ftp_iis_stopped", { site_name: config.siteName });
+    if (event) {
+      writeOperationLog(event.id, "camera_ftp_iis_stopped", { site_name: config.siteName });
+    } else {
+      safeLog("info", {
+        configuredEventIdPresent: Boolean(config.activeEventId),
+        siteName: config.siteName
+      }, "接收活动缺失时已停止工作台管理的 IIS FTP 站点");
+    }
     return { operation: managerOperation(result, "stop"), status: await this.buildStatus(config, { systemStatus: result.systemStatus }) };
   }
 
-  async restart(input: { baseUrl: string; allowAclTightening?: boolean }): Promise<CameraFtpOperationResponse> {
+  async restart(input: { baseUrl: string; allowAclTightening?: boolean; allowSharedFtpServiceStart?: boolean }): Promise<CameraFtpOperationResponse> {
     return this.switchLock.runExclusive(() => this.restartUnlocked(input));
   }
 
-  private async restartUnlocked(input: { baseUrl: string; allowAclTightening?: boolean }): Promise<CameraFtpOperationResponse> {
+  private async restartUnlocked(input: { baseUrl: string; allowAclTightening?: boolean; allowSharedFtpServiceStart?: boolean }): Promise<CameraFtpOperationResponse> {
     this.setBaseUrl(input.baseUrl);
     const config = getConfig().cameraFtp;
     assertCameraFtpInitialized(config, { requirePassword: true });
+    const configuredEvent = config.activeEventId ? getEventById(config.activeEventId) : undefined;
+    if (!configuredEvent || !["draft", "active", "reviewing"].includes(configuredEvent.status)) {
+      // Restarting an already running owned site is still a valid recovery
+      // action when its saved event was removed. Do not reconcile physicalPath
+      // or start a watcher until the user explicitly chooses a new event.
+      if (getCameraFtpWatcherStatus().running) {
+        stopCameraFtpWatcher({ force: true, reason: "restart_without_valid_active_event" });
+      }
+      const result = await this.manager.restartRuntime({ config, physicalPath: "" });
+      this.lastKnownManagedSiteStarted = result.systemStatus?.site.started ?? true;
+      safeLog("warn", {
+        configuredEventIdPresent: Boolean(config.activeEventId),
+        configuredEventStatus: configuredEvent?.status || "missing",
+        siteName: config.siteName
+      }, "接收活动无效，仅重启工作台管理的 IIS FTP 站点，未恢复 watcher");
+      return {
+        operation: managerOperation(result, "restart"),
+        status: await this.buildStatus(config, { systemStatus: result.systemStatus })
+      };
+    }
     const event = allowedEvent(config.activeEventId);
     const ftpPath = await this.prepareEventDirectory(event);
     const watcherSnapshot = captureCameraFtpWatcherSnapshot();
@@ -1225,12 +1413,27 @@ export class CameraFtpOrchestrator {
     try {
       // Restart uses the same full reconcile transaction as setup/repair and
       // only hands off to the watcher after IIS has been verified healthy.
-      const result = await this.manager.restart({ config, physicalPath: ftpPath, allowAclTightening: input.allowAclTightening === true });
+      const result = await this.manager.restart({
+        config,
+        physicalPath: ftpPath,
+        allowAclTightening: input.allowAclTightening === true,
+        allowSharedFtpServiceStart: input.allowSharedFtpServiceStart === true
+      });
       await startCameraFtpWatcher(watcherContext(event, ftpPath, this.baseUrl));
+      const nextConfig = config.pendingProvisioning
+        ? saveConfig({ cameraFtp: { ...config, pendingProvisioning: null } }).cameraFtp
+        : config;
       this.lastKnownManagedSiteStarted = result.systemStatus?.site.started ?? true;
       writeOperationLog(event.id, "camera_ftp_iis_restarted", { site_name: config.siteName });
-      return { operation: managerOperation(result, "restart"), status: await this.buildStatus(config, { systemStatus: result.systemStatus }) };
+      return { operation: managerOperation(result, "restart"), status: await this.buildStatus(nextConfig, { systemStatus: result.systemStatus }) };
     } catch (error: any) {
+      persistPendingProvisioningForRestart(error, newPendingProvisioning("restart", {
+        eventId: event.id,
+        username: config.username,
+        controlPort: config.controlPort,
+        passivePortStart: config.passivePortStart,
+        passivePortEnd: config.passivePortEnd
+      }));
       this.lastKnownManagedSiteStarted = previousLastKnownStarted;
       try {
         await restoreCameraFtpWatcherSnapshot(watcherSnapshot, "restart_reconcile_rollback");
@@ -1330,8 +1533,12 @@ export class CameraFtpOrchestrator {
         checkPendingUploads: () => { assertCameraFtpSwitchAllowed(getCameraFtpWatcherStatus()); },
         snapshotCurrentState: async () => {
           const watcherSnapshot = captureCameraFtpWatcherSnapshot();
-          const oldEvent = allowedEvent(config.activeEventId);
-          const fallbackPath = watcherSnapshot.context?.directory || eventFtpPath(oldEvent);
+          const oldEvent = config.activeEventId ? getEventById(config.activeEventId) : undefined;
+          const fallbackPath = resolveCameraFtpSwitchSnapshotFallbackPath({
+            watcherDirectory: watcherSnapshot.context?.directory,
+            repositoryPath: getConfig().repository.path,
+            oldEvent
+          });
           let system = await this.manager.getStatus({ config, physicalPath: fallbackPath }, { force: true });
           if (requiresElevatedCameraFtpSiteStateInspection(system)) {
             system = await this.manager.getStatusElevated({ config, physicalPath: fallbackPath });

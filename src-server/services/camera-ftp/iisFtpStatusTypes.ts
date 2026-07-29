@@ -23,7 +23,33 @@ export interface IisFtpServiceStatus {
   status: string;
   startType: string;
   running: DetectionBoolean;
+  pending: DetectionBoolean;
+  processId: number | null;
+  startName: string;
+  serviceType: string;
 }
+
+export interface IisFtpServiceDependencyStatus extends IisFtpServiceStatus {}
+
+export interface IisFtpUnrelatedSiteStatus {
+  id: number;
+  name: string;
+  state: string;
+}
+
+export type IisFtpInitializationState =
+  | "features_missing"
+  | "restart_pending"
+  | "config_not_ready"
+  | "service_missing"
+  | "service_disabled"
+  | "service_stopped"
+  | "service_pending"
+  | "site_missing"
+  | "ready"
+  | "blocked";
+
+export type IisFtpResumeState = "none" | "restart_required" | "ready_to_continue" | "blocked";
 
 export interface IisFtpSiteStatus {
   id: number | null;
@@ -159,6 +185,13 @@ export interface IisFtpSystemStatus {
     managementTools: IisFeatureStatus;
   };
   service: IisFtpServiceStatus;
+  serviceDependencies: IisFtpServiceDependencyStatus[];
+  unrelatedAutoStartSites: IisFtpUnrelatedSiteStatus[];
+  initializationState: IisFtpInitializationState;
+  resumeState: IisFtpResumeState;
+  completedStages: string[];
+  nextStage: string;
+  safeToRetry: boolean;
   site: IisFtpSiteStatus;
   binding: IisFtpBindingStatus;
   authentication: IisFtpAuthenticationStatus;
@@ -244,7 +277,14 @@ export function createUnknownIisFtpStatus(config: CameraFtpConfig, physicalPath:
       ftpExtensibility: unknownFeature("IIS-FTPExtensibility"),
       managementTools: unknownFeature("IIS-ManagementScriptingTools")
     },
-    service: { name: "ftpsvc", exists: null, status: "unknown", startType: "unknown", running: null },
+    service: { name: "ftpsvc", exists: null, status: "unknown", startType: "unknown", running: null, pending: null, processId: null, startName: "", serviceType: "" },
+    serviceDependencies: [],
+    unrelatedAutoStartSites: [],
+    initializationState: "config_not_ready",
+    resumeState: "none",
+    completedStages: [],
+    nextStage: "windows_features",
+    safeToRetry: false,
     site: {
       id: null,
       exists: null,
@@ -330,6 +370,21 @@ function normalizeFirewallRule(raw: unknown, fallback: IisFtpFirewallRuleStatus)
   };
 }
 
+function normalizeService(raw: unknown, fallback: IisFtpServiceStatus): IisFtpServiceStatus {
+  const service = objectValue(raw);
+  return {
+    name: stringValue(service.name, fallback.name),
+    exists: booleanValue(service.exists),
+    status: stringValue(service.status, "unknown"),
+    startType: stringValue(service.startType, "unknown"),
+    running: booleanValue(service.running),
+    pending: booleanValue(service.pending),
+    processId: nullableNumber(service.processId),
+    startName: stringValue(service.startName),
+    serviceType: stringValue(service.serviceType)
+  };
+}
+
 /** Pure DTO normalizer used by both runtime code and IIS fixture tests. */
 export function normalizeIisFtpStatus(
   raw: unknown,
@@ -367,13 +422,25 @@ export function normalizeIisFtpStatus(
       ftpExtensibility: normalizeFeature(features.ftpExtensibility, fallback.windowsFeatures.ftpExtensibility),
       managementTools: normalizeFeature(features.managementTools, fallback.windowsFeatures.managementTools)
     },
-    service: {
-      name: stringValue(service.name, "ftpsvc"),
-      exists: booleanValue(service.exists),
-      status: stringValue(service.status, "unknown"),
-      startType: stringValue(service.startType, "unknown"),
-      running: booleanValue(service.running)
-    },
+    service: normalizeService(service, fallback.service),
+    serviceDependencies: Array.isArray(source.serviceDependencies)
+      ? source.serviceDependencies.map((item: unknown) => normalizeService(item, fallback.service))
+      : [],
+    unrelatedAutoStartSites: Array.isArray(source.unrelatedAutoStartSites)
+      ? source.unrelatedAutoStartSites.map((item: unknown) => {
+          const site = objectValue(item);
+          return { id: numberValue(site.id, 0), name: stringValue(site.name), state: stringValue(site.state, "unknown") };
+        }).filter((site) => site.id > 0 && site.name)
+      : [],
+    initializationState: ["features_missing", "restart_pending", "config_not_ready", "service_missing", "service_disabled", "service_stopped", "service_pending", "site_missing", "ready", "blocked"].includes(stringValue(source.initializationState))
+      ? stringValue(source.initializationState) as IisFtpInitializationState
+      : fallback.initializationState,
+    resumeState: ["none", "restart_required", "ready_to_continue", "blocked"].includes(stringValue(source.resumeState))
+      ? stringValue(source.resumeState) as IisFtpResumeState
+      : fallback.resumeState,
+    completedStages: stringArray(source.completedStages),
+    nextStage: stringValue(source.nextStage, fallback.nextStage),
+    safeToRetry: source.safeToRetry === true,
     site: {
       id: nullableNumber(site.id),
       exists: booleanValue(site.exists),

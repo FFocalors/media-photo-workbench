@@ -1,6 +1,8 @@
 param(
     [string]$InputPath,
-    [string]$OutputPath
+    [string]$OutputPath,
+    [string]$StatusPath,
+    [string]$OperationId
 )
 
 $commonPath = Join-Path $PSScriptRoot 'iis-ftp-common.ps1'
@@ -32,7 +34,7 @@ function Set-MpwSiteAuthorizationUser {
 function Test-MpwIisAccountPreconfigurationAllowed {
     param([AllowNull()][string]$ErrorCode)
 
-    return [string]::Equals($ErrorCode, 'IIS_FTP_NOT_INSTALLED', [StringComparison]::Ordinal)
+    return $ErrorCode -in @('IIS_FTP_NOT_INSTALLED', 'IIS_MANAGEMENT_API_NOT_READY', 'IIS_CONFIGURATION_NOT_READY')
 }
 
 function Invoke-MpwIisFtpCredentials {

@@ -1,6 +1,7 @@
 import type { ApiErrorDetails, ApiResponse } from "../../../lib/api";
 
 const STAGE_LABELS: Record<string, string> = {
+  secure_temp_directory: "保护管理员临时目录",
   read_input: "读取提权输入文件",
   validate_input: "校验配置参数",
   check_permissions: "确认管理员权限",
@@ -12,10 +13,12 @@ const STAGE_LABELS: Record<string, string> = {
   inspect_iis_sites: "读取 IIS FTP 站点",
   inspect_iis_site: "读取 IIS FTP 站点",
   enable_iis_features: "启用 IIS FTP 组件",
+  wait_iis_initialization: "等待 IIS 初始化",
   open_iis_configuration: "打开 IIS 配置",
   prepare_receive_directory: "准备接收目录",
   configure_local_account: "创建或更新本地 FTP 账户",
   configure_directory_acl: "设置目录权限",
+  tighten_directory_acl: "收紧目录权限",
   configure_iis_site: "配置 IIS FTP 站点",
   configure_ftp_authorization: "配置 FTP 授权规则",
   configure_physical_path: "切换 FTP 接收目录",
@@ -44,6 +47,8 @@ const STAGE_LABELS: Record<string, string> = {
   restart_ftp_service: "重启 IIS FTP",
   stop_ftp_site: "停止 IIS FTP 站点",
   verify_configuration: "验证最终配置",
+  completed: "完成管理员配置",
+  previous_operation_still_running: "等待上一项管理员配置结束",
   uac_requested: "等待 Windows 管理员授权",
   uac_cancelled: "Windows 管理员授权已取消",
   launch_failed: "启动管理员脚本",
@@ -57,6 +62,7 @@ const STAGE_LABELS: Record<string, string> = {
 };
 
 const STAGE_ADVICE: Record<string, string> = {
+  secure_temp_directory: "工作台已尝试系统临时目录和本地应用数据目录，且尚未启动管理员脚本或修改 IIS。请确认系统盘为 NTFS、当前账户可写入本地应用数据目录，并检查安全软件是否拦截 icacls.exe。",
   read_input: "请重试；若仍失败，请打开日志目录检查临时文件权限。",
   validate_configuration: "请确认活动接收目录存在且可访问；OneDrive 目录应保持已同步状态，符号链接或目录联接不能作为 FTP 根目录。",
   inspect_iis_sites: "本机可能已有 IIS FTP 站点使用当前控制端口，请选择其他端口，或先执行管理员只读检测后再明确接管。",
@@ -82,7 +88,8 @@ const STAGE_ADVICE: Record<string, string> = {
   process_starting: "请确认 Windows PowerShell 5.1 可用，并重新接受 UAC。",
   result_file_missing: "请重试并打开日志目录；工作台已记录脚本退出阶段和退出码。",
   parse_result: "请重试并打开日志目录；工作台已保留脱敏的结果解析诊断。",
-  timeout: "请等待先前的 Windows 管理操作结束后再重试。"
+  timeout: "请等待先前的 Windows 管理操作结束后再重试。",
+  previous_operation_still_running: "请等待后台管理员进程结束；工作台确认可以安全重试后，再重新检测并生成配置计划。"
 };
 
 export interface CameraFtpErrorPresentation {
@@ -265,21 +272,29 @@ export function buildCameraFtpErrorPresentation<T>(
     details.rollbackStatus,
     details.rollback?.status
   ) || "";
-  const rollbackAttempted = rollbackStatus === "not_required"
+  const explicitRollbackAttempted = typeof details.rollbackAttempted === "boolean"
+    ? details.rollbackAttempted
+    : typeof details.rollback?.attempted === "boolean"
+      ? details.rollback.attempted
+      : undefined;
+  const rollbackAttempted = explicitRollbackAttempted === false || rollbackStatus === "not_required"
     ? false
     : rollbackStatus
       ? true
-      : typeof details.rollbackAttempted === "boolean"
-        ? details.rollbackAttempted
-        : undefined;
-  const rollbackSucceeded = rollbackStatus === "success"
+      : explicitRollbackAttempted;
+  const rollbackSucceeded = rollbackAttempted === false
+    ? undefined
+    : rollbackStatus === "success"
     ? true
     : rollbackStatus === "partial" || rollbackStatus === "failed"
       ? false
       : typeof details.rollbackSucceeded === "boolean" || details.rollbackSucceeded === null
         ? details.rollbackSucceeded
         : undefined;
-  const rollbackSummary = rollbackAttempted === false || rollbackStatus === "not_required"
+  const elevatedStateUncertain = code === "ELEVATED_SCRIPT_TIMEOUT" || code === "ELEVATED_STATE_UNKNOWN";
+  const rollbackSummary = elevatedStateUncertain
+    ? "管理员进程仍可能执行，当前回滚状态未知"
+    : rollbackAttempted === false || rollbackStatus === "not_required"
     ? "未修改系统，无需回滚"
     : rollbackStatus === "success" && rollbackSucceeded !== false
       ? "已按快照恢复并完成验证"
@@ -297,6 +312,10 @@ export function buildCameraFtpErrorPresentation<T>(
     details.exceptionType ? `异常类型：${details.exceptionType}` : "",
     details.command ? `命令：${details.command}` : "",
     details.exitCode !== undefined ? `退出码：${details.exitCode}` : "",
+    typeof conflict.elapsedMs === "number" ? `已等待：${Math.max(0, Math.round(conflict.elapsedMs / 1000))} 秒` : "",
+    typeof conflict.processId === "number" ? `管理员进程 PID：${conflict.processId}` : "",
+    typeof conflict.lastProgressAt === "string" ? `最后进度时间：${conflict.lastProgressAt}` : "",
+    typeof conflict.safeToRetry === "boolean" ? `可安全重试：${conflict.safeToRetry ? "是" : "否"}` : "",
     explicitTechnicalDetails ? `技术摘要：${explicitTechnicalDetails}` : "",
     typeof conflict.hresult === "string" && conflict.hresult ? `HRESULT：${conflict.hresult}` : "",
     typeof conflict.sourceExceptionType === "string" && conflict.sourceExceptionType ? `底层异常：${conflict.sourceExceptionType}` : "",
@@ -333,12 +352,21 @@ export function buildCameraFtpErrorPresentation<T>(
     FTP_ACL_SNAPSHOT_FAILED: "无法在修改前读取并保存目录 ACL 快照，工作台已中止配置。",
     FTP_ACL_ROLLBACK_FAILED: "目录 ACL 回滚失败，当前权限可能未完全恢复。",
     FTP_ACL_ROLLBACK_VERIFY_FAILED: "目录 ACL 已执行回滚，但与修改前的安全描述符不一致。",
+    FTP_ACL_UNSUPPORTED_ACE: "目录包含无法安全保留的特殊 ACL 规则，工作台已在写入前停止。",
     FIREWALL_ROLLBACK_VERIFY_FAILED: "防火墙规则已执行回滚，但与修改前的规则快照不一致。",
     FIREWALL_RULE_UPDATE_CONFIRMATION_REQUIRED: "检测到需要修改的旧版本地 FTP 防火墙规则，工作台尚未执行修改。",
     FIREWALL_RULE_POLICY_BLOCKED: "检测到由 Windows 策略管理或无法唯一识别的 FTP 防火墙规则，工作台不会强制修改。",
     FIREWALL_CONFIG_FAILED: "配置 Windows 防火墙 FTP 规则失败。",
     IIS_SERVICE_START_FAILED: "Microsoft FTP Service 或 IIS FTP 站点启动失败。",
     IIS_FTP_SERVICE_START_FAILED: "Microsoft FTP Service 未能进入运行状态。",
+    IIS_DEPENDENCY_SERVICE_START_FAILED: "Microsoft FTP Service 的必需依赖服务未能启动。",
+    IIS_FTP_SERVICE_PENDING_TIMEOUT: "Microsoft FTP Service 或其依赖长时间停留在 Pending 状态。",
+    IIS_SHARED_FTP_SERVICE_CONFIRMATION_REQUIRED: "启动共享的 Microsoft FTP Service 可能同时激活非工作台 FTP 站点，需要明确确认。",
+    IIS_COMPONENT_INSTALL_INCOMPLETE: "IIS FTP 功能显示已启用，但服务或管理组件尚未完整注册。",
+    IIS_CONFIGURATION_NOT_READY: "IIS 配置存储尚未初始化完成。",
+    IIS_MANAGEMENT_API_NOT_READY: "IIS 管理 API 尚未安装完成或不可读取。",
+    IIS_FTP_FEATURE_UNAVAILABLE: "当前 Windows 版本不提供工作台所需的 IIS FTP 组件。",
+    IIS_SYSTEM_CONFIGURATION_DAMAGED: "检测到非标准或损坏的 IIS 系统配置，工作台不会自动重置整个 IIS。",
     IIS_FTP_SITE_START_UNAVAILABLE: "当前 IIS 未提供 FTP 站点启动方法，可能缺少 FTP Service 组件。",
     IIS_FTP_SITE_START_FAILED: "Microsoft FTP Service 已检查，但工作台托管的 IIS FTP 站点启动失败。",
     IIS_FTP_SITE_STOP_FAILED: "工作台托管的 IIS FTP 站点停止失败。",
@@ -380,11 +408,13 @@ export function buildCameraFtpErrorPresentation<T>(
     ELEVATED_SCRIPT_NO_RESULT: "Windows 管理员脚本已退出，但没有生成完整的结构化结果。",
     ELEVATED_RESULT_INVALID_JSON: "Windows 管理员脚本返回的诊断结果不完整。",
     ELEVATED_SCRIPT_LAUNCH_FAILED: "Windows 管理员脚本未能启动。",
-    ELEVATED_SCRIPT_TIMEOUT: "等待 Windows 管理员脚本完成时超时。"
+    ELEVATED_SCRIPT_TIMEOUT: "已达到管理员配置最长等待时间，但后台进程可能仍在处理 Windows 组件。工作台不会强制结束该进程。",
+    ELEVATED_STATE_UNKNOWN: "上一项管理员配置仍在执行或其结束状态尚未确认，当前不能启动新的管理员操作。"
   };
   const bodyByStage: Record<string, string> = {
     read_input: "Windows 管理员脚本未能读取安全输入文件。",
     inspect_iis_sites: "Windows 管理员脚本未能读取 IIS FTP 站点配置。",
+    wait_iis_initialization: "Windows IIS FTP 组件未能在限定时间内完成初始化。",
     inspect_iis_site: "Windows 管理员脚本未能读取 IIS FTP 站点配置。",
     configure_local_account: "创建或更新 FTP 本地账户失败。",
     configure_directory_acl: "设置 FTP 接收目录权限失败。",
@@ -423,7 +453,9 @@ export function buildCameraFtpErrorPresentation<T>(
     ? (/^[\x00-\x7F]+$/.test(conflict.recommendation)
         ? "请选择工作台推荐的其他控制端口后重新检测；不会自动停止程序或修改无关 IIS 站点。"
         : conflict.recommendation)
-    : STAGE_ADVICE[stage] || "请按下方失败阶段检查后重试；需要更多信息时可复制技术详情并打开日志目录。");
+    : elevatedStateUncertain
+      ? "请等待后台进程结束。工作台确认“可安全重试”后，重新检测系统状态、重新生成配置计划，并重新输入密码与确认高风险操作。"
+      : STAGE_ADVICE[stage] || "请按下方失败阶段检查后重试；需要更多信息时可复制技术详情并打开日志目录。");
   const neutral = code === "ADMIN_REQUIRED"
     || code === "IIS_STATUS_ADMIN_REQUIRED"
     || code === "UNKNOWN"

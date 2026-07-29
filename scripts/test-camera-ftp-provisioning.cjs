@@ -47,6 +47,13 @@ function healthySystem(overrides = {}) {
       managementTools: { featureName: "IIS-ManagementScriptingTools", installed: true, state: "Enabled", error: "" }
     },
     service: { name: "FTPSVC", exists: true, status: "Running", startType: "Auto", running: true },
+    serviceDependencies: [],
+    unrelatedAutoStartSites: [],
+    initializationState: "ready",
+    resumeState: "none",
+    completedStages: ["windows_features", "iis_configuration", "management_api", "ftp_service"],
+    nextStage: "site",
+    safeToRetry: true,
     site: {
       id: 42,
       exists: true,
@@ -555,6 +562,24 @@ test("30 legacy ftp directories are reported but never scheduled for deletion", 
   const result = plan({ legacyDirectoryExists: true });
   assert.equal(issue(result, "LEGACY_FTP_DIRECTORY_PRESENT").level, "info");
   assert.doesNotMatch(JSON.stringify(result.items), /删除.*旧版|自动迁移/);
+});
+
+test("31 stopped shared FTPSVC requires confirmation when unrelated auto-start FTP sites exist", () => {
+  const result = plan({
+    system: healthySystem({
+      service: { status: "Stopped", startType: "Manual", running: false },
+      unrelatedAutoStartSites: [
+        { id: 900, name: "CampusLegacyFTP", state: "Stopped" },
+        { id: 901, name: "DepartmentFTP", state: "Unknown" }
+      ]
+    })
+  });
+  assert.equal(item(result, "service").status, "user_confirmation_required");
+  assert.equal(item(result, "service").confirmationKey, "start-shared-ftpsvc");
+  assert.match(item(result, "service").summary, /CampusLegacyFTP/);
+  assert.equal(issue(result, "IIS_SHARED_FTP_SERVICE_CONFIRMATION_REQUIRED").level, "user_confirmation");
+  assert.ok(result.confirmations.some((confirmation) => confirmation.key === "start-shared-ftpsvc"));
+  assert.equal(result.items.filter((entry) => entry.id === "service").length, 1);
 });
 
 function main() {

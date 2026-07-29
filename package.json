@@ -1,6 +1,6 @@
 {
   "name": "media-photo-workbench",
-  "version": "1.2.0-alpha.1",
+  "version": "1.2.2",
   "private": true,
   "description": "Windows desktop photo workflow workbench for campus media teams.",
   "main": "electron/main.cjs",
@@ -24,7 +24,7 @@
     "test:status-semantics": "node scripts/test-status-semantics.cjs",
     "test:phase6-safety": "pnpm build:server && node scripts/test-config-migrations.cjs && node scripts/test-database-migrations.cjs && node scripts/test-event-purge-safety.cjs && node scripts/test-log-rotation.cjs && node scripts/test-phase6-runtime-safety.cjs",
     "test:event-purge-safety": "pnpm build:server && node scripts/test-event-purge-safety.cjs",
-    "dist:portable": "pnpm build && electron-builder --win zip",
+    "dist:portable": "pnpm build && electron-builder --win dir && node scripts/package-portable.cjs",
     "dist:win": "pnpm build && electron-builder --win nsis",
     "preview": "vite preview --host 127.0.0.1",
     "lint": "tsc -p tsconfig.json --noEmit"
@@ -62,7 +62,8 @@
         "to": "node_modules",
         "filter": [
           "**/*",
-          "!**/.cache/**/*"
+          "!**/.cache/**/*",
+          "!**/.idea/**/*"
         ]
       }
     ],

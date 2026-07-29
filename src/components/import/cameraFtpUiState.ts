@@ -1,4 +1,5 @@
 import type {
+  CameraFtpAdminOperationData,
   CameraFtpIssueData,
   CameraFtpIssueLevel,
   CameraFtpProvisioningPlanData,
@@ -61,6 +62,56 @@ export function applyCameraFtpStatusObservation(
     : state.lastFullInspection;
 
   return { current, lastFullInspection };
+}
+
+const terminalAdminOperationStates = new Set<CameraFtpAdminOperationData["state"]>([
+  "completed",
+  "failed",
+  "abandoned"
+]);
+
+/** Ignore late HTTP observations that would move one administrator operation backwards. */
+export function mergeCameraFtpAdminOperationObservation(
+  current: CameraFtpAdminOperationData | null,
+  incoming: CameraFtpAdminOperationData
+): CameraFtpAdminOperationData {
+  if (!current || current.operationId !== incoming.operationId) return incoming;
+  if (terminalAdminOperationStates.has(current.state)) return current;
+  if (terminalAdminOperationStates.has(incoming.state)) return incoming;
+  if (current.state === "timed_out_waiting" && incoming.state === "running") return current;
+  if (incoming.phaseIndex < current.phaseIndex || incoming.progressPercent < current.progressPercent) {
+    return {
+      ...current,
+      elapsedMs: Math.max(current.elapsedMs, incoming.elapsedMs),
+      estimateExceeded: current.estimateExceeded || incoming.estimateExceeded
+    };
+  }
+  return {
+    ...incoming,
+    phaseIndex: Math.max(current.phaseIndex, incoming.phaseIndex),
+    progressPercent: Math.max(current.progressPercent, incoming.progressPercent),
+    elapsedMs: Math.max(current.elapsedMs, incoming.elapsedMs)
+  };
+}
+
+/**
+ * A non-elevated inspection may not be allowed to read the IIS site object.
+ * The configured port being owned by a running FTPSVC is still sufficient for
+ * the receive-page runtime indicator when this installation already owns a
+ * managed site. Explicit stopped facts always win over that inference.
+ */
+export function isCameraFtpRuntimeReady(status: CameraFtpStatusData | null): boolean {
+  if (!status) return false;
+  if (status.site.started === true) {
+    return status.service.running !== false && status.port.listening !== false;
+  }
+  return Boolean(
+    status.site.started === null
+      && status.initialized
+      && status.service.running === true
+      && status.port.listening === true
+      && status.port.ownedByMicrosoftFtp !== false
+  );
 }
 
 export const CAMERA_FTP_PROVISIONING_PHASES = [
@@ -187,7 +238,8 @@ export function getCameraFtpButtonState(input: {
   const initialized = input.status?.initialized === true;
   const passwordConfigured = input.status?.passwordConfigured === true;
   const activeEventValid = input.status?.activeEvent?.valid === true;
-  const managementReady = initialized && activeEventValid && !input.busy;
+  const siteControlReady = initialized && !input.busy;
+  const eventProvisioningReady = siteControlReady && activeEventValid;
   return {
     configureAndStart: Boolean(
       !initialized
@@ -198,10 +250,20 @@ export function getCameraFtpButtonState(input: {
         && !input.busy
     ),
     discoverSites: Boolean(input.selectedEvent && !input.busy),
-    start: managementReady && passwordConfigured && !input.serviceReady,
-    stop: managementReady && input.status?.site?.started === true,
-    restart: managementReady && passwordConfigured,
-    repair: managementReady && input.portFormValid,
+    start: eventProvisioningReady && passwordConfigured && !input.serviceReady,
+    // Ordinary status inspection can confirm the managed FTPSVC listener while
+    // IIS site.started remains unknown because applicationHost.config requires
+    // elevation. The stop action itself performs an elevated, Site-ID-scoped
+    // operation, so the same verified runtime signal must enable this button.
+    // Stopping the owned IIS site must remain possible when a previously
+    // selected event was deleted or archived. It is a site-scoped safety
+    // action and does not need a receive directory.
+    stop: siteControlReady && input.serviceReady,
+    // A running orphaned site may be restarted as a runtime-only operation.
+    // Starting a stopped site and all provisioning repairs still require a
+    // valid event so an obsolete physicalPath is not silently reactivated.
+    restart: siteControlReady && passwordConfigured && (activeEventValid || input.serviceReady),
+    repair: eventProvisioningReady && input.portFormValid,
     passwordMessage: initialized && !passwordConfigured
       ? "FTP 账户尚未设置密码，请先完成账户配置。"
       : ""

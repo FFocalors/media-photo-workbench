@@ -151,6 +151,12 @@ function conflictFor(system: IisFtpSystemStatus, codes: string[]): IisFtpConflic
 }
 
 function featureState(system: IisFtpSystemStatus): CameraFtpProvisioningPlanItem {
+  if (system.initializationState === "blocked" || Object.values(system.windowsFeatures).some((feature) => feature.state === "Unavailable")) {
+    return item("windows-features", "feature", "Windows IIS FTP 组件", "blocked", "当前 Windows 版本缺少所需 IIS FTP 组件，工作台不会安装其他 FTP 服务。", { managedResource: false });
+  }
+  if (system.initializationState === "restart_pending") {
+    return item("windows-features", "feature", "Windows IIS FTP 组件", "blocked", "IIS FTP 组件正在等待 Windows 重启；重启前不会继续修改账户、ACL、站点或防火墙。", { managedResource: false });
+  }
   const values = [
     system.windowsFeatures.ftpService.installed,
     system.windowsFeatures.ftpExtensibility.installed,
@@ -246,6 +252,12 @@ export function buildCameraFtpProvisioningPlan(context: CameraFtpProvisioningCon
   } else {
     items.push(featureState(system));
   }
+  if (system.initializationState === "restart_pending") {
+    issues.push({ id: "issue-restart-pending", code: "WINDOWS_RESTART_REQUIRED", level: "blocked", title: "需要重启 Windows", message: "重启后重新打开工作台，系统会恢复不含密码的配置目标。", planItemId: "windows-features" });
+  }
+  if (system.initializationState === "blocked") {
+    issues.push({ id: "issue-iis-system-blocked", code: system.lastError?.code || "IIS_SYSTEM_CONFIGURATION_DAMAGED", level: "blocked", title: "IIS 系统状态无法安全自动修复", message: system.lastError?.message || "请先修复 Windows IIS 组件，再重新检测。", planItemId: "windows-features" });
+  }
 
   if (!context.eventExists || !context.eventValid) {
     items.push(item("activity", "config", "FTP 接收活动", "blocked", context.eventExists ? `活动状态“${context.eventStatus}”不允许接收。` : "接收活动不存在。", { managedResource: false }));
@@ -311,7 +323,21 @@ export function buildCameraFtpProvisioningPlan(context: CameraFtpProvisioningCon
   }
 
   items.push(item("firewall", "firewall", "工作台 Windows 防火墙规则", system.firewall.correct === true ? "already_ok" : "repair", system.firewall.correct === true ? "控制端口和 PASV LocalSubnet 规则已匹配。" : "将创建或更新工作台固定命名的控制端口和 PASV LocalSubnet 入站规则。"));
-  items.push(item("service", "service", "Microsoft FTP Service", system.service.running === true && system.service.startType === "Auto" ? "already_ok" : "repair", "将确保 FTPSVC 为自动启动并等待进入 Running。"));
+  const dependencyNames = system.serviceDependencies.map((dependency) => dependency.name).filter(Boolean);
+  const unrelatedAutoStartSites = system.unrelatedAutoStartSites || [];
+  const sharedServiceConfirmationRequired = system.service.running !== true && unrelatedAutoStartSites.length > 0;
+  const serviceSummary = dependencyNames.length > 0
+    ? `将按系统真实依赖顺序处理 ${dependencyNames.join("、")}，再把 FTPSVC 设为自动启动并等待 Running；不会无条件启动 W3SVC。`
+    : "将从 Windows 服务依赖关系动态检测所需服务，再确保 FTPSVC 自动启动并进入 Running。";
+  if (sharedServiceConfirmationRequired) {
+    const key = "start-shared-ftpsvc";
+    const siteNames = unrelatedAutoStartSites.map((site) => site.name).join("、");
+    items.push(item("service", "service", "Microsoft FTP Service", "user_confirmation_required", `${serviceSummary} 检测到无关的自动启动 FTP 站点：${siteNames}。`, { risk: "high", confirmationKey: key }));
+    confirmations.push({ key, title: "确认启动共享 FTP 服务", message: `启动 Windows FTPSVC 可能同时激活这些非工作台站点：${siteNames}。工作台不会修改或停止它们。`, risk: "high" });
+    issues.push({ id: "issue-shared-ftpsvc", code: "IIS_SHARED_FTP_SERVICE_CONFIRMATION_REQUIRED", level: "user_confirmation", title: "FTPSVC 为共享 Windows 服务", message: "请确认允许启动共享服务；无关 FTP 站点的配置不会被修改。", planItemId: "service" });
+  } else {
+    items.push(item("service", "service", "Microsoft FTP Service", system.service.running === true && system.service.startType === "Auto" ? "already_ok" : "repair", serviceSummary));
+  }
   items.push(item("site-runtime", "service", context.goal === "restart" ? "重启目标 FTP 站点" : "启动目标 FTP 站点", system.site.started === true && context.goal !== "restart" ? "already_ok" : "repair", context.goal === "restart" ? "将在配置提交后重启目标站点并等待 Started。" : "将在配置提交后启动目标站点并等待 Started。"));
 
   const busyCount = context.watcher.unstableCount + context.watcher.pendingCount + context.watcher.importingCount;

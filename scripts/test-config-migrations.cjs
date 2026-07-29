@@ -73,8 +73,38 @@ function main() {
     const loadedLegacy = configModule.loadConfig(legacyDir);
     const persistedLegacy = JSON.parse(fs.readFileSync(path.join(legacyDir, "config.json"), "utf8"));
     assert.equal(loadedLegacy.schemaVersion, configModule.CONFIG_SCHEMA_VERSION);
+    assert.equal(loadedLegacy.cameraFtp.pendingProvisioning, null);
     assert.equal(containsSecretField(persistedLegacy), false);
     assert.deepEqual(configModule.migrateConfigDocument(persistedLegacy).config, persistedLegacy);
+
+    const versionOneDocument = JSON.parse(JSON.stringify(firstMigration.config));
+    versionOneDocument.schemaVersion = 1;
+    delete versionOneDocument.cameraFtp.pendingProvisioning;
+    const versionOneMigration = configModule.migrateConfigDocument(versionOneDocument);
+    assert.equal(versionOneMigration.fromVersion, 1);
+    assert.equal(versionOneMigration.config.cameraFtp.pendingProvisioning, null);
+
+    const pendingSaved = configModule.saveConfig({
+      cameraFtp: {
+        ...loadedLegacy.cameraFtp,
+        pendingProvisioning: {
+          action: "setup",
+          eventId: "evt_resume",
+          username: "camera",
+          controlPort: 21,
+          passivePortStart: 50000,
+          passivePortEnd: 50100,
+          targetSiteName: "",
+          createdAt: "2026-07-16T00:00:00.000Z",
+          password: "must-never-persist",
+          confirmPassword: "must-never-persist"
+        }
+      }
+    });
+    const persistedPending = JSON.parse(fs.readFileSync(path.join(legacyDir, "config.json"), "utf8"));
+    assert.equal(pendingSaved.cameraFtp.pendingProvisioning.eventId, "evt_resume");
+    assert.equal(containsSecretField(persistedPending), false);
+    assert.equal(JSON.stringify(persistedPending).includes("must-never-persist"), false);
 
     const corruptedDir = path.join(tempRoot, "corrupted");
     fs.mkdirSync(corruptedDir, { recursive: true });
@@ -179,6 +209,8 @@ function main() {
       passed: [
         "explicit_schema_version",
         "idempotent_legacy_migration",
+        "schema_v1_pending_provisioning_migration",
+        "pending_provisioning_never_persists_passwords",
         "legacy_ftp_plaintext_secrets_scrubbed",
         "corrupted_config_fails_closed_without_overwrite",
         "invalid_legacy_field_types_fail_closed_without_overwrite",

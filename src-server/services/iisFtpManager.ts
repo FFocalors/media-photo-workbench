@@ -7,6 +7,7 @@ import {
   type IisFtpSystemStatus
 } from "./camera-ftp/iisFtpStatusTypes";
 import {
+  PROVISIONING_TIMEOUT_MS,
   runElevatedPowerShellJsonScript,
   runPowerShellJsonScript,
   type PowerShellJsonDiagnostics
@@ -31,6 +32,10 @@ export type {
   IisFtpFirewallRuleStatus,
   IisFtpFirewallStatus,
   IisFtpLastError,
+  IisFtpInitializationState,
+  IisFtpResumeState,
+  IisFtpServiceDependencyStatus,
+  IisFtpUnrelatedSiteStatus,
   IisFtpPassivePortsStatus,
   IisFtpPlatformStatus,
   IisFtpPortStatus,
@@ -44,6 +49,7 @@ export interface IisFtpManagerInput {
   physicalPath: string;
   allowLegacyFirewallRuleUpdate?: boolean;
   allowAclTightening?: boolean;
+  allowSharedFtpServiceStart?: boolean;
 }
 
 interface ScriptActionData {
@@ -243,11 +249,12 @@ async function withSecretRedaction<T>(operation: () => Promise<T>, secrets: stri
 
 export class IisFtpManager {
   private readonly statusCache = new Map<string, { expiresAt: number; value: IisFtpSystemStatus }>();
+  private readonly lastSuccessfulStatus = new Map<string, IisFtpSystemStatus>();
   private readonly statusInFlight = new Map<string, Promise<IisFtpSystemStatus>>();
   private statusCacheGeneration = 0;
 
-  async getStatus(input: IisFtpManagerInput, options: { force?: boolean } = {}): Promise<IisFtpSystemStatus> {
-    const key = JSON.stringify([
+  private statusKey(input: IisFtpManagerInput): string {
+    return JSON.stringify([
       input.config.siteName,
       input.config.managedSiteId,
       input.config.username,
@@ -258,6 +265,16 @@ export class IisFtpManager {
       input.config.passivePortEnd,
       input.physicalPath
     ]);
+  }
+
+  private rememberStatus(input: IisFtpManagerInput, value: IisFtpSystemStatus): void {
+    const key = this.statusKey(input);
+    this.lastSuccessfulStatus.set(key, value);
+    this.statusCache.set(key, { expiresAt: Date.now() + 30_000, value });
+  }
+
+  async getStatus(input: IisFtpManagerInput, options: { force?: boolean } = {}): Promise<IisFtpSystemStatus> {
+    const key = this.statusKey(input);
     const now = Date.now();
     if (!options.force) {
       const cached = this.statusCache.get(key);
@@ -267,12 +284,12 @@ export class IisFtpManager {
     }
 
     const generation = this.statusCacheGeneration;
-    const probe = this.probeStatus(input);
+    const probe = this.probeStatus(input, key);
     this.statusInFlight.set(key, probe);
     try {
       const value = await probe;
       if (generation === this.statusCacheGeneration) {
-        this.statusCache.set(key, { expiresAt: Date.now() + 15_000, value });
+        this.statusCache.set(key, { expiresAt: Date.now() + 30_000, value });
       }
       return value;
     } finally {
@@ -295,7 +312,7 @@ export class IisFtpManager {
     }
   }
 
-  private async probeStatus(input: IisFtpManagerInput): Promise<IisFtpSystemStatus> {
+  private async probeStatus(input: IisFtpManagerInput, key: string): Promise<IisFtpSystemStatus> {
     const fallback = createUnknownIisFtpStatus(input.config, input.physicalPath);
     if (!fallback.platform.isWindows) {
       fallback.lastError = { code: "UNSUPPORTED_PLATFORM", message: "Windows IIS FTP 仅支持 Windows 11。" };
@@ -307,10 +324,22 @@ export class IisFtpManager {
         action: "status",
         ...baseScriptInput(input, false)
       }, { timeoutMs: 45_000 });
-      return normalizeIisFtpStatus(raw, input.config, input.physicalPath);
+      const status = normalizeIisFtpStatus(raw, input.config, input.physicalPath);
+      this.lastSuccessfulStatus.set(key, status);
+      return status;
     } catch (error: any) {
       const code = statusErrorCode(error);
       const message = statusErrorMessage(error);
+      const lastSuccessful = this.lastSuccessfulStatus.get(key);
+      if (lastSuccessful) {
+        const staleMessage = "本次实时检测超时，暂时保留最近一次已确认的 FTP 运行状态；后台稍后会自动重试。";
+        safeLog("warn", { code, reusedLastSuccessfulStatus: true }, "IIS FTP 实时状态检测未完成，保留最近可信状态");
+        return {
+          ...lastSuccessful,
+          warnings: Array.from(new Set([...lastSuccessful.warnings, staleMessage])),
+          lastError: { code: "IIS_STATUS_CHECK_STALE", message: staleMessage }
+        };
+      }
       fallback.requiresAdmin = isPermissionLimitedStatusError(code);
       fallback.repairable = fallback.platform.supported;
       fallback.lastError = { code: code === "IIS_SCRIPT_NOT_FOUND" ? code : "IIS_STATUS_CHECK_FAILED", message };
@@ -336,15 +365,16 @@ export class IisFtpManager {
         code: status.lastError?.code || "IIS_STATUS_CHECK_FAILED"
       });
     }
+    this.rememberStatus(input, status);
     return status;
   }
 
   async setup(input: IisFtpManagerInput & { password?: string }): Promise<IisFtpActionResult> {
-    return this.provision("setup", input, { allowAclTightening: input.allowAclTightening === true });
+    return this.provision("setup", input, { allowAclTightening: input.allowAclTightening === true, allowSharedFtpServiceStart: input.allowSharedFtpServiceStart === true });
   }
 
   async repair(input: IisFtpManagerInput & { password?: string }): Promise<IisFtpActionResult> {
-    return this.provision("repair", input, { allowAclTightening: input.allowAclTightening === true });
+    return this.provision("repair", input, { allowAclTightening: input.allowAclTightening === true, allowSharedFtpServiceStart: input.allowSharedFtpServiceStart === true });
   }
 
   async adoptSite(input: IisFtpManagerInput & { targetSiteName: string; password?: string }): Promise<IisFtpActionResult> {
@@ -354,7 +384,8 @@ export class IisFtpManager {
     return this.provision("adopt", input, {
       targetSiteName: input.targetSiteName.trim(),
       confirmAdoption: true,
-      allowAclTightening: input.allowAclTightening === true
+      allowAclTightening: input.allowAclTightening === true,
+      allowSharedFtpServiceStart: input.allowSharedFtpServiceStart === true
     });
   }
 
@@ -362,7 +393,7 @@ export class IisFtpManager {
     // Start is intentionally a reconciliation target, not a blind runtime
     // toggle. Missing managed configuration is repaired in the same elevated
     // transaction before the site is started and verified.
-    return this.provision("start", input, { allowAclTightening: input.allowAclTightening === true });
+    return this.provision("start", input, { allowAclTightening: input.allowAclTightening === true, allowSharedFtpServiceStart: input.allowSharedFtpServiceStart === true });
   }
 
   async stop(input: IisFtpManagerInput): Promise<IisFtpActionResult> {
@@ -370,7 +401,11 @@ export class IisFtpManager {
   }
 
   async restart(input: IisFtpManagerInput): Promise<IisFtpActionResult> {
-    return this.provision("restart", input, { allowAclTightening: input.allowAclTightening === true });
+    return this.provision("restart", input, { allowAclTightening: input.allowAclTightening === true, allowSharedFtpServiceStart: input.allowSharedFtpServiceStart === true });
+  }
+
+  async restartRuntime(input: IisFtpManagerInput): Promise<IisFtpActionResult> {
+    return this.control("restart", input);
   }
 
   async setPhysicalPath(input: IisFtpManagerInput): Promise<IisFtpActionResult> {
@@ -407,16 +442,21 @@ export class IisFtpManager {
   private async control(action: "start" | "stop" | "restart" | "set-path", input: IisFtpManagerInput): Promise<IisFtpActionResult> {
     const raw = await this.runMutationScript(() => runElevatedPowerShellJsonScript<ScriptActionData>("iis-ftp-control.ps1", {
         action,
-        ...baseScriptInput(input)
+        // Runtime site controls are scoped by the stored Site ID, site name
+        // and managed-account marker. Only a physicalPath update needs a
+        // currently valid event directory.
+        ...baseScriptInput(input, action === "set-path")
       }));
     safeLog("info", { action, siteName: input.config.siteName }, "IIS FTP 控制操作完成");
-    return normalizeActionResult(action, raw, input);
+    const result = normalizeActionResult(action, raw, input);
+    if (result.systemStatus) this.rememberStatus(input, result.systemStatus);
+    return result;
   }
 
   private async provision(
     action: "setup" | "repair" | "start" | "restart" | "adopt",
     input: IisFtpManagerInput & { password?: string },
-    confirmation: { targetSiteName?: string; confirmAdoption?: boolean; allowAclTightening?: boolean } = {}
+    confirmation: { targetSiteName?: string; confirmAdoption?: boolean; allowAclTightening?: boolean; allowSharedFtpServiceStart?: boolean } = {}
   ): Promise<IisFtpActionResult> {
     const secrets = input.password ? [input.password] : [];
     const raw = await withSecretRedaction(() => this.runMutationScript(() => runElevatedPowerShellJsonScript<ScriptActionData>("iis-ftp-setup.ps1", {
@@ -425,8 +465,9 @@ export class IisFtpManager {
         ...(confirmation.targetSiteName ? { targetSiteName: confirmation.targetSiteName } : {}),
         ...(confirmation.confirmAdoption ? { confirmAdoption: true } : {}),
         ...(confirmation.allowAclTightening ? { allowAclTightening: true } : {}),
+        ...(confirmation.allowSharedFtpServiceStart ? { allowSharedFtpServiceStart: true } : {}),
         ...(input.password ? { password: input.password } : {})
-      })), secrets);
+      }, { timeoutMs: PROVISIONING_TIMEOUT_MS })), secrets);
     safeLog("info", {
       action,
       operationId: raw.operationId,
@@ -440,7 +481,9 @@ export class IisFtpManager {
       verification: raw.systemStatus,
       rollback: raw.rollback
     }, "IIS FTP 统一配置事务完成");
-    return normalizeActionResult(action, raw, input, secrets);
+    const result = normalizeActionResult(action, raw, input, secrets);
+    if (result.systemStatus) this.rememberStatus(input, result.systemStatus);
+    return result;
   }
 }
 

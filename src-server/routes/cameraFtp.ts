@@ -9,6 +9,7 @@ import {
 import { getConfig } from "../config/config";
 import { getLogger } from "../utils/logger";
 import { getCurrentOperationId } from "../utils/operationContext";
+import { getElevatedAdminOperationStatus } from "../utils/elevatedPowerShell";
 import { sendError, sendSuccess } from "../utils/response";
 
 const router = Router();
@@ -68,6 +69,15 @@ function errorStatus(code: string): number {
     "FTP_SWITCH_ROLLBACK_FAILED",
     "FTP_ACTIVE_EVENT_STATE_MISMATCH",
     "WINDOWS_RESTART_REQUIRED",
+    "IIS_COMPONENT_INSTALL_INCOMPLETE",
+    "IIS_CONFIGURATION_NOT_READY",
+    "IIS_MANAGEMENT_API_NOT_READY",
+    "IIS_DEPENDENCY_SERVICE_START_FAILED",
+    "IIS_FTP_SERVICE_PENDING_TIMEOUT",
+    "IIS_SYSTEM_CONFIGURATION_DAMAGED",
+    "IIS_SHARED_FTP_SERVICE_CONFIRMATION_REQUIRED",
+    "ELEVATED_SCRIPT_TIMEOUT",
+    "ELEVATED_STATE_UNKNOWN",
     "FTP_SERVICE_MUST_BE_STOPPED",
     "FTP_SERVICE_STATE_UNKNOWN",
     "FTP_SETUP_REQUIRED"
@@ -102,7 +112,7 @@ router.use((req, res, next) => {
 
 export function shouldRecordCameraFtpOperation(method: string, requestPath: string, errorCode: string | null): boolean {
   const isObservationRequest = method.toUpperCase() === "GET"
-    && (requestPath === "/status" || requestPath === "/diagnostics");
+    && (requestPath === "/status" || requestPath === "/diagnostics" || requestPath === "/admin-operation");
   return !isObservationRequest || Boolean(errorCode);
 }
 
@@ -219,17 +229,25 @@ function handleError(res: any, error: any, fallbackCode: string, fallbackMessage
     ? { ...legacyDetails, conflict: legacyDetails, diagnostics: legacyDetails }
     : undefined;
   const rollbackData = operationData?.rollback && typeof operationData.rollback === "object" ? operationData.rollback : null;
-  const rollbackStatus = firstErrorText(
-    error?.rollbackStatus,
-    source?.rollbackStatus,
-    rollbackData?.status
-  ) || (source?.rollbackAttempted === false
-    ? "not_required"
-    : source?.rollbackSucceeded === true
-      ? "success"
-      : source?.rollbackSucceeded === false
-        ? "failed"
-        : undefined);
+  const elevatedStateUncertain = ["ELEVATED_SCRIPT_TIMEOUT", "ELEVATED_STATE_UNKNOWN"].includes(code);
+  const rollbackAttempted = typeof source?.rollbackAttempted === "boolean"
+    ? source.rollbackAttempted
+    : typeof rollbackData?.attempted === "boolean"
+      ? rollbackData.attempted
+      : undefined;
+  const rollbackStatus = elevatedStateUncertain
+    ? "unknown"
+    : rollbackAttempted === false
+      ? "not_required"
+      : firstErrorText(
+          error?.rollbackStatus,
+          source?.rollbackStatus,
+          rollbackData?.status
+        ) || (source?.rollbackSucceeded === true
+          ? "success"
+          : source?.rollbackSucceeded === false
+            ? "failed"
+            : undefined);
   const structuredTechnicalDetails = firstErrorText(
     error?.technicalDetails,
     source?.technicalDetails,
@@ -238,16 +256,24 @@ function handleError(res: any, error: any, fallbackCode: string, fallbackMessage
   const structuredImpact = firstErrorText(error?.impact, source?.impact);
   const structuredNextAction = firstErrorText(error?.nextAction, source?.nextAction, source?.advice);
   const structuredError = {
-    title: redactDiagnosticText(firstErrorText(error?.title, source?.title, fallbackMessage) || fallbackMessage),
-    impact: redactDiagnosticText(structuredImpact || "本次操作未得到成功确认；任何不完整变更都不会被视为成功。"),
-    nextAction: redactDiagnosticText(structuredNextAction || "请根据失败阶段检查后重试；若回滚状态不明确，请先查看技术详情。"),
+    title: redactDiagnosticText(firstErrorText(
+      error?.title,
+      source?.title,
+      elevatedStateUncertain ? "管理员配置仍在执行或状态待确认" : fallbackMessage
+    ) || fallbackMessage),
+    impact: redactDiagnosticText(structuredImpact || (elevatedStateUncertain
+      ? "管理员进程已经启动，可能仍在修改 Windows 组件。工作台不会强制结束它，也不会把等待超时当作配置失败或重启理由。"
+      : "本次操作未得到成功确认；任何不完整变更都不会被视为成功。")),
+    nextAction: redactDiagnosticText(structuredNextAction || (elevatedStateUncertain
+      ? "请保持工作台运行并等待当前阶段结束；只有进度状态确认可以安全重试后，才能重新检测并生成新的配置计划。"
+      : "请根据失败阶段检查后重试；若回滚状态不明确，请先查看技术详情。")),
     rollbackStatus: rollbackStatus || "unknown",
     operationId: firstErrorText(requestOperationId, error?.operationId, source?.operationId, details?.operationId),
     retryable: typeof error?.retryable === "boolean"
       ? error.retryable
       : typeof source?.retryable === "boolean"
         ? source.retryable
-        : true,
+        : !["ELEVATED_SCRIPT_TIMEOUT", "ELEVATED_STATE_UNKNOWN"].includes(code),
     technicalDetails: structuredTechnicalDetails ? redactDiagnosticText(structuredTechnicalDetails) : undefined
   };
   if (!error?.code) {
@@ -269,6 +295,22 @@ router.get("/status", async (req, res) => {
     sendSuccess(res, await orchestrator.getStatus({ forceSystemRefresh: req.query.refresh === "1" }));
   } catch (error) {
     handleError(res, error, "IIS_STATUS_CHECK_FAILED", "读取 IIS FTP 状态失败");
+  }
+});
+
+router.get("/admin-operation", async (_req, res) => {
+  try {
+    sendSuccess(res, await getElevatedAdminOperationStatus());
+  } catch (error) {
+    handleError(res, error, "ELEVATED_OPERATION_STATUS_FAILED", "读取管理员配置进度失败");
+  }
+});
+
+router.delete("/pending-provisioning", async (_req, res) => {
+  try {
+    sendSuccess(res, await orchestrator.clearPendingProvisioning());
+  } catch (error) {
+    handleError(res, error, "CONFIG_WRITE_FAILED", "清除待继续的 IIS FTP 配置失败");
   }
 });
 
@@ -331,11 +373,12 @@ router.post("/setup", async (req, res) => {
     const passivePortEnd = Number(req.body?.passivePortEnd);
     const allowLegacyFirewallRuleUpdate = req.body?.allowLegacyFirewallRuleUpdate === true;
     const allowAclTightening = req.body?.allowAclTightening === true;
+    const allowSharedFtpServiceStart = req.body?.allowSharedFtpServiceStart === true;
     if (password !== confirmPassword) {
       sendCameraFtpValidationError(res, "FTP_PASSWORD_INVALID", "两次输入的 FTP 密码不一致。", "请重新输入并确认相同的 FTP 密码。");
       return;
     }
-    sendSuccess(res, await orchestrator.setup({ baseUrl: getBaseUrl(req), eventId, username, password, controlPort, passivePortStart, passivePortEnd, allowLegacyFirewallRuleUpdate, allowAclTightening }));
+    sendSuccess(res, await orchestrator.setup({ baseUrl: getBaseUrl(req), eventId, username, password, controlPort, passivePortStart, passivePortEnd, allowLegacyFirewallRuleUpdate, allowAclTightening, allowSharedFtpServiceStart }));
   } catch (error) {
     handleError(res, error, "IIS_FTP_INSTALL_FAILED", "初始化 Windows IIS FTP 失败");
   }
@@ -366,11 +409,12 @@ router.post("/adopt-site", async (req, res) => {
     const passivePortEnd = Number(req.body?.passivePortEnd);
     const allowLegacyFirewallRuleUpdate = req.body?.allowLegacyFirewallRuleUpdate === true;
     const allowAclTightening = req.body?.allowAclTightening === true;
+    const allowSharedFtpServiceStart = req.body?.allowSharedFtpServiceStart === true;
     if (password !== undefined && confirmPassword !== undefined && password !== confirmPassword) {
       sendCameraFtpValidationError(res, "FTP_PASSWORD_INVALID", "两次输入的 FTP 密码不一致。", "请重新输入并确认相同的 FTP 密码。");
       return;
     }
-    sendSuccess(res, await orchestrator.adoptSite({ siteName, eventId, username, password, controlPort, passivePortStart, passivePortEnd, allowLegacyFirewallRuleUpdate, allowAclTightening, baseUrl: getBaseUrl(req) }));
+    sendSuccess(res, await orchestrator.adoptSite({ siteName, eventId, username, password, controlPort, passivePortStart, passivePortEnd, allowLegacyFirewallRuleUpdate, allowAclTightening, allowSharedFtpServiceStart, baseUrl: getBaseUrl(req) }));
   } catch (error) {
     handleError(res, error, "IIS_SITE_ADOPTION_FAILED", "接管 IIS FTP 站点失败");
   }
@@ -390,7 +434,11 @@ router.post("/discover-sites", async (req, res) => {
 
 router.post("/start", async (req, res) => {
   try {
-    sendSuccess(res, await orchestrator.start({ baseUrl: getBaseUrl(req), allowAclTightening: req.body?.allowAclTightening === true }));
+    sendSuccess(res, await orchestrator.start({
+      baseUrl: getBaseUrl(req),
+      allowAclTightening: req.body?.allowAclTightening === true,
+      allowSharedFtpServiceStart: req.body?.allowSharedFtpServiceStart === true
+    }));
   } catch (error) {
     handleError(res, error, "IIS_SERVICE_START_FAILED", "启动 IIS FTP 服务失败");
   }
@@ -406,7 +454,11 @@ router.post("/stop", async (_req, res) => {
 
 router.post("/restart", async (req, res) => {
   try {
-    sendSuccess(res, await orchestrator.restart({ baseUrl: getBaseUrl(req), allowAclTightening: req.body?.allowAclTightening === true }));
+    sendSuccess(res, await orchestrator.restart({
+      baseUrl: getBaseUrl(req),
+      allowAclTightening: req.body?.allowAclTightening === true,
+      allowSharedFtpServiceStart: req.body?.allowSharedFtpServiceStart === true
+    }));
   } catch (error) {
     handleError(res, error, "IIS_CONFIG_FAILED", "重启 IIS FTP 服务失败");
   }
@@ -429,7 +481,8 @@ router.post("/repair", async (req, res) => {
     const passivePortEnd = Number(req.body?.passivePortEnd);
     const allowLegacyFirewallRuleUpdate = req.body?.allowLegacyFirewallRuleUpdate === true;
     const allowAclTightening = req.body?.allowAclTightening === true;
-    sendSuccess(res, await orchestrator.repair({ baseUrl: getBaseUrl(req), password, controlPort, passivePortStart, passivePortEnd, allowLegacyFirewallRuleUpdate, allowAclTightening }));
+    const allowSharedFtpServiceStart = req.body?.allowSharedFtpServiceStart === true;
+    sendSuccess(res, await orchestrator.repair({ baseUrl: getBaseUrl(req), password, controlPort, passivePortStart, passivePortEnd, allowLegacyFirewallRuleUpdate, allowAclTightening, allowSharedFtpServiceStart }));
   } catch (error) {
     handleError(res, error, "IIS_CONFIG_FAILED", "修复 IIS FTP 配置失败");
   }

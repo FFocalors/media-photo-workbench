@@ -22,8 +22,10 @@ import {
   adoptCameraFtpSite,
   checkCameraFtpPort,
   clearCameraFtpActiveEvent,
+  clearCameraFtpPendingProvisioning,
   type ApiResponse,
   type CameraFtpActionData,
+  type CameraFtpAdminOperationData,
   type CameraFtpConflictItemData,
   type CameraFtpNetworkAddressData,
   type CameraFtpOperationData,
@@ -34,6 +36,7 @@ import {
   type CameraFtpWatcherData,
   type EventData,
   eventStatusLabels,
+  fetchCameraFtpAdminOperation,
   fetchCameraFtpStatus,
   fetchEvents,
   discoverCameraFtpSites,
@@ -55,6 +58,7 @@ import {
 } from "../../lib/statusSemantics";
 import {
   applyCameraFtpStatusObservation,
+  isCameraFtpRuntimeReady,
   buildCameraFtpErrorPresentation,
   buildCameraFtpStatusIssues,
   cameraFtpPlanCanApply,
@@ -62,6 +66,7 @@ import {
   getCameraFtpButtonState,
   groupCameraFtpIssues,
   localizeCameraFtpUiWarning,
+  mergeCameraFtpAdminOperationObservation,
   validateCameraFtpPortSettings,
   type CameraFtpErrorPresentation
 } from "./cameraFtpUiState";
@@ -173,7 +178,7 @@ export function CameraFtpImportPanel() {
   const [activeAction, setActiveAction] = useState<ConfirmableAction | "open-folder" | "discover-sites" | null>(null);
   const [preparingPlanAction, setPreparingPlanAction] = useState<CameraFtpProvisioningGoal | null>(null);
   const [provisioningPlan, setProvisioningPlan] = useState<CameraFtpProvisioningPlanData | null>(null);
-  const [provisioningPhaseIndex, setProvisioningPhaseIndex] = useState(0);
+  const [adminOperation, setAdminOperation] = useState<CameraFtpAdminOperationData | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [lastOperation, setLastOperation] = useState<CameraFtpOperationData | null>(null);
   const [dismissedConflictSite, setDismissedConflictSite] = useState("");
@@ -182,6 +187,9 @@ export function CameraFtpImportPanel() {
   const [lastFailedDiscovery, setLastFailedDiscovery] = useState(false);
   const operationInProgressRef = useRef(false);
   const statusRequestSequence = useRef(0);
+  const statusPollInFlightRef = useRef(false);
+  const adminOperationPollInFlightRef = useRef(false);
+  const previousAdminOperationStateRef = useRef<CameraFtpAdminOperationData["state"] | null>(null);
 
   const applyStatusObservation = useCallback((
     incoming: CameraFtpStatusData,
@@ -265,29 +273,75 @@ export function CameraFtpImportPanel() {
   }, [loadPage]);
 
   useEffect(() => {
-    if (activeAction) return;
+    const adminBusy = adminOperation?.safeToRetry === false
+      && (adminOperation.state === "running" || adminOperation.state === "timed_out_waiting");
+    if (activeAction || adminBusy) return;
     const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") void refreshStatus(false);
-    }, 5000);
+      if (document.visibilityState !== "visible" || statusPollInFlightRef.current) return;
+      statusPollInFlightRef.current = true;
+      void refreshStatus(false).finally(() => {
+        statusPollInFlightRef.current = false;
+      });
+    }, 15000);
     return () => window.clearInterval(timer);
-  }, [activeAction, refreshStatus]);
+  }, [activeAction, adminOperation?.safeToRetry, adminOperation?.state, refreshStatus]);
 
   useEffect(() => {
-    if (!activeAction || !isProvisioningAction(activeAction)) {
-      setProvisioningPhaseIndex(0);
-      return;
-    }
+    let cancelled = false;
+    const observe = async () => {
+      if (adminOperationPollInFlightRef.current) return;
+      adminOperationPollInFlightRef.current = true;
+      try {
+        const response = await fetchCameraFtpAdminOperation();
+        if (cancelled || !response.ok || !response.data) return;
+        const next = response.data;
+        const previousState = previousAdminOperationStateRef.current;
+        previousAdminOperationStateRef.current = next.state;
+        setAdminOperation((current) => mergeCameraFtpAdminOperationObservation(current, next));
+        if (previousState === "timed_out_waiting"
+          && ["completed", "failed", "abandoned"].includes(next.state)) {
+          operationInProgressRef.current = false;
+          void refreshStatus(false, true);
+        }
+      } finally {
+        adminOperationPollInFlightRef.current = false;
+      }
+    };
+
+    const shouldPoll = Boolean(
+      (activeAction && isProvisioningAction(activeAction))
+      || adminOperation?.state === "running"
+      || adminOperation?.state === "timed_out_waiting"
+    );
+    if (!shouldPoll) return;
+    void observe();
     const timer = window.setInterval(() => {
-      setProvisioningPhaseIndex((current) => Math.min(current + 1, 6));
-    }, 1400);
-    return () => window.clearInterval(timer);
-  }, [activeAction]);
+      if (document.visibilityState === "visible") void observe();
+    }, 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeAction, adminOperation?.state, refreshStatus]);
 
   useEffect(() => {
-    if (status?.account?.username && !credentialsDirty) {
-      setUsername(status.account.username);
+    let cancelled = false;
+    void fetchCameraFtpAdminOperation().then((response) => {
+      if (cancelled || !response.ok || !response.data) return;
+      setAdminOperation((current) => mergeCameraFtpAdminOperationObservation(current, response.data));
+      previousAdminOperationStateRef.current = response.data.state;
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const preferredUsername = status?.pendingProvisioning?.username || status?.account?.username;
+    if (preferredUsername && !credentialsDirty) {
+      setUsername(preferredUsername);
     }
-  }, [credentialsDirty, status?.account?.username]);
+  }, [credentialsDirty, status?.account?.username, status?.pendingProvisioning?.username]);
 
   useEffect(() => {
     if (status && (!status.passwordConfigured || status.passwordResetRequired || status.account?.exists === false)) {
@@ -297,16 +351,16 @@ export function CameraFtpImportPanel() {
 
   useEffect(() => {
     if (portInputsDirty || !status) return;
-    setControlPort(String(status.controlPort || DEFAULT_CONTROL_PORT));
-    setPassivePortStart(String(status.passivePorts?.start || PASSIVE_PORT_START));
-    setPassivePortEnd(String(status.passivePorts?.end || PASSIVE_PORT_END));
-  }, [portInputsDirty, status?.controlPort, status?.passivePorts?.end, status?.passivePorts?.start]);
+    setControlPort(String(status.pendingProvisioning?.controlPort || status.controlPort || DEFAULT_CONTROL_PORT));
+    setPassivePortStart(String(status.pendingProvisioning?.passivePortStart || status.passivePorts?.start || PASSIVE_PORT_START));
+    setPassivePortEnd(String(status.pendingProvisioning?.passivePortEnd || status.passivePorts?.end || PASSIVE_PORT_END));
+  }, [portInputsDirty, status?.controlPort, status?.passivePorts?.end, status?.passivePorts?.start, status?.pendingProvisioning]);
 
   useEffect(() => {
     if (!selectedEventId) {
-      setSelectedEventId(status?.activeEvent?.id || events[0]?.id || "");
+      setSelectedEventId(status?.pendingProvisioning?.eventId || status?.activeEvent?.id || events[0]?.id || "");
     }
-  }, [events, selectedEventId, status?.activeEvent?.id]);
+  }, [events, selectedEventId, status?.activeEvent?.id, status?.pendingProvisioning?.eventId]);
 
   useEffect(() => {
     const candidates = discoveredSites.length > 0
@@ -341,11 +395,7 @@ export function CameraFtpImportPanel() {
 
   const activeEvent = status?.activeEvent ?? null;
   const watcher = status?.watcher;
-  const serviceReady = Boolean(
-    status?.site?.started === true
-      && status?.service?.running !== false
-      && status?.port?.listening !== false
-  );
+  const serviceReady = isCameraFtpRuntimeReady(status);
   const uploadInProgress = Boolean(
     watcher?.busy === true
       || (watcher?.unstableCount ?? 0) > 0
@@ -379,7 +429,9 @@ export function CameraFtpImportPanel() {
   ])).filter((port) => port !== portValidation.controlPort);
   const recommendedPort = availablePorts[0] ?? null;
   const firstSetupRequired = status?.initialized !== true;
-  const uiBusy = Boolean(activeAction || preparingPlanAction);
+  const adminOperationBlocking = adminOperation?.safeToRetry === false
+    && (adminOperation.state === "running" || adminOperation.state === "timed_out_waiting");
+  const uiBusy = Boolean(activeAction || preparingPlanAction || adminOperationBlocking);
   const buttonState = getCameraFtpButtonState({
     status,
     busy: uiBusy,
@@ -419,7 +471,9 @@ export function CameraFtpImportPanel() {
     return combined.filter((issue, index) => combined.findIndex((candidate) => candidate.id === issue.id || (candidate.code === issue.code && candidate.message === issue.message)) === index);
   }, [displayedControlPort, portCheck, portUnavailable, portValidation.controlPort, provisioningPlan?.issues, status]);
   const issueGroups = useMemo(() => groupCameraFtpIssues(visibleIssues), [visibleIssues]);
-  const provisioningProgress = getCameraFtpProvisioningProgress(provisioningPhaseIndex);
+  const provisioningProgress = getCameraFtpProvisioningProgress(
+    Math.max(0, Math.min(adminOperation?.phaseIndex ?? 0, 6))
+  );
 
   const runPortCheck = useCallback(async (showFeedback = false) => {
     const validation = validateCameraFtpPortSettings(controlPort, passivePortStart, passivePortEnd);
@@ -517,7 +571,9 @@ export function CameraFtpImportPanel() {
       },
       restart: {
         title: "重启 IIS FTP 服务",
-        description: "将重启工作台管理的 IIS FTP 站点，并确保 Microsoft FTP Service 已启动，用于应用最新配置。Windows 可能请求管理员权限。",
+        description: activeEvent
+          ? "将重启工作台管理的 IIS FTP 站点，并确保 Microsoft FTP Service 已启动，用于应用最新配置。Windows 可能请求管理员权限。"
+          : "保存的接收活动已不存在。本次只重启工作台管理的 IIS FTP 站点，不修改原有物理路径，也不会恢复文件 watcher；重启后仍需在下方重新选择接收活动。",
         confirmLabel: "重启",
         tone: "warning"
       },
@@ -571,7 +627,8 @@ export function CameraFtpImportPanel() {
 
   const requestAction = async (kind: ConfirmableAction, siteName?: string) => {
     const action = buildPendingAction(kind, siteName);
-    if (!isProvisioningAction(kind)) {
+    const runtimeOnlyRestart = kind === "restart" && !activeEvent;
+    if (!isProvisioningAction(kind) || runtimeOnlyRestart) {
       setPendingAction(action);
       return;
     }
@@ -707,11 +764,13 @@ export function CameraFtpImportPanel() {
       passivePortEnd: confirmedPorts.passivePortEnd ?? PASSIVE_PORT_END
     };
     const allowAclTightening = action.plan?.confirmations.some((confirmation) => confirmation.key === "tighten-broad-acl") === true;
+    const allowSharedFtpServiceStart = action.plan?.confirmations.some((confirmation) => confirmation.key === "start-shared-ftpsvc") === true;
     setPendingAction(null);
     operationInProgressRef.current = true;
     const actionRequestId = ++statusRequestSequence.current;
     setActiveAction(action.kind);
-    setProvisioningPhaseIndex(0);
+    setAdminOperation(null);
+    previousAdminOperationStateRef.current = null;
     setLastOperation(null);
     setLastFailedAction(null);
     setLastFailedDiscovery(false);
@@ -735,7 +794,8 @@ export function CameraFtpImportPanel() {
               confirmPassword: passwordForRequest,
               ...portRequest,
               allowLegacyFirewallRuleUpdate: action.allowLegacyFirewallRuleUpdate === true,
-              allowAclTightening
+              allowAclTightening,
+              allowSharedFtpServiceStart
             });
           }
           break;
@@ -748,18 +808,19 @@ export function CameraFtpImportPanel() {
               ...portRequest,
               allowLegacyFirewallRuleUpdate: action.allowLegacyFirewallRuleUpdate === true,
               allowAclTightening,
+              allowSharedFtpServiceStart,
               ...(passwordForRequest ? { password: passwordForRequest, confirmPassword: passwordForRequest } : {})
             });
           }
           break;
         case "start":
-          response = await startCameraFtp({ allowAclTightening });
+          response = await startCameraFtp({ allowAclTightening, allowSharedFtpServiceStart });
           break;
         case "stop":
           response = await stopCameraFtp();
           break;
         case "restart":
-          response = await restartCameraFtp({ allowAclTightening });
+          response = await restartCameraFtp({ allowAclTightening, allowSharedFtpServiceStart });
           break;
         case "repair":
           {
@@ -768,6 +829,7 @@ export function CameraFtpImportPanel() {
               ...portRequest,
               allowLegacyFirewallRuleUpdate: action.allowLegacyFirewallRuleUpdate === true,
               allowAclTightening,
+              allowSharedFtpServiceStart,
               ...(passwordForRequest ? { password: passwordForRequest } : {})
             });
           }
@@ -927,6 +989,31 @@ export function CameraFtpImportPanel() {
     setPendingAction(action);
   };
 
+  const continuePendingProvisioning = () => {
+    const pending = status?.pendingProvisioning;
+    if (!pending || status.resumeState === "restart_required" || status.resumeState === "blocked") return;
+    const action: ConfirmableAction = pending.action === "adopt" ? "adopt-site" : pending.action;
+    void requestAction(action, pending.targetSiteName || undefined);
+  };
+
+  const clearPendingProvisioning = async () => {
+    const requestId = ++statusRequestSequence.current;
+    setRefreshing(true);
+    try {
+      const response = await clearCameraFtpPendingProvisioning();
+      if (response.ok && response.data) {
+        applyStatusObservation(response.data, "ordinary", requestId);
+        setMessage({ tone: "info", title: "已清除待继续配置", body: "仅清除了工作台中的续配提示，没有修改 Windows、IIS、账户或文件。" });
+      } else {
+        setMessage(apiErrorMessage(response, "无法清除待继续的 IIS FTP 配置。"));
+      }
+    } catch {
+      setMessage({ tone: "danger", title: "清除失败", body: "请求失败，请稍后重试。" });
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   const handleOpenFolder = async () => {
     const requestId = ++statusRequestSequence.current;
     setActiveAction("open-folder");
@@ -989,6 +1076,29 @@ export function CameraFtpImportPanel() {
 
   return (
     <div className="space-y-5">
+      {status?.pendingProvisioning && (
+        <section className={cn(
+          "rounded-2xl border px-5 py-4 shadow-sm",
+          status.resumeState === "blocked" ? "border-red-200 bg-red-50" : status.resumeState === "restart_required" ? "border-amber-200 bg-amber-50" : "border-blue-200 bg-blue-50"
+        )}>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-slate-900">
+                {status.resumeState === "restart_required" ? "Windows 重启后继续配置" : status.resumeState === "blocked" ? "待继续配置当前被阻断" : "可以继续未完成的 IIS FTP 配置"}
+              </p>
+              <p className="mt-1 text-xs leading-5 text-slate-600">
+                已恢复活动、用户名和端口设置，但没有保存密码或高风险确认。当前阶段：{status.initializationState}；下一步：{status.nextStage}。
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50" disabled={uiBusy} onClick={() => void clearPendingProvisioning()} type="button">清除提示</button>
+              <button className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700 disabled:bg-slate-300" disabled={uiBusy || status.resumeState !== "ready_to_continue"} onClick={continuePendingProvisioning} type="button">
+                {status.resumeState === "restart_required" ? "请先重启 Windows" : "重新确认并继续"}
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
       <section className={cn(
         "rounded-2xl border p-5 shadow-sm sm:p-6",
         serviceReady ? "border-emerald-100 bg-emerald-50/35" : "border-slate-100 bg-white"
@@ -1016,7 +1126,7 @@ export function CameraFtpImportPanel() {
           <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
             {serviceReady && (
               <>
-                <button className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50" disabled={!buttonState.stop} onClick={() => void requestAction("stop")} type="button"><Square size={14} />停止 FTP</button>
+                <button className="flex items-center gap-2 rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-semibold text-red-700 shadow-sm transition-colors hover:border-red-300 hover:text-red-800 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400" disabled={!buttonState.stop} onClick={() => void requestAction("stop")} type="button"><Square size={14} />停止 FTP</button>
                 <button className="flex items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 py-2 text-sm font-medium text-blue-700 shadow-sm hover:bg-blue-50 disabled:opacity-50" disabled={!buttonState.restart || portConfigurationChanged} onClick={() => void requestAction("restart")} type="button"><RotateCcw size={15} />重启 FTP</button>
               </>
             )}
@@ -1090,8 +1200,10 @@ export function CameraFtpImportPanel() {
           正在执行只读 Preflight，并区分已符合、可自动修复、需要确认和阻塞项目；此阶段不会修改 Windows 或 IIS。
         </Notice>
       )}
-      {activeAction && isProvisioningAction(activeAction) && (
-        <CameraFtpProvisioningProgress phases={provisioningProgress} />
+      {((activeAction && isProvisioningAction(activeAction))
+        || adminOperation?.state === "running"
+        || adminOperation?.state === "timed_out_waiting") && (
+        <CameraFtpProvisioningProgress operation={adminOperation} phases={provisioningProgress} />
       )}
       {activeAction && !isProvisioningAction(activeAction) && (
         <Notice tone="info" title="正在配置 Windows IIS FTP">
@@ -1344,7 +1456,7 @@ export function CameraFtpImportPanel() {
             />
             <ActionButton disabled={!buttonState.discoverSites} icon={<ShieldCheck size={15} />} label="管理员诊断（只读）" loading={activeAction === "discover-sites"} onClick={() => void handleDiscoverSites()} />
             <ActionButton disabled={!buttonState.start || portConfigurationChanged} icon={<Play size={15} />} label="启动 FTP" loading={activeAction === "start"} onClick={() => void requestAction("start")} />
-            <ActionButton disabled={!buttonState.stop} icon={<Square size={14} />} label="停止 FTP" loading={activeAction === "stop"} onClick={() => void requestAction("stop")} />
+            <ActionButton danger disabled={!buttonState.stop} icon={<Square size={14} />} label="停止 FTP" loading={activeAction === "stop"} onClick={() => void requestAction("stop")} />
             <ActionButton disabled={!buttonState.restart || portConfigurationChanged} icon={<RotateCcw size={15} />} label="重启 FTP" loading={activeAction === "restart"} onClick={() => void requestAction("restart")} />
           </div>
           {buttonState.passwordMessage && <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">{buttonState.passwordMessage}</p>}
@@ -1547,7 +1659,7 @@ function EnvironmentRow({ label, meta, detail }: { label: string; meta: StatusMe
   );
 }
 
-function ActionButton({ disabled, icon, label, loading, onClick, primary = false }: { disabled: boolean; icon: ReactNode; label: string; loading: boolean; onClick: () => void; primary?: boolean }) {
+function ActionButton({ danger = false, disabled, icon, label, loading, onClick, primary = false }: { danger?: boolean; disabled: boolean; icon: ReactNode; label: string; loading: boolean; onClick: () => void; primary?: boolean }) {
   return (
     <button
       className={cn(
@@ -1556,7 +1668,9 @@ function ActionButton({ disabled, icon, label, loading, onClick, primary = false
           ? "cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-400"
           : primary
             ? "border border-blue-600 bg-blue-600 text-white shadow-sm hover:bg-blue-700"
-            : "border border-blue-200 bg-white text-blue-700 shadow-sm hover:bg-blue-50"
+            : danger
+              ? "border border-red-200 bg-white text-red-700 shadow-sm hover:border-red-300 hover:text-red-800"
+              : "border border-blue-200 bg-white text-blue-700 shadow-sm hover:bg-blue-50"
       )}
       disabled={disabled}
       onClick={onClick}

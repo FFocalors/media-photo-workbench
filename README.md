@@ -10,18 +10,18 @@ Media Photo Workbench / 融媒体图片工作台 是面向校园融媒体中心�
 
 ## 当前版本
 
-- 当前版本：`v1.2.0-alpha.1`
+- 当前版本：`v1.2.2`
 - 版本主题：现场传图稳定性与使用体验重构
 - `v1.1.0` 仅作为内部开发节点，不创建正式发布；项目从 `v1.1.0-alpha.4` 直接进入本版本线
-- 本轮不打 Tag、不创建 Release、不打包 ZIP、不生成安装包
+- 当前内部测试 ZIP 已包含本机 FTP 控制、活动切换、接收目录 ACL、提权临时目录 ACL 回退、进度终态和打包目录结构修复
 - 后续稳定版仍以 Windows ZIP 便携包作为主要交付方式
 
 ## 当前交付状态
 
-`v1.2.0-alpha.1` 是源码开发基线，本轮没有对应的 ZIP、安装包或 Release。最近的公开预发布验证版本仍为 `v1.0.0-rc.1`。后续进入稳定发布流程后，仍推荐使用 Windows ZIP 便携包，文件名将由实际发布版本决定，例如：
+`v1.2.2` 是合并到 `main` 后的内部测试版本，尚未创建 Tag 或 GitHub Release。当前已重新生成包含最新修复和精简根目录结构的异机测试包：
 
 ```text
-MediaPhotoWorkbench-v{version}-x64.zip
+MediaPhotoWorkbench-v1.2.2-x64.zip
 ```
 
 当前不推荐 NSIS 安装包，也不提供 Web Installer。
@@ -30,7 +30,7 @@ MediaPhotoWorkbench-v{version}-x64.zip
 
 1. 下载发布页提供的 Windows ZIP 便携包。
 2. 将 ZIP 解压到非系统盘目录，例如 `D:\MediaPhotoWorkbench`。
-3. 双击运行 `Media Photo Workbench.exe` 或 `融媒体图片工作台.exe`。
+3. 双击根目录的 `Media Photo Workbench.exe`。其余运行文件统一位于 `runtime/`，请勿移动或删除该文件夹。
 4. 不要直接在压缩包内运行程序。
 5. 首次使用建议先进入系统设置，选择图片仓库路径。
 
@@ -64,11 +64,31 @@ MediaPhotoWorkbench-v{version}-x64.zip
 - Windows 热点常见主机地址候选为 `192.168.137.1`，实际地址和端口以主机首页 / 相机 FTP 页面检测结果为准。
 - 必要时检查 Windows 防火墙是否允许本软件访问专用网络。
 
-## 相机 FTP 传输（v1.2.0-alpha.1）
+## 相机 FTP 传输（v1.2.2）
 
-v1.2.0-alpha.1 延续 Windows IIS FTP 单一架构。工作台负责检测、初始化、修复、启停和显式接管 IIS FTP 站点；普通启动不要求管理员权限，只有修改 Windows 功能、IIS、本地账户、ACL 或防火墙时才会显示 UAC。
+v1.2.2 延续 Windows IIS FTP 单一架构。工作台负责检测、初始化、修复、启停和显式接管 IIS FTP 站点；普通启动不要求管理员权限，只有修改 Windows 功能、IIS、本地账户、ACL 或防火墙时才会显示 UAC。
 
 当前自动配置统一采用 `Preflight（只读）→ Plan → Apply（一次 UAC）→ Verify → Commit / Rollback`。setup、repair、start、restart 和 adopt-site 只改变目标意图，底层都由同一 IIS reconciliation 事务完成；start 发现配置缺失时会先修复再启动。Plan 会把项目分成“已符合 / 将创建 / 将更新 / 将修复 / 需要确认 / 阻塞”，只有无关 IIS 站点、外部程序、非工作台账户等不能安全处理的资源才阻止执行。高风险 ACL 收紧、服务器级 PASV 和显式接管会在计划确认弹窗中逐项说明。
+
+setup、repair、start、restart 和 adopt 的管理员配置最长等待 20 分钟，避免把首次启用 Windows IIS 组件的正常长耗时误判为旧版短超时。页面每秒读取脱敏状态文件中的真实阶段，按已完成节点显示进度、已等待时间和阶段区间估算；Windows 功能安装等无法读取内部百分比的阶段使用不确定动画，不按时间伪造增长。达到上限后不会强制结束管理员进程，也不会把超时转换成重启建议；在后台进程结束或确认不存在前禁止重复执行。工作台重启后会恢复未结束操作的监控，最终仍要求重新检测、重新生成计划并重新输入密码与风险确认。
+
+管理员操作的一次性输入和状态文件会先写入严格 ACL 保护的临时目录。工作台优先使用系统 TEMP；若该目录被重定向、无法创建或不支持安全 ACL，会自动改用当前用户的本地应用数据目录。ACL 使用当前用户 SID、Administrators 和 SYSTEM 分步授权后再关闭继承，避免域账户、Microsoft 账户或中文用户名解析差异。若所有安全目录都不可用，错误阶段明确为“保护管理员临时目录”，并显示“未修改系统，无需回滚”，不会启动 UAC 或 IIS 脚本。
+
+同一个管理员操作的阶段和百分比只允许向前推进；迟到的旧轮询、UAC 启动器状态或已清理的临时状态文件不能覆盖较新的阶段或 `completed` 终态。管理员脚本结束后先显示 98% 的结果收敛阶段，Node 配置、watcher 和最终状态提交完成后才显示 100%。已启用全部 IIS FTP 功能的健康电脑会复用首次功能快照，不再在“检查系统环境”阶段重复执行多轮 Windows 功能查询；缺失、Pending 或未知功能仍逐项复核。
+
+自动配置现已覆盖 IIS/FTP 从未启用、FTP 组件缺失、组件启用后待重启、`applicationHost.config` 或管理 DLL 延迟生成、FTPSVC 未注册/Disabled/Manual/Stopped/Pending，以及真实依赖服务停止等状态。脚本按 Windows 报告的服务依赖顺序做最小修复，不会为了 FTP 无条件启动 W3SVC；配置损坏、组件安装不完整或 Pending 超时会以独立错误阻断，不自动执行 DISM 重装或重置整个 IIS。
+
+服务启动同样遵循幂等原则：FTPSVC 已为 `Running/Automatic` 时直接确认就绪，不重复调用 Start-Service 或遍历启动依赖；只有服务未运行或启动类型不符合要求时才进入依赖修复。依赖遍历允许首次运行时的空变更集合，避免 PowerShell 5.1 把正常的空状态误报为服务启动失败。
+
+普通权限状态检测不会再把 `Get-NetTCPConnection` 的 Access Denied 当成“端口未监听”。脚本会回退到无需管理员权限的 `netstat` 读取目标端口；若两种方式都不可用则保持 `unknown`，不会伪造站点停止。后台轮询改为 15 秒且禁止并发请求，并复用 30 秒内的可信快照；单次实时检测超时会暂时保留最近一次已确认状态并继续重试。最终监听验证只轮询目标端口，健康路径不再反复扫描全机监听、IIS binding、Windows 保留端口或候选端口。
+
+当普通权限只能确认托管配置已初始化、FTPSVC 正在运行且目标端口正在监听，但无法读取 `site.started` 时，页面仍允许点击“停止 FTP”。停止操作会请求 UAC，并按已保存的 IIS Site ID 精确停止工作台托管站点；不会停止共享 FTPSVC 或无关 FTP 站点。
+
+如果保存的 FTP 接收活动后来不存在或不再允许接收，运行中的工作台托管站点仍可停止，也可执行一次仅针对现有 IIS 站点的运行时重启。该重启不会采用页面下拉框中的活动、不修改旧 physicalPath、不恢复 watcher；站点停止后必须先明确切换到新的有效接收活动，才能再次启动接收，避免旧目录被静默重新启用。
+
+从已经失效的旧活动切换到有效活动时，工作台不会要求旧活动记录仍存在。它会通过托管 Site ID 读取 IIS 中当前真实 physicalPath 和运行状态，保存为回滚快照后再切换目录与 watcher；目标活动只在完整验证通过后提交。若在取得快照前失败，系统尚未发生修改，错误卡会明确显示“无需回滚”。
+
+只有 IIS 必需功能处于 `EnablePending/DisablePending` 等 Pending 状态，或本轮 `Enable-WindowsOptionalFeature` 明确返回 `RestartNeeded=true` 时，工作台才会要求重启，并在账户、ACL、站点和防火墙修改前停止。CBS、Windows Update 或 `PendingFileRenameOperations` 等系统级待重启痕迹可能来自无关软件，只作为诊断信息，不单独阻断 IIS/FTP 配置；仅当 IIS 组件等待后仍未注册或配置仍未就绪时，才结合这些信息谨慎建议重启。续配仅保存活动、用户名、端口、PASV 范围与操作类型，不保存密码或确认结果；重启后重新检测并要求再次输入密码和确认风险操作。若 FTPSVC 当前停止且存在非工作台的自动启动 FTP 站点，计划会列出这些站点并要求确认后才启动共享服务；工作台不会修改或停止这些无关站点。
 
 接收目录 ACL 修改前会保存 DACL SDDL。若目录因旧配置或继承转换形成非规范顺序，工作台会先保留原规则并按 Deny/Allow 规范顺序重建，再添加相机账户权限；写入后验证实际读写能力。失败回滚会重新应用原 SDDL 并精确验证，不能完整恢复时不会误报成功，也不会删除本轮账户而留下新的孤立 SID。
 
@@ -122,6 +142,8 @@ alpha.4 修复了 Windows PowerShell 5.1 对无 BOM UTF-8 提权启动脚本的�
 防火墙修复只会自动创建或校正工作台稳定内部名称的规则。检测到早期版本以 GUID 为内部名称创建的本地 FTP 规则且内容需要改变时，首次 UAC 只做预检，随后弹出第二个高风险确认框，列出控制/被动端口和远程作用域的当前值与目标值；用户确认后才更新。组策略、动态或来源不明的规则不会被强制修改。规则更新使用 `-NewDisplayName`，失败时恢复原端口、作用域和启用状态，并在技术详情中保留脱敏的实际失败命令与系统错误。
 
 IIS FTP 站点启停使用站点级 `ftpServer.Start/Stop` 和 `ftpServer.state`，与共享的 Windows `FTPSVC` 服务分开检测。配置失败时页面会分别指出“启动 FTPSVC”“启动目标 FTP 站点”或“验证实际端口监听”，并在技术详情中提供 HRESULT、服务/站点状态和回滚提示；不会把目标站点失败误报成 Windows 服务不可用。
+
+目录 ACL 收紧会直接保留和复制原始 ACE / AccessMask，兼容 `GENERIC_ALL (268435456)` 及以负数表示的通用权限位；不会通过 `FileSystemRights` 重建这些 ACE。重建时使用独立的原始 Deny/Allow 列表，保证所有拒绝 ACE 位于允许 ACE 之前，并在写入前后验证 canonical；这也规避 Windows PowerShell 5.1 对 `OrderedDictionary` 属性排序不可靠的问题。遇到无法安全保留的特殊 ACE 时返回 `FTP_ACL_UNSUPPORTED_ACE`，写入失败则从原始 SDDL 恢复并复读验证。
 
 alpha.4 还兼容 IIS / Windows PowerShell 5.1 把 FTP 运行状态返回为数值枚举的情况：`1` 按 `Started`、`3` 按 `Stopped` 处理。此前日志中的 “runtime state remained '1'” 属于解析假失败，并非站点真的无法启动。站点启动异常现在额外收集目标 Site ID、binding、physicalPath、FTPSVC、端口归属、只读 appcmd 结果和近期 IIS / FTP / WAS 系统事件；防火墙明确不作为 IIS 站点启动阻塞原因。
 
@@ -271,7 +293,7 @@ pnpm build
 pnpm dist:portable
 ```
 
-`pnpm dist:portable` 会生成 Windows ZIP 便携包到 `release-pack/`。本轮 `v1.2.0-alpha.1` 禁止执行发布打包，不打 Tag、不创建 Release。
+`pnpm dist:portable` 会生成 Windows ZIP 便携包到 `release-pack/`。ZIP 根目录只保留 `Media Photo Workbench.exe` 启动入口和 `runtime/` 运行环境目录；用户双击根目录入口即可启动。本轮生成 `v1.2.2` 内部测试包供异机验证，不打 Tag、不创建 GitHub Release。
 
 Electron Builder 会通过 `extraResources` 把 `scripts/windows/*.ps1` 放入打包资源目录，供 IIS 状态与显式管理操作使用。普通应用启动仍使用非管理员权限，不应修改 NSIS 为默认提权。
 
