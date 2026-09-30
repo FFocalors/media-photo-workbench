@@ -126,7 +126,7 @@ eventSlug_importTime_sourceDevice_originalFilename
 
 前端必须优先遵循 Figma 设计稿。没有设计稿时采用简约、高级、克制、浅色界面、低饱和蓝色主色、轻阴影、圆角卡片、线性图标、适合 Windows 11 桌面端的方向。不要做成手机 App 风格。
 
-当前 `v1.2.0-alpha.1` 的重点是现场传图稳定性与使用体验重构，不进行发布打包。开发模式继续使用 Vite `0.0.0.0:5173` 和后端 `3030-3040`，生产 / 打包模式必须由 Express 托管前端 `dist/`，让客户端通过 `http://主机IP:{serverPort}` 同时访问前端页面、`/api` 和 Socket.IO。Electron 主窗口建议最小尺寸为 `1200 x 760`，但页面不能只依赖最小尺寸；在 1200px 左右宽度下，图片墙、待修图、导出、归档和客户端协作页面仍必须可用。手机和平板第一版只作为轻量访问入口，不要求完整适配批量上传、批量下载、导出、归档、永久删除等重操作。
+当前版本为 `v2.1.1`：相机 FTP 已从自动配置转为手工配置加内置指导，窗口外壳、已连接客户端和移动端轻量筛片在 `v2.1.0` 已合并。开发模式继续使用 Vite `0.0.0.0:5173` 和后端 `3030-3040`，生产 / 打包模式必须由 Express 托管前端 `dist/`，让客户端通过 `http://主机IP:{serverPort}` 同时访问前端页面、`/api` 和 Socket.IO。Electron 主窗口建议最小尺寸为 `1200 x 760`，但页面不能只依赖最小尺寸；在 1200px 左右宽度下，图片墙、待修图、导出、归档和客户端协作页面仍必须可用。手机和平板第一版只作为轻量访问入口，不要求完整适配批量上传、批量下载、导出、归档、永久删除等重操作。
 
 页面：
 
@@ -178,12 +178,14 @@ Windows 打包目标为便携 ZIP 包和 NSIS 安装包，输出到 `release-pac
 
 ### 10.1 Windows IIS 相机 FTP
 
-v1.2.0-alpha.1 的相机 FTP 只使用 Windows IIS FTP。禁止重新引入 `ftp-srv`、Node FTP Server 或双 provider fallback。
+相机 FTP 只使用 Windows IIS FTP，且从 `v2.1.1` 起不再由工作台自动配置。禁止重新引入 `ftp-srv`、Node FTP Server 或双 provider fallback，也禁止恢复工作台自动启用 Windows 功能、创建或修改本地账户、写 ACL、写防火墙规则或接管用户已有 IIS 站点的实现。
 
-- IIS 站点默认名为 `MediaPhotoWorkbenchFTP`，binding `*:{当前控制端口}:`；控制端口默认 `21`，允许在 `1-65535` 范围内配置且不得落入 PASV 范围。普通 FTP、无 SSL、basic auth 开启、anonymous 关闭，PASV 默认为 `50000-50100`。
-- 工作台在“导入图片 > 相机 FTP”内检测、初始化、修复、启停和显式接管 IIS。不得静默修改、停止或删除用户现有 IIS 站点、目录或文件。
-- 普通启动不要求管理员权限。只有修改 Windows 功能、IIS、FTPSVC、本地账户、ACL 或防火墙时使用 `Start-Process -Verb RunAs`；提权脚本通过短生命周期 JSON 文件传递参数和结果。
-- 默认用户名是 `camera`，没有默认密码。全局共用一套可修改账户；密码不得进入命令行、`config.json`、SQLite、API 响应、日志或测试快照。只自动管理 Description 为 `Media Photo Workbench Managed FTP Account` 的本地账户。
+- 工作台不得修改 Windows 功能、IIS 站点与配置、FTPSVC 启动类型、本地账户、ACL 或防火墙规则。`setup`、`repair`、`adopt-site`、`discover-sites`、`credentials`、`provisioning-plan` 和 `pending-provisioning` 接口保持退役状态，统一返回 `410 IIS_AUTOMATION_REMOVED`，并携带 `guidePath`、`guideSection` 指向指导分节。
+- 手工配置由用户在 IIS 中按应用内指导（`/host/help/camera-ftp`）完成一次。指导随应用离线提供，必须覆盖组件、服务、账户、站点、绑定、身份验证、目录权限、被动端口、防火墙、验证与排查，并区分只读命令与管理员命令。
+- 工作台只负责只读检测、站点启停、运行时重启、切换接收活动和相机图片导入。提权只用于站点启停、运行时重启、切换接收活动和管理员只读检测，必须由用户确认后经一次 UAC 完成；提权脚本通过短生命周期 JSON 文件传递参数和结果。
+- IIS 站点默认名为 `MediaPhotoWorkbenchFTP`，binding `*:{当前控制端口}:`；控制端口默认 `21`，允许在 `1-65535` 范围内配置且不得落入 PASV 范围。普通 FTP、无 SSL、basic auth 开启、anonymous 关闭，PASV 默认为 `50000-50100`。工作台按这些值校验站点，不符时阻塞启停与切换并给出对应指导分节。
+- 全局共用一套账户。默认用户名是 `camera`，没有默认密码，密码由用户自行设置。只把 Description 为 `Media Photo Workbench Managed FTP Account` 的本地账户视为工作台账户；密码不得进入命令行、`config.json`、SQLite、API 响应、日志或测试快照，页面也不得询问、回显或保存密码。
+- 接收目录权限由用户手工授予可继承的 Modify 权限，工作台只校验是否已继承，不得写 ACL；缺失时返回 `FTP_DIRECTORY_PERMISSION_REQUIRED`。被动端口范围和防火墙规则不符时只提示、不阻断站点启停。
 - 同一时间只有一个 `activeEventId`，与前端当前查看活动无关。IIS physicalPath、watcher 和原图最终目录统一指向 `working/{event_slug}/原图/相机FTP/`；旧 `ftp/`、`camera_ftp_upload` 不删除、不自动迁移。
 - 相机 FTP 文件稳定后原地导入，`images.original_path` 指向 IIS 已落盘文件，不复制、不移动、不重命名原图。
 - 停止 FTP 只停止工作台管理的 IIS 站点，保留活动关联和 watcher；解除关联必须在站点已停止、无上传/导入任务时独立确认。
@@ -191,7 +193,8 @@ v1.2.0-alpha.1 的相机 FTP 只使用 Windows IIS FTP。禁止重新引入 `ftp
 - 当前 FTP 活动不得归档、逻辑删除或永久删除。切换前必须确认无未稳定文件和导入中任务；切换失败回滚 IIS 路径、站点状态和 watcher。
 - watcher 只处理 JPG/JPEG，复用 `camera_ftp` 导入管线的 hash 去重、EXIF、thumb、preview、SQLite、任务和 Socket.IO。应用退出只关闭 watcher，不停止 IIS/FTPSVC。
 - 网络地址同时显示 WLAN 和 Windows 热点。`192.168.137.1` 只是常见热点地址，不得写死到 IIS binding。
-- 自动测试不得调用任何 IIS 修改脚本；只允许纯逻辑、临时目录 watcher 和只读状态检测。
+- 相机 FTP 需要 Windows 11；平台不支持时按阻塞项处理，不得降级成“可用”。
+- 自动测试不得调用任何 IIS 修改脚本或提权脚本；只允许纯逻辑、临时目录 watcher 和只读状态检测。
 
 ## 11. 多端协作
 
