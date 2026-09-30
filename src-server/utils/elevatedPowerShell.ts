@@ -771,7 +771,7 @@ async function recoverElevatedOperationState(): Promise<void> {
       const operation: OperationFiles = {
         operationId: status.operationId,
         parentOperationId: status.parentOperationId,
-        scriptName: status.scriptName || "iis-ftp-setup.ps1",
+        scriptName: status.scriptName || "iis-ftp-control.ps1",
         requestedAt: Number.isFinite(startedAt) ? startedAt : entry.mtimeMs,
         operationDir: entry.path,
         inputPath: path.join(entry.path, inputName),
@@ -1204,20 +1204,24 @@ async function executeJsonScript<T>(
         operation: operationLabel,
         stage: "process_starting"
       });
+      const processArgs = [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        scriptPath,
+        "-InputPath",
+        operation.inputPath,
+        "-OutputPath",
+        operation.outputPath
+      ];
+      if (scriptName === "iis-ftp-status.ps1") {
+        processArgs.push("-StatusPath", operation.statusPath, "-OperationId", operation.operationId);
+      }
       result = await runProcess(
         windowsPowerShellExecutable(),
-        [
-          "-NoProfile",
-          "-NonInteractive",
-          "-ExecutionPolicy",
-          "Bypass",
-          "-File",
-          scriptPath,
-          "-InputPath",
-          operation.inputPath,
-          "-OutputPath",
-          operation.outputPath
-        ],
+        processArgs,
         timeoutMs
       );
       await writeStatus(operation.statusPath, {

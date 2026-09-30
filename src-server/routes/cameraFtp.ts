@@ -80,7 +80,8 @@ function errorStatus(code: string): number {
     "ELEVATED_STATE_UNKNOWN",
     "FTP_SERVICE_MUST_BE_STOPPED",
     "FTP_SERVICE_STATE_UNKNOWN",
-    "FTP_SETUP_REQUIRED"
+    "FTP_SETUP_REQUIRED",
+    "FTP_DIRECTORY_PERMISSION_REQUIRED"
   ].includes(code)) return 409;
   if (["ADMIN_REQUIRED", "UAC_CANCELLED", "HOST_ONLY_OPERATION"].includes(code)) return 403;
   if (code === "UNSUPPORTED_PLATFORM") return 400;
@@ -189,6 +190,13 @@ function handleError(res: any, error: any, fallbackCode: string, fallbackMessage
   const legacyDetails = error?.details && typeof error.details === "object"
     ? sanitizeDiagnosticValue(error.details) as Record<string, unknown>
     : undefined;
+  const guideSection = ["FTP_DIRECTORY_PERMISSION_REQUIRED", "FTP_ACCOUNT_PERMISSION_FAILED"].includes(code) ? "permissions"
+    : ["IIS_FTP_FEATURE_MISSING", "IIS_COMPONENT_INSTALL_INCOMPLETE"].includes(code) ? "features"
+    : ["FTP_SERVICE_NOT_RUNNING", "FTP_SERVICE_NOT_FOUND", "FTP_SERVICE_DISABLED", "FTP_SERVICE_PENDING"].includes(code) ? "service"
+    : ["SITE_BINDING_MISMATCH", "FTP_CONTROL_PORT_IN_USE", "IIS_SITE_PORT_CONFLICT"].includes(code) ? "binding"
+    : ["IIS_AUTH_CONFIGURATION_MISMATCH", "FTP_AUTHORIZATION_MISMATCH"].includes(code) ? "auth"
+    : ["PHYSICAL_PATH_MISMATCH", "IIS_SITE_NOT_FOUND", "MANAGED_SITE_ID_MISMATCH"].includes(code) ? "site"
+    : "troubleshooting";
   const sourceOperationId = typeof source?.operationId === "string" ? source.operationId : undefined;
   const details = source ? {
     operationId: requestOperationId || sourceOperationId,
@@ -215,6 +223,8 @@ function handleError(res: any, error: any, fallbackCode: string, fallbackMessage
     // `conflict` remains for backward-compatible UI actions. The explicitly
     // named fields preserve the full, sanitized transaction report.
     conflict: diagnosticDetails,
+    guidePath: "/host/help/camera-ftp",
+    guideSection,
     diagnostics: diagnosticDetails,
     completedSteps: Array.isArray(sanitizedOperationData?.completedSteps)
       ? sanitizedOperationData.completedSteps
@@ -223,11 +233,10 @@ function handleError(res: any, error: any, fallbackCode: string, fallbackMessage
         : undefined,
     failedStep: sanitizedOperationData?.failedStep && typeof sanitizedOperationData.failedStep === "object" ? sanitizedOperationData.failedStep : undefined,
     rollback: sanitizedOperationData?.rollback && typeof sanitizedOperationData.rollback === "object" ? sanitizedOperationData.rollback : undefined,
-    preflight: sanitizedOperationData?.preflight && typeof sanitizedOperationData.preflight === "object" ? sanitizedOperationData.preflight : undefined,
-    provisioningPlan: sanitizedOperationData?.plan && typeof sanitizedOperationData.plan === "object" ? sanitizedOperationData.plan : undefined
+    preflight: sanitizedOperationData?.preflight && typeof sanitizedOperationData.preflight === "object" ? sanitizedOperationData.preflight : undefined
   } : legacyDetails
-    ? { ...legacyDetails, conflict: legacyDetails, diagnostics: legacyDetails }
-    : undefined;
+    ? { ...legacyDetails, conflict: legacyDetails, diagnostics: legacyDetails, guidePath: "/host/help/camera-ftp", guideSection }
+    : { guidePath: "/host/help/camera-ftp", guideSection };
   const rollbackData = operationData?.rollback && typeof operationData.rollback === "object" ? operationData.rollback : null;
   const elevatedStateUncertain = ["ELEVATED_SCRIPT_TIMEOUT", "ELEVATED_STATE_UNKNOWN"].includes(code);
   const rollbackAttempted = typeof source?.rollbackAttempted === "boolean"
@@ -292,25 +301,36 @@ function handleError(res: any, error: any, fallbackCode: string, fallbackMessage
 
 router.get("/status", async (req, res) => {
   try {
-    sendSuccess(res, await orchestrator.getStatus({ forceSystemRefresh: req.query.refresh === "1" }));
+    sendSuccess(res, await orchestrator.getStatus({ forceSystemRefresh: req.query.refresh === "1", fullInspection: req.query.admin === "1" }));
   } catch (error) {
     handleError(res, error, "IIS_STATUS_CHECK_FAILED", "读取 IIS FTP 状态失败");
   }
 });
+
+const retiredCameraFtpRoutes: Array<["POST" | "PATCH" | "DELETE", string]> = [
+  ["POST", "/provisioning-plan"], ["POST", "/setup"], ["POST", "/repair"],
+  ["POST", "/adopt-site"], ["POST", "/discover-sites"],
+  ["PATCH", "/credentials"], ["DELETE", "/pending-provisioning"]
+];
+for (const [method, routePath] of retiredCameraFtpRoutes) {
+  router[method.toLowerCase() as "post" | "patch" | "delete"](routePath, (_req, res) => {
+    res.locals.cameraFtpErrorCode = "IIS_AUTOMATION_REMOVED";
+    sendError(res, "IIS_AUTOMATION_REMOVED", "IIS FTP 自动安装和配置功能已移除，请按内置指导手工配置。", 410, {
+      guidePath: "/host/help/camera-ftp",
+      guideSection: "requirements"
+    }, {
+      title: "请手工配置 IIS FTP",
+      nextAction: "打开工作台内置配置指导，完成设置后刷新状态。",
+      retryable: false
+    });
+  });
+}
 
 router.get("/admin-operation", async (_req, res) => {
   try {
     sendSuccess(res, await getElevatedAdminOperationStatus());
   } catch (error) {
     handleError(res, error, "ELEVATED_OPERATION_STATUS_FAILED", "读取管理员配置进度失败");
-  }
-});
-
-router.delete("/pending-provisioning", async (_req, res) => {
-  try {
-    sendSuccess(res, await orchestrator.clearPendingProvisioning());
-  } catch (error) {
-    handleError(res, error, "CONFIG_WRITE_FAILED", "清除待继续的 IIS FTP 配置失败");
   }
 });
 
@@ -332,113 +352,9 @@ router.get("/diagnostics", async (_req, res) => {
   }
 });
 
-router.post("/provisioning-plan", async (req, res) => {
-  try {
-    const goals = new Set(["setup", "repair", "start", "restart", "adopt-site"]);
-    const goal = typeof req.body?.goal === "string" && goals.has(req.body.goal)
-      ? req.body.goal as "setup" | "repair" | "start" | "restart" | "adopt-site"
-      : "setup";
-    sendSuccess(res, await orchestrator.prepareProvisioningPlan({
-      goal,
-      eventId: typeof req.body?.eventId === "string" ? req.body.eventId.trim() : undefined,
-      username: typeof req.body?.username === "string" ? req.body.username.trim() : undefined,
-      controlPort: Number(req.body?.controlPort),
-      passivePortStart: Number(req.body?.passivePortStart),
-      passivePortEnd: Number(req.body?.passivePortEnd),
-      targetSiteName: typeof req.body?.targetSiteName === "string" ? req.body.targetSiteName.trim() : undefined,
-      targetSiteId: Number.isInteger(Number(req.body?.targetSiteId)) ? Number(req.body.targetSiteId) : undefined
-    }));
-  } catch (error) {
-    handleError(res, error, "IIS_STATUS_CHECK_FAILED", "生成 IIS FTP 配置计划失败");
-  }
-});
-
-router.post("/setup", async (req, res) => {
-  try {
-    if (req.body?.confirm !== true) {
-      sendCameraFtpValidationError(
-        res,
-        "ADMIN_REQUIRED",
-        "初始化会修改 Windows 功能、IIS、账户、ACL 和防火墙，需要用户明确确认。",
-        "请查看配置计划，确认后重新执行初始化。"
-      );
-      return;
-    }
-    const eventId = typeof req.body?.eventId === "string" ? req.body.eventId.trim() : "";
-    const username = typeof req.body?.username === "string" ? req.body.username : "";
-    const password = typeof req.body?.password === "string" ? req.body.password : "";
-    const confirmPassword = typeof req.body?.confirmPassword === "string" ? req.body.confirmPassword : "";
-    const controlPort = Number(req.body?.controlPort);
-    const passivePortStart = Number(req.body?.passivePortStart);
-    const passivePortEnd = Number(req.body?.passivePortEnd);
-    const allowLegacyFirewallRuleUpdate = req.body?.allowLegacyFirewallRuleUpdate === true;
-    const allowAclTightening = req.body?.allowAclTightening === true;
-    const allowSharedFtpServiceStart = req.body?.allowSharedFtpServiceStart === true;
-    if (password !== confirmPassword) {
-      sendCameraFtpValidationError(res, "FTP_PASSWORD_INVALID", "两次输入的 FTP 密码不一致。", "请重新输入并确认相同的 FTP 密码。");
-      return;
-    }
-    sendSuccess(res, await orchestrator.setup({ baseUrl: getBaseUrl(req), eventId, username, password, controlPort, passivePortStart, passivePortEnd, allowLegacyFirewallRuleUpdate, allowAclTightening, allowSharedFtpServiceStart }));
-  } catch (error) {
-    handleError(res, error, "IIS_FTP_INSTALL_FAILED", "初始化 Windows IIS FTP 失败");
-  }
-});
-
-router.post("/adopt-site", async (req, res) => {
-  try {
-    if (req.body?.confirm !== true) {
-      sendCameraFtpValidationError(
-        res,
-        "IIS_SITE_ADOPTION_REQUIRED",
-        "接管会修改现有 IIS FTP 站点，需要用户明确确认。",
-        "请先核对待接管站点与配置计划，再明确确认。"
-      );
-      return;
-    }
-    const siteName = typeof req.body?.siteName === "string" ? req.body.siteName.trim() : "";
-    if (!siteName) {
-      sendCameraFtpValidationError(res, "IIS_SITE_ADOPTION_REQUIRED", "请选择需要接管的 IIS FTP 站点。", "请从管理员检测结果中选择站点后重试。");
-      return;
-    }
-    const eventId = typeof req.body?.eventId === "string" ? req.body.eventId.trim() : "";
-    const username = typeof req.body?.username === "string" ? req.body.username : "";
-    const password = typeof req.body?.password === "string" ? req.body.password : undefined;
-    const confirmPassword = typeof req.body?.confirmPassword === "string" ? req.body.confirmPassword : undefined;
-    const controlPort = Number(req.body?.controlPort);
-    const passivePortStart = Number(req.body?.passivePortStart);
-    const passivePortEnd = Number(req.body?.passivePortEnd);
-    const allowLegacyFirewallRuleUpdate = req.body?.allowLegacyFirewallRuleUpdate === true;
-    const allowAclTightening = req.body?.allowAclTightening === true;
-    const allowSharedFtpServiceStart = req.body?.allowSharedFtpServiceStart === true;
-    if (password !== undefined && confirmPassword !== undefined && password !== confirmPassword) {
-      sendCameraFtpValidationError(res, "FTP_PASSWORD_INVALID", "两次输入的 FTP 密码不一致。", "请重新输入并确认相同的 FTP 密码。");
-      return;
-    }
-    sendSuccess(res, await orchestrator.adoptSite({ siteName, eventId, username, password, controlPort, passivePortStart, passivePortEnd, allowLegacyFirewallRuleUpdate, allowAclTightening, allowSharedFtpServiceStart, baseUrl: getBaseUrl(req) }));
-  } catch (error) {
-    handleError(res, error, "IIS_SITE_ADOPTION_FAILED", "接管 IIS FTP 站点失败");
-  }
-});
-
-router.post("/discover-sites", async (req, res) => {
-  try {
-    const eventId = typeof req.body?.eventId === "string" ? req.body.eventId.trim() : "";
-    const controlPort = Number(req.body?.controlPort);
-    const passivePortStart = Number(req.body?.passivePortStart);
-    const passivePortEnd = Number(req.body?.passivePortEnd);
-    sendSuccess(res, await orchestrator.discoverSites({ baseUrl: getBaseUrl(req), eventId, controlPort, passivePortStart, passivePortEnd }));
-  } catch (error) {
-    handleError(res, error, "IIS_STATUS_CHECK_FAILED", "管理员检测 IIS FTP 站点失败");
-  }
-});
-
 router.post("/start", async (req, res) => {
   try {
-    sendSuccess(res, await orchestrator.start({
-      baseUrl: getBaseUrl(req),
-      allowAclTightening: req.body?.allowAclTightening === true,
-      allowSharedFtpServiceStart: req.body?.allowSharedFtpServiceStart === true
-    }));
+    sendSuccess(res, await orchestrator.start({ baseUrl: getBaseUrl(req) }));
   } catch (error) {
     handleError(res, error, "IIS_SERVICE_START_FAILED", "启动 IIS FTP 服务失败");
   }
@@ -454,37 +370,9 @@ router.post("/stop", async (_req, res) => {
 
 router.post("/restart", async (req, res) => {
   try {
-    sendSuccess(res, await orchestrator.restart({
-      baseUrl: getBaseUrl(req),
-      allowAclTightening: req.body?.allowAclTightening === true,
-      allowSharedFtpServiceStart: req.body?.allowSharedFtpServiceStart === true
-    }));
+    sendSuccess(res, await orchestrator.restart({ baseUrl: getBaseUrl(req) }));
   } catch (error) {
     handleError(res, error, "IIS_CONFIG_FAILED", "重启 IIS FTP 服务失败");
-  }
-});
-
-router.post("/repair", async (req, res) => {
-  try {
-    if (req.body?.confirm !== true) {
-      sendCameraFtpValidationError(
-        res,
-        "ADMIN_REQUIRED",
-        "修复会修改项目管理的 IIS FTP 配置，需要用户明确确认。",
-        "请查看修复计划，确认后重新执行。"
-      );
-      return;
-    }
-    const password = typeof req.body?.password === "string" ? req.body.password : undefined;
-    const controlPort = Number(req.body?.controlPort);
-    const passivePortStart = Number(req.body?.passivePortStart);
-    const passivePortEnd = Number(req.body?.passivePortEnd);
-    const allowLegacyFirewallRuleUpdate = req.body?.allowLegacyFirewallRuleUpdate === true;
-    const allowAclTightening = req.body?.allowAclTightening === true;
-    const allowSharedFtpServiceStart = req.body?.allowSharedFtpServiceStart === true;
-    sendSuccess(res, await orchestrator.repair({ baseUrl: getBaseUrl(req), password, controlPort, passivePortStart, passivePortEnd, allowLegacyFirewallRuleUpdate, allowAclTightening, allowSharedFtpServiceStart }));
-  } catch (error) {
-    handleError(res, error, "IIS_CONFIG_FAILED", "修复 IIS FTP 配置失败");
   }
 });
 
@@ -497,21 +385,6 @@ router.post("/check-port", async (req, res) => {
     sendSuccess(res, await orchestrator.checkPort({ controlPort, passivePortStart, passivePortEnd, fullInspection }));
   } catch (error) {
     handleError(res, error, "FTP_CONTROL_PORT_INVALID", "检测 FTP 控制端口失败");
-  }
-});
-
-router.patch("/credentials", async (req, res) => {
-  try {
-    const username = typeof req.body?.username === "string" ? req.body.username : "";
-    const password = typeof req.body?.password === "string" ? req.body.password : "";
-    const confirmPassword = typeof req.body?.confirmPassword === "string" ? req.body.confirmPassword : undefined;
-    if (confirmPassword !== undefined && password !== confirmPassword) {
-      sendCameraFtpValidationError(res, "FTP_PASSWORD_INVALID", "两次输入的 FTP 密码不一致。", "请重新输入并确认相同的 FTP 密码。");
-      return;
-    }
-    sendSuccess(res, await orchestrator.updateCredentials({ username, password, baseUrl: getBaseUrl(req) }));
-  } catch (error) {
-    handleError(res, error, "FTP_CREDENTIAL_UPDATE_FAILED", "更新 FTP 账户设置失败");
   }
 });
 

@@ -134,7 +134,8 @@ export interface ApiErrorDetails {
   failedStep?: Record<string, unknown>;
   rollback?: Record<string, unknown>;
   preflight?: Record<string, unknown>;
-  provisioningPlan?: Record<string, unknown>;
+  guidePath?: string;
+  guideSection?: string;
 }
 
 /**
@@ -408,19 +409,6 @@ export interface CameraFtpConfigData {
   passivePortEnd: number;
   firewallControlRuleName: string;
   firewallPassiveRuleName: string;
-  passwordResetRequired: boolean;
-  pendingProvisioning: CameraFtpPendingProvisioningData | null;
-}
-
-export interface CameraFtpPendingProvisioningData {
-  action: "setup" | "repair" | "start" | "restart" | "adopt";
-  eventId: string;
-  username: string;
-  controlPort: number;
-  passivePortStart: number;
-  passivePortEnd: number;
-  targetSiteName: string;
-  createdAt: string;
 }
 
 export type CameraFtpRecordStatus = "receiving" | "waiting" | "importing" | "imported" | "skipped" | "failed";
@@ -696,7 +684,6 @@ export interface CameraFtpStatusData {
   completedStages: string[];
   nextStage: string;
   safeToRetry: boolean;
-  pendingProvisioning: CameraFtpPendingProvisioningData | null;
   site: CameraFtpSiteData;
   binding: CameraFtpBindingData;
   authentication: CameraFtpAuthenticationData;
@@ -714,13 +701,19 @@ export interface CameraFtpStatusData {
   conflicts: CameraFtpConflictsData;
   warnings: string[];
   initialized: boolean;
-  passwordConfigured: boolean;
-  passwordResetRequired?: boolean;
   requiresAdmin: boolean;
   repairable: boolean;
   missingItems: string[];
   lastError: { code: string; message: string } | null;
   startupRecovery?: CameraFtpStartupRecoveryData | null;
+  manualActionRequired?: boolean;
+  issueCode?: string;
+  guidePath?: string;
+  guideSection?: string;
+  canStart?: boolean;
+  canStop?: boolean;
+  canRestart?: boolean;
+  canSwitchEvent?: boolean;
 }
 
 export interface CameraFtpDiagnosticData {
@@ -770,113 +763,21 @@ export interface CameraFtpOperationData {
   requiresAdmin?: boolean;
 }
 
-export type CameraFtpProvisioningGoal = "setup" | "repair" | "start" | "restart" | "adopt-site";
-
-export type CameraFtpProvisioningPlanItemStatus =
-  | "already_ok"
-  | "create"
-  | "update"
-  | "repair"
-  | "user_confirmation_required"
-  | "blocked";
-
-export type CameraFtpIssueLevel = "info" | "auto_repair" | "user_confirmation" | "blocked";
-
-export interface CameraFtpProvisioningPlanItemData {
-  id: string;
-  category: string;
-  label: string;
-  summary: string;
-  status: CameraFtpProvisioningPlanItemStatus;
-  managedResource: boolean;
-  confirmationKey?: string;
-  risk: "normal" | "high" | string;
-}
-
-export interface CameraFtpProvisioningConfirmationData {
-  key: string;
-  title: string;
-  message: string;
-  risk: "normal" | "high" | string;
-}
-
-export interface CameraFtpIssueData {
-  id: string;
-  code: string;
-  level: CameraFtpIssueLevel;
-  title: string;
-  message: string;
-  planItemId?: string;
-}
-
-export interface CameraFtpProvisioningPlanData {
-  planId: string;
-  operationId?: string;
-  target: CameraFtpProvisioningGoal;
-  summary: string;
-  items: CameraFtpProvisioningPlanItemData[];
-  requiresAdmin: boolean;
-  canApply: boolean;
-  generatedAt: string;
-  confirmations: CameraFtpProvisioningConfirmationData[];
-  issues: CameraFtpIssueData[];
-}
-
 export interface CameraFtpActionData {
   operation: CameraFtpOperationData;
   status: CameraFtpStatusData;
   path?: string;
 }
 
-export type CameraFtpAdminOperationState =
-  | "idle"
-  | "running"
-  | "timed_out_waiting"
-  | "completed"
-  | "failed"
-  | "abandoned";
-
-export interface CameraFtpAdminOperationData {
-  state: CameraFtpAdminOperationState;
-  operationId?: string;
-  parentOperationId?: string;
-  action?: string;
-  scriptName?: string;
-  stage?: string;
-  phaseIndex: number;
-  phaseCount: number;
-  progressPercent: number;
-  indeterminate: boolean;
-  startedAt?: string;
-  stageStartedAt?: string;
-  lastProgressAt?: string;
-  elapsedMs: number;
-  estimatedRemainingMinMs: number | null;
-  estimatedRemainingMaxMs: number | null;
-  estimateExceeded: boolean;
-  processId?: number;
-  safeToRetry: boolean;
-}
-
-export interface CameraFtpSiteDiscoveryData {
-  sites: CameraFtpConflictItemData[];
-  status: CameraFtpStatusData;
-}
-
-export async function fetchCameraFtpStatus(forceSystemRefresh = false): Promise<ApiResponse<CameraFtpStatusData>> {
-  return request<CameraFtpStatusData>(`/api/camera-ftp/status${forceSystemRefresh ? "?refresh=1" : ""}`);
-}
-
-export async function fetchCameraFtpAdminOperation(): Promise<ApiResponse<CameraFtpAdminOperationData>> {
-  return request<CameraFtpAdminOperationData>("/api/camera-ftp/admin-operation");
+export async function fetchCameraFtpStatus(forceSystemRefresh = false, fullInspection = false): Promise<ApiResponse<CameraFtpStatusData>> {
+  const query = new URLSearchParams();
+  if (forceSystemRefresh) query.set("refresh", "1");
+  if (fullInspection) query.set("admin", "1");
+  return request<CameraFtpStatusData>(`/api/camera-ftp/status${query.size ? `?${query}` : ""}`);
 }
 
 export async function fetchCameraFtpDiagnostics(): Promise<ApiResponse<CameraFtpDiagnosticData>> {
   return request<CameraFtpDiagnosticData>("/api/camera-ftp/diagnostics");
-}
-
-export function clearCameraFtpPendingProvisioning(): Promise<ApiResponse<CameraFtpStatusData>> {
-  return request<CameraFtpStatusData>("/api/camera-ftp/pending-provisioning", { method: "DELETE" });
 }
 
 function postCameraFtpAction<T = CameraFtpActionData>(path: string, body?: unknown): Promise<ApiResponse<T>> {
@@ -887,72 +788,16 @@ function postCameraFtpAction<T = CameraFtpActionData>(path: string, body?: unkno
   });
 }
 
-export function prepareCameraFtpProvisioning(input: {
-  goal: CameraFtpProvisioningGoal;
-  eventId?: string;
-  username?: string;
-  controlPort: number;
-  passivePortStart: number;
-  passivePortEnd: number;
-  targetSiteName?: string;
-  targetSiteId?: number;
-}): Promise<ApiResponse<CameraFtpProvisioningPlanData>> {
-  return postCameraFtpAction<CameraFtpProvisioningPlanData>("provisioning-plan", input);
-}
-
-export function setupCameraFtp(input: {
-  eventId: string;
-  username: string;
-  password: string;
-  confirmPassword: string;
-  controlPort: number;
-  passivePortStart: number;
-  passivePortEnd: number;
-  allowLegacyFirewallRuleUpdate?: boolean;
-  allowAclTightening?: boolean;
-  allowSharedFtpServiceStart?: boolean;
-}): Promise<ApiResponse<CameraFtpActionData>> {
-  return postCameraFtpAction("setup", { ...input, confirm: true });
-}
-
-export function adoptCameraFtpSite(siteName: string, input?: {
-  eventId?: string;
-  username?: string;
-  password?: string;
-  confirmPassword?: string;
-  controlPort?: number;
-  passivePortStart?: number;
-  passivePortEnd?: number;
-  allowLegacyFirewallRuleUpdate?: boolean;
-  allowAclTightening?: boolean;
-  allowSharedFtpServiceStart?: boolean;
-}): Promise<ApiResponse<CameraFtpActionData>> {
-  return postCameraFtpAction("adopt-site", { siteName, ...input, confirm: true });
-}
-
-export function discoverCameraFtpSites(input: {
-  eventId?: string;
-  controlPort: number;
-  passivePortStart: number;
-  passivePortEnd: number;
-}): Promise<ApiResponse<CameraFtpSiteDiscoveryData>> {
-  return postCameraFtpAction<CameraFtpSiteDiscoveryData>("discover-sites", input);
-}
-
-export function startCameraFtp(input?: { allowAclTightening?: boolean; allowSharedFtpServiceStart?: boolean }): Promise<ApiResponse<CameraFtpActionData>> {
-  return postCameraFtpAction("start", input);
+export function startCameraFtp(): Promise<ApiResponse<CameraFtpActionData>> {
+  return postCameraFtpAction("start");
 }
 
 export function stopCameraFtp(): Promise<ApiResponse<CameraFtpActionData>> {
   return postCameraFtpAction("stop");
 }
 
-export function restartCameraFtp(input?: { allowAclTightening?: boolean; allowSharedFtpServiceStart?: boolean }): Promise<ApiResponse<CameraFtpActionData>> {
-  return postCameraFtpAction("restart", input);
-}
-
-export function repairCameraFtp(input: { password?: string; controlPort: number; passivePortStart: number; passivePortEnd: number; allowLegacyFirewallRuleUpdate?: boolean; allowAclTightening?: boolean; allowSharedFtpServiceStart?: boolean }): Promise<ApiResponse<CameraFtpActionData>> {
-  return postCameraFtpAction("repair", { ...input, confirm: true });
+export function restartCameraFtp(): Promise<ApiResponse<CameraFtpActionData>> {
+  return postCameraFtpAction("restart");
 }
 
 export interface CameraFtpPortCheckData {
@@ -967,14 +812,6 @@ export interface CameraFtpPortCheckData {
 
 export function checkCameraFtpPort(input: { controlPort: number; passivePortStart: number; passivePortEnd: number; fullInspection?: boolean }): Promise<ApiResponse<CameraFtpPortCheckData>> {
   return postCameraFtpAction<CameraFtpPortCheckData>("check-port", input);
-}
-
-export function updateCameraFtpCredentials(input: { username: string; password: string }): Promise<ApiResponse<CameraFtpActionData>> {
-  return request<CameraFtpActionData>("/api/camera-ftp/credentials", {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input)
-  });
 }
 
 export function updateCameraFtpActiveEvent(eventId: string): Promise<ApiResponse<CameraFtpActionData>> {

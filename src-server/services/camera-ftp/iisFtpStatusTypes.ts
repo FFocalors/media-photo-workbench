@@ -217,6 +217,7 @@ export interface IisFtpActionResult {
   steps: Array<{ name: string; status: string; message: string }>;
   warnings: string[];
   requiresAdmin: boolean;
+  previousSiteStarted?: boolean;
   systemStatus?: IisFtpSystemStatus;
 }
 

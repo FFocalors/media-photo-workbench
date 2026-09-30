@@ -11,13 +11,16 @@ $commonPath = Join-Path $PSScriptRoot 'iis-ftp-common.ps1'
 function Invoke-MpwIisFtpStatus {
     param(
         [Parameter(Mandatory = $true)][string]$InputPath,
-        [Parameter(Mandatory = $true)][string]$OutputPath
+        [Parameter(Mandatory = $true)][string]$OutputPath,
+        [AllowNull()][string]$StatusPath = $null,
+        [AllowNull()][string]$OperationId = $null
     )
 
     $action = 'status'
     $currentStage = 'read_input'
     $options = $null
     try {
+        Write-MpwOperationProgress -StatusPath $StatusPath -OperationId $OperationId -Action 'status' -Stage 'read_input' -ScriptName 'iis-ftp-status.ps1'
         $currentStage = 'read_input'
         $inputObject = Read-MpwJsonInput -Path $InputPath -DeleteAfterRead
         $currentStage = 'validate_input'
@@ -35,6 +38,7 @@ function Invoke-MpwIisFtpStatus {
         $isAdmin = Test-MpwAdministrator
 
         $currentStage = 'inspect_windows_environment'
+        Write-MpwOperationProgress -StatusPath $StatusPath -OperationId $OperationId -Action 'status' -Stage 'inspect_windows_environment' -ScriptName 'iis-ftp-status.ps1'
         $features = @(Get-MpwWindowsFeaturesStatus)
         $service = Get-MpwFtpServiceStatus
         $restartPending = Get-MpwWindowsRestartPendingStatus
@@ -56,47 +60,86 @@ function Invoke-MpwIisFtpStatus {
         $iisErrorCode = $null
         $manager = $null
         $currentStage = 'inspect_iis_sites'
-        try {
-            $manager = Open-MpwServerManager
-            $targetSite = if ($options.ManagedSiteId -gt 0) { Get-MpwIisSiteById -Manager $manager -SiteId $options.ManagedSiteId } else { $null }
-            if ($null -eq $targetSite) { $targetSite = $manager.Sites[$options.SiteName] }
-            if ($null -ne $targetSite) {
-                $namedSiteIdentity = Get-MpwIisSiteIdentityModel -Site $targetSite
-            }
-            $sites = @(Get-MpwFtpSites -Manager $manager)
-            $selectedSite = if ($null -ne $namedSiteIdentity) { $sites | Where-Object { [long]$_.id -eq [long]$namedSiteIdentity.id } | Select-Object -First 1 } else { $null }
-            $resolvedSiteName = if ($null -ne $namedSiteIdentity) { [string]$namedSiteIdentity.name } else { $options.SiteName }
-            $adoptionCandidates = @(Find-MpwPortSites -Manager $manager -Port $options.ControlPort -ExcludeSiteName $resolvedSiteName)
-            if ($adoptionCandidates.Count -gt 0 -and @($port.availablePorts).Count -eq 0) {
-                $port.availablePorts = @(Get-MpwAvailableControlPorts -PreferredPort 21 -PassiveStart $options.PassivePortStart -PassiveEnd $options.PassivePortEnd -Count 5)
-                $port.recommendation = if ($port.availablePorts.Count -gt 0) { "Use available control port $($port.availablePorts[0]) after confirmation." } else { 'No available control port was found.' }
-            }
-            $ports = Get-MpwGlobalPassivePorts -Manager $manager
-            $passivePorts = [ordered]@{
-                detection = 'available'
-                start = [int]$ports.start
-                end = [int]$ports.end
-                matchesExpected = [int]$ports.start -eq $options.PassivePortStart -and [int]$ports.end -eq $options.PassivePortEnd
-            }
-            $iisDetection = 'available'
+        if (-not $isAdmin) {
+            # IIS ServerManager can block for a long time on some non-elevated
+            # Windows profiles/configuration stores. Full IIS inspection is
+            # intentionally available through the explicit elevated read-only
+            # action; background polling must remain fast and side-effect free.
+            $iisErrorCode = 'ADMIN_REQUIRED'
+            [void]$warnings.Add([ordered]@{ code = 'ADMIN_REQUIRED'; message = 'Full IIS FTP site inspection requires the administrator read-only check.' })
         }
-        catch {
-            if ($isAdmin) {
-                # An elevated read must never be reported as a successful
-                # administrator inspection when IIS details are still unknown.
-                # Re-throw so the caller receives the exact structured stage
-                # and technical error instead of an empty candidate list.
-                throw
+        else {
+            Write-MpwOperationProgress -StatusPath $StatusPath -OperationId $OperationId -Action 'status' -Stage 'inspect_iis_manager' -ScriptName 'iis-ftp-status.ps1'
+            try {
+                $manager = Open-MpwServerManager
+                Write-MpwOperationProgress -StatusPath $StatusPath -OperationId $OperationId -Action 'status' -Stage 'enumerate_iis_sites' -ScriptName 'iis-ftp-status.ps1'
+                $targetSite = if ($options.ManagedSiteId -gt 0) { Get-MpwIisSiteById -Manager $manager -SiteId $options.ManagedSiteId } else { $null }
+                if ($null -eq $targetSite) { $targetSite = $manager.Sites[$options.SiteName] }
+                if ($null -ne $targetSite) {
+                    Write-MpwOperationProgress -StatusPath $StatusPath -OperationId $OperationId -Action 'status' -Stage 'inspect_managed_site_identity' -ScriptName 'iis-ftp-status.ps1'
+                    $namedSiteIdentity = Get-MpwIisSiteIdentityModel -Site $targetSite
+                }
+                # Background status polling needs complete details only for the
+                # site managed by this workbench. Reading the location-scoped FTP
+                # auth section for every unrelated FTP site can block on orphaned
+                # or malformed IIS configuration and stall this read-only probe.
+                Write-MpwOperationProgress -StatusPath $StatusPath -OperationId $OperationId -Action 'status' -Stage 'enumerate_ftp_site_identities' -ScriptName 'iis-ftp-status.ps1'
+                foreach ($site in $manager.Sites) {
+                    $ftpBindings = @($site.Bindings | Where-Object { $_.Protocol -eq 'ftp' })
+                    if ($ftpBindings.Count -eq 0) { continue }
+                    $identity = Get-MpwIisSiteIdentityModel -Site $site
+                    $sites += $identity
+                }
+                if ($null -ne $namedSiteIdentity -and $namedSiteIdentity.hasFtpBinding) {
+                    try {
+                        Write-MpwOperationProgress -StatusPath $StatusPath -OperationId $OperationId -Action 'status' -Stage 'inspect_managed_site_details' -ScriptName 'iis-ftp-status.ps1'
+                        $selectedSite = Get-MpwFtpSiteModel -Manager $manager -Site $targetSite
+                    }
+                    catch {
+                        $selectedSite = $namedSiteIdentity
+                        $selectedSite['authentication'] = $null
+                        $selectedSite['authorization'] = @()
+                        $selectedSite['ssl'] = $null
+                        $selectedSite['externalIp4Address'] = $null
+                        $selectedSite['inspectionErrorCode'] = 'IIS_SITE_DETAIL_UNAVAILABLE'
+                        [void]$warnings.Add([ordered]@{ code = 'IIS_SITE_DETAIL_UNAVAILABLE'; message = 'The managed IIS FTP site was found, but its detailed FTP settings could not be read.' })
+                    }
+                }
+                $resolvedSiteName = if ($null -ne $namedSiteIdentity) { [string]$namedSiteIdentity.name } else { $options.SiteName }
+                Write-MpwOperationProgress -StatusPath $StatusPath -OperationId $OperationId -Action 'status' -Stage 'inspect_port_conflicts' -ScriptName 'iis-ftp-status.ps1'
+                $adoptionCandidates = @(Find-MpwPortSites -Manager $manager -Port $options.ControlPort -ExcludeSiteName $resolvedSiteName)
+                if ($adoptionCandidates.Count -gt 0 -and @($port.availablePorts).Count -eq 0) {
+                    $port.availablePorts = @(Get-MpwAvailableControlPorts -PreferredPort 21 -PassiveStart $options.PassivePortStart -PassiveEnd $options.PassivePortEnd -Count 5)
+                    $port.recommendation = if ($port.availablePorts.Count -gt 0) { "Use available control port $($port.availablePorts[0]) after confirmation." } else { 'No available control port was found.' }
+                }
+                Write-MpwOperationProgress -StatusPath $StatusPath -OperationId $OperationId -Action 'status' -Stage 'inspect_passive_ports' -ScriptName 'iis-ftp-status.ps1'
+                $ports = Get-MpwGlobalPassivePorts -Manager $manager
+                $passivePorts = [ordered]@{
+                    detection = 'available'
+                    start = [int]$ports.start
+                    end = [int]$ports.end
+                    matchesExpected = [int]$ports.start -eq $options.PassivePortStart -and [int]$ports.end -eq $options.PassivePortEnd
+                }
+                $iisDetection = 'available'
             }
-            $safe = ConvertTo-MpwSafeException -ErrorRecord $_
-            $iisErrorCode = $safe.code
-            if ($iisErrorCode -eq 'IIS_STATUS_CHECK_FAILED' -and -not $isAdmin) {
-                $iisErrorCode = 'ADMIN_REQUIRED'
+            catch {
+                if ($isAdmin) {
+                    # An elevated read must never be reported as a successful
+                    # administrator inspection when IIS details are still unknown.
+                    # Re-throw so the caller receives the exact structured stage
+                    # and technical error instead of an empty candidate list.
+                    throw
+                }
+                $safe = ConvertTo-MpwSafeException -ErrorRecord $_
+                $iisErrorCode = $safe.code
+                if ($iisErrorCode -eq 'IIS_STATUS_CHECK_FAILED' -and -not $isAdmin) {
+                    $iisErrorCode = 'ADMIN_REQUIRED'
+                }
+                [void]$warnings.Add([ordered]@{ code = $iisErrorCode; message = 'IIS site configuration could not be read without elevated access.' })
             }
-            [void]$warnings.Add([ordered]@{ code = $iisErrorCode; message = 'IIS site configuration could not be read without elevated access.' })
-        }
-        finally {
-            if ($null -ne $manager) { $manager.Dispose() }
+            finally {
+                if ($null -ne $manager) { $manager.Dispose() }
+            }
         }
 
         $siteData = $null
@@ -152,7 +195,8 @@ function Invoke-MpwIisFtpStatus {
                 $selectedSite['detection'] = 'available'
                 $selectedSite['exists'] = $true
                 $selectedSite['isFtpSite'] = $true
-                $siteIdMatches = [bool]($options.ManagedSiteId -gt 0 -and [long]$selectedSite.id -eq $options.ManagedSiteId)
+                $siteIdMatches = [bool](($options.ManagedSiteId -gt 0 -and [long]$selectedSite.id -eq $options.ManagedSiteId) -or
+                    ($options.ManagedSiteId -eq 0 -and [string]$selectedSite.name -eq [string]$options.SiteName))
                 $selectedSite['matchesExpected'] = [bool](
                     $siteIdMatches -and
                     $expectedBinding -and
@@ -189,6 +233,8 @@ function Invoke-MpwIisFtpStatus {
         if ($siteData.exists -eq $true -and -not [string]::IsNullOrWhiteSpace([string]$siteData.physicalPath)) {
             $aclPath = [string]$siteData.physicalPath
         }
+        $currentStage = 'inspect_directory_acl'
+        Write-MpwOperationProgress -StatusPath $StatusPath -OperationId $OperationId -Action 'status' -Stage 'inspect_directory_acl' -ScriptName 'iis-ftp-status.ps1'
         $acl = Get-MpwDirectoryAclStatus -PhysicalPath $aclPath -Username $options.Username
 
         $featureUnknown = @($features | Where-Object { $_.state -eq 'unknown' }).Count -gt 0
@@ -261,7 +307,7 @@ function Invoke-MpwIisFtpStatus {
         $authorizationWrite = if ($null -ne $authorizationRule) { [bool]([string]$authorizationRule.permissions -match 'Write') } elseif ($siteData.exists -eq $true) { $false } else { $null }
         $authorizationCorrect = if ($siteData.exists -eq $true) { [bool]($authorizationRead -and $authorizationWrite) } else { $null }
         $sslEnabled = if ($siteIsFtp) { [bool]($siteData.ssl.controlChannelPolicy -ne 'SslAllow' -or $siteData.ssl.dataChannelPolicy -ne 'SslAllow') } elseif ($siteData.exists -eq $true) { $false } else { $null }
-        $siteIdMatches = if ($siteData.exists -eq $true) { [bool]($options.ManagedSiteId -gt 0 -and [long]$siteData.id -eq $options.ManagedSiteId) } elseif ($siteData.exists -eq $false) { $false } else { $null }
+        $siteIdMatches = if ($siteData.exists -eq $true) { [bool](($options.ManagedSiteId -gt 0 -and [long]$siteData.id -eq $options.ManagedSiteId) -or ($options.ManagedSiteId -eq 0 -and [string]$siteData.name -eq [string]$options.SiteName)) } elseif ($siteData.exists -eq $false) { $false } else { $null }
         $sameNameIdConflict = if ($siteData.exists -eq $true) { [bool](-not $siteIdMatches) } elseif ($siteData.exists -eq $false) { $false } else { $null }
         $siteManaged = if ($siteData.exists -eq $true) { [bool]($siteIdMatches -and $siteIsFtp -and $account.managed -eq $true) } elseif ($siteData.exists -eq $false) { $false } else { $null }
         $siteOwned = $siteManaged
@@ -440,6 +486,7 @@ function Invoke-MpwIisFtpStatus {
         }
 
         $currentStage = 'completed'
+        Write-MpwOperationProgress -StatusPath $StatusPath -OperationId $OperationId -Action 'status' -Stage 'completed' -ScriptName 'iis-ftp-status.ps1'
         Write-MpwScriptResult -OutputPath $OutputPath -Action $action -Ok $true -Stage $currentStage -SiteName $options.SiteName -Data $data -Warnings @($warnings)
         return 0
     }
@@ -451,5 +498,5 @@ function Invoke-MpwIisFtpStatus {
 }
 
 if ($MyInvocation.InvocationName -ne '.') {
-    exit (Invoke-MpwIisFtpStatus -InputPath $InputPath -OutputPath $OutputPath)
+    exit (Invoke-MpwIisFtpStatus -InputPath $InputPath -OutputPath $OutputPath -StatusPath $StatusPath -OperationId $OperationId)
 }

@@ -847,6 +847,14 @@ exit 0
     assert.match(source["iis-ftp-control.ps1"], /Wait-MpwPortListener[^\r\n]*\$script:MpwFtpListenerTimeoutMilliseconds/,
       "event switching must allow the IIS FTP listener time to stabilize before verification");
     assert.match(source["iis-ftp-status.ps1"], /inspect_iis_sites/);
+    assert.match(source["iis-ftp-status.ps1"], /Get-MpwFtpSiteModel -Manager \$manager -Site \$targetSite/);
+    assert.match(source["iis-ftp-status.ps1"], /if \(-not \$isAdmin\)[\s\S]*?Full IIS FTP site inspection requires the administrator read-only check/,
+      "ordinary status polling must skip IIS ServerManager inspection instead of hanging on a non-elevated profile");
+    assert.doesNotMatch(source["iis-ftp-status.ps1"], /Get-MpwFtpSites -Manager \$manager/,
+      "read-only status polling must not inspect detailed authorization for every unrelated FTP site");
+    for (const stage of ["inspect_windows_environment", "inspect_iis_manager", "enumerate_iis_sites", "inspect_managed_site_details", "inspect_directory_acl"]) {
+      assert.match(source["iis-ftp-status.ps1"], new RegExp(`Write-MpwOperationProgress[\\s\\S]{0,180}-Stage '${stage}'`));
+    }
     assert.match(source["iis-ftp-common.ps1"], /function Get-MpwFtpServiceRollbackDecision/);
     assert.match(source["iis-ftp-common.ps1"], /function Resolve-MpwIisInitializationState/);
     assert.match(source["iis-ftp-common.ps1"], /function Resolve-MpwWindowsRestartPendingStatus/);

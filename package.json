@@ -1,6 +1,6 @@
 {
   "name": "media-photo-workbench",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "private": true,
   "description": "Windows desktop photo workflow workbench for campus media teams.",
   "main": "electron/main.cjs",
@@ -13,12 +13,8 @@
     "setup:electron": "pnpm rebuild electron",
     "rebuild:sqlite": "pnpm rebuild better-sqlite3",
     "build": "tsc -p tsconfig.json --noEmit && pnpm build:server && vite build",
-    "test:camera-ftp": "pnpm test:camera-ftp-iis && pnpm test:camera-ftp-provisioning && pnpm test:camera-ftp-elevated && pnpm test:camera-ftp-powershell && pnpm test:camera-ftp-ui && pnpm test:camera-ftp-watcher && pnpm test:camera-ftp-faults && pnpm test:status-semantics && pnpm test:phase6-safety",
-    "test:camera-ftp-iis": "pnpm build:server && node scripts/test-camera-ftp-iis.cjs",
-    "test:camera-ftp-provisioning": "pnpm build:server && node scripts/test-camera-ftp-provisioning.cjs",
-    "test:camera-ftp-elevated": "pnpm build:server && node scripts/test-elevated-powershell.cjs",
-    "test:camera-ftp-powershell": "pnpm build:server && node scripts/test-camera-ftp-powershell.cjs",
-    "test:camera-ftp-ui": "node scripts/test-camera-ftp-ui.cjs",
+    "test:camera-ftp": "pnpm test:camera-ftp-manual && pnpm test:camera-ftp-watcher && pnpm test:camera-ftp-faults && pnpm test:status-semantics && pnpm test:phase6-safety",
+    "test:camera-ftp-manual": "pnpm build:server && node scripts/test-camera-ftp-manual.cjs",
     "test:camera-ftp-watcher": "pnpm build:server && node scripts/test-camera-ftp-watcher.cjs",
     "test:camera-ftp-faults": "pnpm build:server && node scripts/test-camera-ftp-faults.cjs",
     "test:status-semantics": "node scripts/test-status-semantics.cjs",
@@ -54,7 +50,9 @@
         "from": "scripts/windows",
         "to": "scripts/windows",
         "filter": [
-          "*.ps1"
+          "iis-ftp-common.ps1",
+          "iis-ftp-status.ps1",
+          "iis-ftp-control.ps1"
         ]
       },
       {

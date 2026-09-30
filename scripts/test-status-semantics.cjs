@@ -55,19 +55,17 @@ function main() {
     const gallerySource = fs.readFileSync(path.join(root, "src", "components", "gallery", "PhotoGrid.tsx"), "utf8");
     const noticeSource = fs.readFileSync(path.join(root, "src", "components", "ui", "States.tsx"), "utf8");
     const recentFilesSource = fs.readFileSync(path.join(root, "src", "components", "import", "camera-ftp", "CameraFtpRecentFiles.tsx"), "utf8");
-    const provisioningSource = fs.readFileSync(path.join(root, "src", "components", "import", "camera-ftp", "CameraFtpProvisioningFeedback.tsx"), "utf8");
     const ftpPanelSource = fs.readFileSync(path.join(root, "src", "components", "import", "CameraFtpImportPanel.tsx"), "utf8");
     for (const [name, source] of [
       ["task center", taskCenterSource],
       ["gallery", gallerySource],
-      ["recent files", recentFilesSource],
-      ["FTP panel", ftpPanelSource]
+      ["recent files", recentFilesSource]
     ]) {
       assert.match(source, /statusSemantics/, `${name} must consume the shared status contract`);
     }
-    assert.match(provisioningSource, /PROVISIONING_STATUS_SEMANTICS/, "provisioning feedback must share plan status semantics");
-    assert.match(ftpPanelSource, /已停止，活动仍关联/, "a stopped FTP service must explicitly preserve the active-event association");
-    assert.match(ftpPanelSource, /admin_required/, "administrator-only inspection must remain distinct from failure");
+    assert.match(ftpPanelSource, /管理员只读检测/, "administrator-only inspection must remain distinct from failure");
+    assert.match(ftpPanelSource, /手工配置 IIS/, "the FTP panel must make its manual configuration boundary clear");
+    assert.match(ftpPanelSource, /配置指导/, "the FTP panel must provide offline guidance");
     assert.match(taskCenterSource, /ChevronRight/, "the sidebar task-center affordance must communicate right/left expansion");
     assert.match(taskCenterSource, /document\.addEventListener\("pointerdown", handlePointerDown, true\)/, "clicking outside must close the task center");
     assert.match(taskCenterSource, /createPortal\(panelNode, document\.body\)/, "the task panel must escape gallery stacking contexts");
@@ -110,7 +108,7 @@ function main() {
         "gallery_workflow_is_not_failure_colored",
         "blocked_plan_is_warning",
         "shared_consumer_contracts",
-        "stopped_association_is_explicit",
+        "manual_ftp_guidance_is_explicit",
         "task_center_direction_outside_click_and_layering",
         "all_operation_notifications_auto_dismiss_with_motion"
       ]

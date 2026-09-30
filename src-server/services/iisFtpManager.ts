@@ -7,7 +7,6 @@ import {
   type IisFtpSystemStatus
 } from "./camera-ftp/iisFtpStatusTypes";
 import {
-  PROVISIONING_TIMEOUT_MS,
   runElevatedPowerShellJsonScript,
   runPowerShellJsonScript,
   type PowerShellJsonDiagnostics
@@ -47,9 +46,6 @@ export type {
 export interface IisFtpManagerInput {
   config: CameraFtpConfig;
   physicalPath: string;
-  allowLegacyFirewallRuleUpdate?: boolean;
-  allowAclTightening?: boolean;
-  allowSharedFtpServiceStart?: boolean;
 }
 
 interface ScriptActionData {
@@ -60,6 +56,7 @@ interface ScriptActionData {
   steps?: Array<{ name?: string; status?: string; message?: string }>;
   warnings?: unknown[];
   requiresAdmin?: boolean;
+  previousSiteStarted?: boolean;
   systemStatus?: Record<string, unknown>;
   preflight?: Record<string, unknown>;
   plan?: Record<string, unknown>;
@@ -88,10 +85,14 @@ function stringArray(value: unknown): string[] {
 }
 
 function statusErrorCode(error: any): string {
+  if (error?.code === "ELEVATED_SCRIPT_TIMEOUT") return "IIS_STATUS_CHECK_TIMEOUT";
   return typeof error?.code === "string" ? error.code : "IIS_STATUS_CHECK_FAILED";
 }
 
 function statusErrorMessage(error: any): string {
+  if (error?.code === "ELEVATED_SCRIPT_TIMEOUT") {
+    return "IIS FTP 只读状态检查超时；本次未修改 Windows 配置，请稍后刷新或使用管理员只读检测。";
+  }
   return typeof error?.message === "string" && error.message ? error.message : "无法检测 Windows IIS FTP 状态。";
 }
 
@@ -105,20 +106,6 @@ function assertPhysicalPath(physicalPath: string): void {
   }
 }
 
-export function validateCameraFtpCredentials(username: string, password: string): void {
-  const normalizedUsername = username.trim();
-  if (!normalizedUsername || normalizedUsername.length > 20 || /["\/\\[\]:;|=,+*?<>@]/.test(normalizedUsername) || normalizedUsername.endsWith(".")) {
-    throw Object.assign(new Error("FTP 用户名无效，请使用 1-20 位普通字符且不要包含 Windows 用户名禁用符号。"), {
-      code: "FTP_CREDENTIAL_UPDATE_FAILED"
-    });
-  }
-  if (!password) {
-    throw Object.assign(new Error("FTP 密码不能为空。"), { code: "FTP_PASSWORD_REQUIRED" });
-  }
-  if (password.length < 8 || password.trim().length === 0) {
-    throw Object.assign(new Error("FTP 密码至少需要 8 位。"), { code: "FTP_PASSWORD_INVALID" });
-  }
-}
 
 export function validateCameraFtpPorts(controlPort: number, passivePortStart: number, passivePortEnd: number): void {
   const validPort = (value: number) => Number.isInteger(value) && value >= 1 && value <= 65535;
@@ -158,7 +145,6 @@ function baseScriptInput(input: IisFtpManagerInput, requirePath = true): Record<
     firewallPassiveRuleName: input.config.firewallPassiveRuleName,
     firewallProfile: "Any",
     firewallRemoteAddress: "LocalSubnet",
-    allowLegacyFirewallRuleUpdate: input.allowLegacyFirewallRuleUpdate === true,
     accountDescription: ACCOUNT_DESCRIPTION
   };
 }
@@ -199,6 +185,7 @@ function normalizeActionResult(
       : [],
     warnings: stringArray(raw.warnings).map((warning) => redactSecrets(warning, secrets)),
     requiresAdmin: raw.requiresAdmin === true,
+    previousSiteStarted: typeof raw.previousSiteStarted === "boolean" ? raw.previousSiteStarted : undefined,
     systemStatus: embeddedStatus ? normalizeIisFtpStatus(embeddedStatus, input.config, input.physicalPath) : undefined
   };
 }
@@ -333,7 +320,12 @@ export class IisFtpManager {
       const lastSuccessful = this.lastSuccessfulStatus.get(key);
       if (lastSuccessful) {
         const staleMessage = "本次实时检测超时，暂时保留最近一次已确认的 FTP 运行状态；后台稍后会自动重试。";
-        safeLog("warn", { code, reusedLastSuccessfulStatus: true }, "IIS FTP 实时状态检测未完成，保留最近可信状态");
+        safeLog("warn", {
+          code,
+          stage: error?.diagnostics?.stage,
+          elapsedMs: error?.diagnostics?.details?.elapsedMs,
+          reusedLastSuccessfulStatus: true
+        }, "IIS FTP 实时状态检测未完成，保留最近可信状态");
         return {
           ...lastSuccessful,
           warnings: Array.from(new Set([...lastSuccessful.warnings, staleMessage])),
@@ -348,7 +340,12 @@ export class IisFtpManager {
           ? "普通权限无法读取完整 IIS 状态；当前各项保持 unknown，未误判为不存在。"
           : message
       );
-      safeLog("warn", { code, requiresAdmin: fallback.requiresAdmin }, "IIS FTP 状态检测未完成");
+      safeLog("warn", {
+        code,
+        stage: error?.diagnostics?.stage,
+        elapsedMs: error?.diagnostics?.details?.elapsedMs,
+        requiresAdmin: fallback.requiresAdmin
+      }, "IIS FTP 状态检测未完成");
       return fallback;
     }
   }
@@ -369,31 +366,9 @@ export class IisFtpManager {
     return status;
   }
 
-  async setup(input: IisFtpManagerInput & { password?: string }): Promise<IisFtpActionResult> {
-    return this.provision("setup", input, { allowAclTightening: input.allowAclTightening === true, allowSharedFtpServiceStart: input.allowSharedFtpServiceStart === true });
-  }
-
-  async repair(input: IisFtpManagerInput & { password?: string }): Promise<IisFtpActionResult> {
-    return this.provision("repair", input, { allowAclTightening: input.allowAclTightening === true, allowSharedFtpServiceStart: input.allowSharedFtpServiceStart === true });
-  }
-
-  async adoptSite(input: IisFtpManagerInput & { targetSiteName: string; password?: string }): Promise<IisFtpActionResult> {
-    if (!input.targetSiteName.trim()) {
-      throw Object.assign(new Error("请选择需要接管的 IIS FTP 站点。"), { code: "IIS_SITE_ADOPTION_REQUIRED" });
-    }
-    return this.provision("adopt", input, {
-      targetSiteName: input.targetSiteName.trim(),
-      confirmAdoption: true,
-      allowAclTightening: input.allowAclTightening === true,
-      allowSharedFtpServiceStart: input.allowSharedFtpServiceStart === true
-    });
-  }
 
   async start(input: IisFtpManagerInput): Promise<IisFtpActionResult> {
-    // Start is intentionally a reconciliation target, not a blind runtime
-    // toggle. Missing managed configuration is repaired in the same elevated
-    // transaction before the site is started and verified.
-    return this.provision("start", input, { allowAclTightening: input.allowAclTightening === true, allowSharedFtpServiceStart: input.allowSharedFtpServiceStart === true });
+    return this.control("start", input);
   }
 
   async stop(input: IisFtpManagerInput): Promise<IisFtpActionResult> {
@@ -401,7 +376,7 @@ export class IisFtpManager {
   }
 
   async restart(input: IisFtpManagerInput): Promise<IisFtpActionResult> {
-    return this.provision("restart", input, { allowAclTightening: input.allowAclTightening === true, allowSharedFtpServiceStart: input.allowSharedFtpServiceStart === true });
+    return this.control("restart", input);
   }
 
   async restartRuntime(input: IisFtpManagerInput): Promise<IisFtpActionResult> {
@@ -412,79 +387,32 @@ export class IisFtpManager {
     return this.control("set-path", input);
   }
 
-  async updateCredentials(input: IisFtpManagerInput & {
-    username: string;
-    password: string;
-    previousUsername: string;
-  }): Promise<IisFtpActionResult> {
-    validateCameraFtpCredentials(input.username, input.password);
-    const raw = await withSecretRedaction(() => this.runMutationScript(() => runElevatedPowerShellJsonScript<ScriptActionData>("iis-ftp-credentials.ps1", {
-        action: "set",
-        ...baseScriptInput({
-          ...input,
-          config: { ...input.config, username: input.username.trim() }
-        }),
-        username: input.username.trim(),
-        previousUsername: input.previousUsername,
-        password: input.password
-      })), [input.password]);
-    safeLog("info", {
-      action: "credentials",
-      usernameChanged: input.username.trim() !== input.previousUsername,
-      passwordReset: true
-    }, "IIS FTP 账户设置已更新");
-    return normalizeActionResult("credentials", raw, {
-      ...input,
-      config: { ...input.config, username: input.username.trim() }
-    }, [input.password]);
+  /** Restore a captured path only if the managed site still points at the
+   * transaction's new path. The elevated script permits this only for a
+   * stopped site, so a stale/unwritable former activity can be rolled back
+   * without treating it as a new writable target. */
+  async restorePhysicalPath(input: IisFtpManagerInput, expectedCurrentPath: string): Promise<IisFtpActionResult> {
+    assertPhysicalPath(expectedCurrentPath);
+    return this.control("restore-path", input, { expectedCurrentPath: path.resolve(expectedCurrentPath) });
   }
 
-  private async control(action: "start" | "stop" | "restart" | "set-path", input: IisFtpManagerInput): Promise<IisFtpActionResult> {
+
+  private async control(action: "start" | "stop" | "restart" | "set-path" | "restore-path", input: IisFtpManagerInput, extra: Record<string, unknown> = {}): Promise<IisFtpActionResult> {
+    const startedAt = Date.now();
     const raw = await this.runMutationScript(() => runElevatedPowerShellJsonScript<ScriptActionData>("iis-ftp-control.ps1", {
         action,
         // Runtime site controls are scoped by the stored Site ID, site name
         // and managed-account marker. Only a physicalPath update needs a
         // currently valid event directory.
-        ...baseScriptInput(input, action === "set-path")
+        ...baseScriptInput(input, action === "set-path" || action === "restore-path"),
+        ...extra
       }));
-    safeLog("info", { action, siteName: input.config.siteName }, "IIS FTP 控制操作完成");
+    safeLog("info", { action, siteName: input.config.siteName, elapsedMs: Date.now() - startedAt }, "IIS FTP 控制操作完成");
     const result = normalizeActionResult(action, raw, input);
     if (result.systemStatus) this.rememberStatus(input, result.systemStatus);
     return result;
   }
 
-  private async provision(
-    action: "setup" | "repair" | "start" | "restart" | "adopt",
-    input: IisFtpManagerInput & { password?: string },
-    confirmation: { targetSiteName?: string; confirmAdoption?: boolean; allowAclTightening?: boolean; allowSharedFtpServiceStart?: boolean } = {}
-  ): Promise<IisFtpActionResult> {
-    const secrets = input.password ? [input.password] : [];
-    const raw = await withSecretRedaction(() => this.runMutationScript(() => runElevatedPowerShellJsonScript<ScriptActionData>("iis-ftp-setup.ps1", {
-        action,
-        ...baseScriptInput(input),
-        ...(confirmation.targetSiteName ? { targetSiteName: confirmation.targetSiteName } : {}),
-        ...(confirmation.confirmAdoption ? { confirmAdoption: true } : {}),
-        ...(confirmation.allowAclTightening ? { allowAclTightening: true } : {}),
-        ...(confirmation.allowSharedFtpServiceStart ? { allowSharedFtpServiceStart: true } : {}),
-        ...(input.password ? { password: input.password } : {})
-      }, { timeoutMs: PROVISIONING_TIMEOUT_MS })), secrets);
-    safeLog("info", {
-      action,
-      operationId: raw.operationId,
-      siteName: confirmation.targetSiteName || input.config.siteName,
-      reconciled: true,
-      steps: Array.isArray(raw.steps)
-        ? raw.steps.map((step) => ({ name: stringValue(step.name), status: stringValue(step.status) }))
-        : [],
-      preflight: raw.preflight,
-      provisioningPlan: raw.plan,
-      verification: raw.systemStatus,
-      rollback: raw.rollback
-    }, "IIS FTP 统一配置事务完成");
-    const result = normalizeActionResult(action, raw, input, secrets);
-    if (result.systemStatus) this.rememberStatus(input, result.systemStatus);
-    return result;
-  }
 }
 
 const iisFtpManager = new IisFtpManager();

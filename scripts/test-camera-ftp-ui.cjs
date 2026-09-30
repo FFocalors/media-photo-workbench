@@ -852,6 +852,8 @@ async function main() {
       path.join(root, "src", "components", "import", "CameraFtpImportPanel.tsx"),
       "utf8"
     );
+    assert.match(panelSource, /IIS_STATUS_CHECK_TIMEOUT[\s\S]{0,100}状态检测超时/,
+      "a read-only status timeout must not be presented as a broken FTP configuration");
     const uiStateSource = fs.readFileSync(
       path.join(root, "src", "components", "import", "cameraFtpUiState.ts"),
       "utf8"

@@ -555,7 +555,6 @@ function Get-MpwCommonInputProperties {
         'firewallPassiveRuleName',
         'firewallProfile',
         'firewallRemoteAddress',
-        'allowLegacyFirewallRuleUpdate',
         'accountDescription',
         'binding',
         'activeEventId'
@@ -578,19 +577,6 @@ function Assert-MpwUsername {
     $value = $Username.Trim()
     if ($value.Length -lt 1 -or $value.Length -gt 20 -or $value -match '["/\\\[\]:;|=,+*?<>@]' -or $value -match '[\.\s]$' -or $value -match '^\.+$') {
         Throw-MpwFailure -Code 'FTP_USERNAME_INVALID' -Message 'The local FTP username is invalid.'
-    }
-    return $value
-}
-
-function Assert-MpwPassword {
-    param([AllowNull()]$Password)
-
-    if ($null -eq $Password) {
-        Throw-MpwFailure -Code 'FTP_PASSWORD_REQUIRED' -Message 'An FTP password is required.'
-    }
-    $value = [string]$Password
-    if ($value.Length -lt 8 -or $value.Length -gt 127 -or $value.Contains("`0") -or $value.Contains("`r") -or $value.Contains("`n")) {
-        Throw-MpwFailure -Code 'FTP_PASSWORD_INVALID' -Message 'The FTP password does not meet the required length or character rules.'
     }
     return $value
 }
@@ -640,7 +626,6 @@ function Assert-MpwPathAncestorsSafe {
 function Assert-MpwPhysicalPath {
     param(
         [Parameter(Mandatory = $true)][string]$PhysicalPath,
-        [switch]$Create,
         [switch]$AllowMissing
     )
 
@@ -664,15 +649,7 @@ function Assert-MpwPhysicalPath {
         if ($AllowMissing) {
             return $fullPath
         }
-        if (-not $Create) {
-            Throw-MpwFailure -Code 'FTP_PATH_INVALID' -Message 'The FTP physical path does not exist.'
-        }
-        try {
-            [void][IO.Directory]::CreateDirectory($fullPath)
-        }
-        catch {
-            Throw-MpwFailure -Code 'FTP_PATH_CREATE_FAILED' -Message 'The FTP physical path could not be created.'
-        }
+        Throw-MpwFailure -Code 'FTP_PATH_INVALID' -Message 'The FTP physical path does not exist.'
     }
 
     Assert-MpwPathAncestorsSafe -FullPath $fullPath
@@ -712,15 +689,6 @@ function Get-MpwNormalizedOptions {
     $accountDescription = [string](Get-MpwInputValue -InputObject $InputObject -Name 'accountDescription' -DefaultValue $script:MpwManagedAccountDescription)
     $firewallProfile = [string](Get-MpwInputValue -InputObject $InputObject -Name 'firewallProfile' -DefaultValue 'Any')
     $firewallRemoteAddress = [string](Get-MpwInputValue -InputObject $InputObject -Name 'firewallRemoteAddress' -DefaultValue 'LocalSubnet')
-    $allowLegacyFirewallRuleUpdate = $false
-    if (Test-MpwInputProperty -InputObject $InputObject -Name 'allowLegacyFirewallRuleUpdate') {
-        $allowLegacyValue = Get-MpwInputValue -InputObject $InputObject -Name 'allowLegacyFirewallRuleUpdate'
-        if ($allowLegacyValue -isnot [bool]) {
-            Throw-MpwFailure -Code 'INVALID_PARAMETER' -Message 'allowLegacyFirewallRuleUpdate must be a boolean.'
-        }
-        $allowLegacyFirewallRuleUpdate = [bool]$allowLegacyValue
-    }
-
     if ($binding -ne $expectedBinding) {
         Throw-MpwFailure -Code 'FTP_BINDING_FAILED' -Message 'The FTP binding must use all unassigned addresses and the configured control port.'
     }
@@ -750,7 +718,6 @@ function Get-MpwNormalizedOptions {
         AccountDescription = $accountDescription
         FirewallProfile = $firewallProfile
         FirewallRemoteAddress = $firewallRemoteAddress
-        AllowLegacyFirewallRuleUpdate = $allowLegacyFirewallRuleUpdate
     }
 }
 
@@ -814,119 +781,9 @@ function Get-MpwLocalAccountStatus {
     }
 }
 
-function Ensure-MpwManagedLocalAccount {
-    param(
-        [Parameter(Mandatory = $true)][string]$Username,
-        [AllowNull()]$Password,
-        [switch]$RequirePassword
-    )
 
-    Import-MpwLocalAccountsModule
-    $existing = Get-LocalUser -Name $Username -ErrorAction SilentlyContinue
-    if ($null -ne $existing -and [string]$existing.Description -ne $script:MpwManagedAccountDescription) {
-        Throw-MpwFailure -Code 'FTP_ACCOUNT_CONFLICT' -Message 'The requested local username is already owned by another account.'
-    }
 
-    $created = $false
-    if ($null -eq $existing) {
-        $plainPassword = Assert-MpwPassword -Password $Password
-        $securePassword = ConvertTo-SecureString -String $plainPassword -AsPlainText -Force
-        $plainPassword = $null
-        try {
-            [void](New-LocalUser -Name $Username -Password $securePassword -Description $script:MpwManagedAccountDescription -AccountNeverExpires -PasswordNeverExpires -UserMayNotChangePassword -ErrorAction Stop)
-            $created = $true
-        }
-        catch {
-            $diagnostic = Get-MpwExceptionDiagnosticDetails -ErrorRecord $_
-            Throw-MpwFailure -Code 'FTP_ACCOUNT_CREATE_FAILED' -Message 'The managed FTP account could not be created.' -Command 'New-LocalUser' -Details ([ordered]@{
-                username = $Username
-                technicalMessage = [string]$diagnostic.technicalMessage
-                innerTechnicalMessage = [string]$diagnostic.innerTechnicalMessage
-                sourceExceptionType = [string]$diagnostic.sourceExceptionType
-                hresult = [string]$diagnostic.hresult
-                recommendation = 'Check the local or domain password policy, account-name policy, and local account management restrictions.'
-            })
-        }
-    }
-    elseif ($RequirePassword -or $null -ne $Password) {
-        $plainPassword = Assert-MpwPassword -Password $Password
-        $securePassword = ConvertTo-SecureString -String $plainPassword -AsPlainText -Force
-        $plainPassword = $null
-        try {
-            Set-LocalUser -Name $Username -Password $securePassword -Description $script:MpwManagedAccountDescription -UserMayChangePassword $false -PasswordNeverExpires $true -ErrorAction Stop
-        }
-        catch {
-            $diagnostic = Get-MpwExceptionDiagnosticDetails -ErrorRecord $_
-            Throw-MpwFailure -Code 'FTP_CREDENTIAL_UPDATE_FAILED' -Message 'The managed FTP password could not be updated.' -Command 'Set-LocalUser' -Details ([ordered]@{
-                username = $Username
-                technicalMessage = [string]$diagnostic.technicalMessage
-                innerTechnicalMessage = [string]$diagnostic.innerTechnicalMessage
-                sourceExceptionType = [string]$diagnostic.sourceExceptionType
-                hresult = [string]$diagnostic.hresult
-                recommendation = 'Check the local or domain password policy, password history, and local account management restrictions.'
-            })
-        }
-    }
 
-    try {
-        Enable-LocalUser -Name $Username -ErrorAction Stop
-    }
-    catch {
-        $diagnostic = Get-MpwExceptionDiagnosticDetails -ErrorRecord $_
-        Throw-MpwFailure -Code 'FTP_ACCOUNT_CREATE_FAILED' -Message 'The managed FTP account could not be enabled.' -Command 'Enable-LocalUser' -Details ([ordered]@{
-            username = $Username
-            technicalMessage = [string]$diagnostic.technicalMessage
-            innerTechnicalMessage = [string]$diagnostic.innerTechnicalMessage
-            sourceExceptionType = [string]$diagnostic.sourceExceptionType
-            hresult = [string]$diagnostic.hresult
-        })
-    }
-
-    return [ordered]@{
-        username = $Username
-        created = $created
-        passwordReset = [bool]($created -or $RequirePassword -or $null -ne $Password)
-    }
-}
-
-function Remove-MpwManagedLocalAccount {
-    param([Parameter(Mandatory = $true)][string]$Username)
-
-    Import-MpwLocalAccountsModule
-    $existing = Get-LocalUser -Name $Username -ErrorAction SilentlyContinue
-    if ($null -ne $existing -and [string]$existing.Description -eq $script:MpwManagedAccountDescription) {
-        Remove-LocalUser -Name $Username -ErrorAction Stop
-    }
-}
-
-function Disable-MpwManagedLocalAccount {
-    param([Parameter(Mandatory = $true)][string]$Username)
-
-    Import-MpwLocalAccountsModule
-    $existing = Get-LocalUser -Name $Username -ErrorAction SilentlyContinue
-    if ($null -ne $existing -and [string]$existing.Description -eq $script:MpwManagedAccountDescription) {
-        if ([bool]$existing.Enabled) {
-            Disable-LocalUser -Name $Username -ErrorAction Stop
-            return $true
-        }
-        return $false
-    }
-    return $false
-}
-
-function Enable-MpwManagedLocalAccount {
-    param([Parameter(Mandatory = $true)][string]$Username)
-
-    Import-MpwLocalAccountsModule
-    $existing = Get-LocalUser -Name $Username -ErrorAction SilentlyContinue
-    if ($null -eq $existing -or [string]$existing.Description -ne $script:MpwManagedAccountDescription) {
-        return $false
-    }
-    if (-not [bool]$existing.Enabled) {
-        Enable-LocalUser -Name $Username -ErrorAction Stop
-    }
-    return $true
-}
 
 function Get-MpwAccountSid {
     param([Parameter(Mandatory = $true)][string]$Username)
@@ -1002,7 +859,8 @@ function Get-MpwAccountEffectivePrincipalSids {
 function Get-MpwAclModifyAccessForSids {
     param(
         [Parameter(Mandatory = $true)]$Acl,
-        [Parameter(Mandatory = $true)][string[]]$PrincipalSids
+        [Parameter(Mandatory = $true)][string[]]$PrincipalSids,
+        [switch]$InheritedOnly
     )
 
     $principalSet = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
@@ -1015,6 +873,7 @@ function Get-MpwAclModifyAccessForSids {
     $allowMask = [uint64]0
     $denyMask = [uint64]0
     foreach ($rule in @($Acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))) {
+        if ($InheritedOnly -and -not $rule.IsInherited) { continue }
         if (-not $principalSet.Contains([string]$rule.IdentityReference.Value)) { continue }
         $ruleMask = ConvertTo-MpwUnsignedAccessMask -AccessMask ([int]$rule.FileSystemRights)
         if ($rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Deny) {
@@ -1095,143 +954,10 @@ function Get-MpwDirectoryAclDiagnostics {
     return $details
 }
 
-function Get-MpwDirectoryAclSnapshot {
-    param([Parameter(Mandatory = $true)][string]$PhysicalPath)
 
-    if (-not [IO.Directory]::Exists($PhysicalPath)) { return $null }
-    try {
-        $acl = [IO.Directory]::GetAccessControl($PhysicalPath)
-        $sddl = $acl.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access)
-        return [ordered]@{
-            path = $PhysicalPath
-            sddl = $sddl
-            semanticFingerprint = Get-MpwDirectoryAclSemanticFingerprint -Sddl $sddl
-            owner = [string]$acl.Owner
-            protected = [bool]$acl.AreAccessRulesProtected
-            canonical = [bool]$acl.AreAccessRulesCanonical
-            ruleCount = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])).Count
-        }
-    }
-    catch {
-        $diagnostic = Get-MpwExceptionDiagnosticDetails -ErrorRecord $_
-        Throw-MpwFailure -Code 'FTP_ACL_SNAPSHOT_FAILED' -Message 'The FTP directory ACL snapshot could not be captured.' -Command 'Directory.GetAccessControl/GetSecurityDescriptorSddlForm' -Details ([ordered]@{
-            path = $PhysicalPath
-            technicalMessage = [string]$diagnostic.technicalMessage
-            sourceExceptionType = [string]$diagnostic.sourceExceptionType
-            hresult = [string]$diagnostic.hresult
-        })
-    }
-}
 
-function Restore-MpwDirectoryAclSnapshot {
-    param(
-        [Parameter(Mandatory = $true)][string]$PhysicalPath,
-        [Parameter(Mandatory = $true)]$Snapshot
-    )
 
-    try {
-        $descriptor = [Security.AccessControl.DirectorySecurity]::new()
-        $descriptor.SetSecurityDescriptorSddlForm(
-            [string]$Snapshot.sddl,
-            [Security.AccessControl.AccessControlSections]::Access
-        )
-        [IO.Directory]::SetAccessControl($PhysicalPath, $descriptor)
-        $restored = [IO.Directory]::GetAccessControl($PhysicalPath)
-        $restoredSddl = $restored.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access)
-        $expectedFingerprint = if (-not [string]::IsNullOrWhiteSpace([string]$Snapshot.semanticFingerprint)) {
-            [string]$Snapshot.semanticFingerprint
-        }
-        else {
-            Get-MpwDirectoryAclSemanticFingerprint -Sddl ([string]$Snapshot.sddl)
-        }
-        $actualFingerprint = Get-MpwDirectoryAclSemanticFingerprint -Sddl $restoredSddl
-        $verified = $actualFingerprint -eq $expectedFingerprint
-        if (-not $verified) {
-            Throw-MpwFailure -Code 'FTP_ACL_ROLLBACK_VERIFY_FAILED' -Message 'The FTP directory ACL rollback did not reproduce the captured DACL.' -Command 'Directory.SetAccessControl/GetSecurityDescriptorSddlForm' -Details ([ordered]@{
-                path = $PhysicalPath
-                expectedProtected = [bool]$Snapshot.protected
-                actualProtected = [bool]$restored.AreAccessRulesProtected
-                expectedCanonical = [bool]$Snapshot.canonical
-                actualCanonical = [bool]$restored.AreAccessRulesCanonical
-                expectedRuleCount = [int]$Snapshot.ruleCount
-                actualRuleCount = @($restored.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])).Count
-                expectedFingerprint = $expectedFingerprint
-                actualFingerprint = $actualFingerprint
-                technicalMessage = 'The post-rollback DACL differs semantically from the preflight access-control snapshot.'
-            })
-        }
-        return [ordered]@{
-            succeeded = $true
-            protected = [bool]$restored.AreAccessRulesProtected
-            canonical = [bool]$restored.AreAccessRulesCanonical
-            ruleCount = @($restored.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])).Count
-        }
-    }
-    catch {
-        if ($null -ne $_.Exception.Data -and $_.Exception.Data.Contains('MpwCode')) { throw }
-        $diagnostic = Get-MpwExceptionDiagnosticDetails -ErrorRecord $_
-        Throw-MpwFailure -Code 'FTP_ACL_ROLLBACK_FAILED' -Message 'The FTP directory ACL could not be restored from its SDDL snapshot.' -Command 'DirectorySecurity.SetSecurityDescriptorSddlForm/Directory.SetAccessControl' -Details ([ordered]@{
-            path = $PhysicalPath
-            technicalMessage = [string]$diagnostic.technicalMessage
-            sourceExceptionType = [string]$diagnostic.sourceExceptionType
-            hresult = [string]$diagnostic.hresult
-        })
-    }
-}
 
-function Get-MpwRawAceBytes {
-    param([Parameter(Mandatory = $true)][Security.AccessControl.GenericAce]$Ace)
-
-    $bytes = [byte[]]::new($Ace.BinaryLength)
-    $Ace.GetBinaryForm($bytes, 0)
-    return $bytes
-}
-
-function Copy-MpwRawAce {
-    param(
-        [Parameter(Mandatory = $true)][Security.AccessControl.GenericAce]$Ace,
-        [bool]$ClearInheritedFlag = $false
-    )
-
-    $bytes = Get-MpwRawAceBytes -Ace $Ace
-    if ($ClearInheritedFlag -and $bytes.Length -ge 2) {
-        # ACE_HEADER byte 1 contains AceFlags. Clearing INHERITED_ACE (0x10)
-        # preserves the raw access mask, object GUIDs and callback/opaque data.
-        $bytes[1] = [byte]([int]$bytes[1] -band (-bnot 0x10))
-    }
-    return [Security.AccessControl.GenericAce]::CreateFromBinaryForm($bytes, 0)
-}
-
-function Get-MpwDirectoryAclSemanticFingerprint {
-    param([Parameter(Mandatory = $true)][string]$Sddl)
-
-    try {
-        $raw = [Security.AccessControl.RawSecurityDescriptor]::new($Sddl)
-        $aceFingerprints = [Collections.Generic.List[string]]::new()
-        if ($null -ne $raw.DiscretionaryAcl) {
-            foreach ($ace in $raw.DiscretionaryAcl) {
-                [void]$aceFingerprints.Add([Convert]::ToBase64String((Get-MpwRawAceBytes -Ace $ace)))
-            }
-        }
-        $protected = ([int]$raw.ControlFlags -band [int][Security.AccessControl.ControlFlags]::DiscretionaryAclProtected) -ne 0
-        $daclState = if ($null -eq $raw.DiscretionaryAcl) { 'null' } else { 'present' }
-        $revision = if ($null -eq $raw.DiscretionaryAcl) { 'none' } else { [string]$raw.DiscretionaryAcl.Revision }
-        $payload = "protected=$protected|dacl=$daclState|revision=$revision|aces=$($aceFingerprints -join ',')"
-        $sha256 = [Security.Cryptography.SHA256]::Create()
-        try {
-            return ([BitConverter]::ToString($sha256.ComputeHash([Text.Encoding]::UTF8.GetBytes($payload)))).Replace('-', '').ToLowerInvariant()
-        }
-        finally {
-            $sha256.Dispose()
-        }
-    }
-    catch {
-        Throw-MpwFailure -Code 'FTP_ACL_UNSUPPORTED_ACE' -Message 'The FTP directory ACL contains an access rule that cannot be represented safely.' -Command 'RawSecurityDescriptor' -Details ([ordered]@{
-            technicalMessage = [string]$_.Exception.Message
-            sourceExceptionType = [string]$_.Exception.GetType().FullName
-        })
-    }
-}
 
 function ConvertTo-MpwUnsignedAccessMask {
     param([Parameter(Mandatory = $true)][int]$AccessMask)
@@ -1258,231 +984,11 @@ function Test-MpwWriteCapableAccessMask {
     return (($mask -band $writeMask) -ne 0)
 }
 
-function Test-MpwRawAccessAllowedAce {
-    param([Parameter(Mandatory = $true)][Security.AccessControl.GenericAce]$Ace)
 
-    return @(
-        [Security.AccessControl.AceType]::AccessAllowed,
-        [Security.AccessControl.AceType]::AccessAllowedObject,
-        [Security.AccessControl.AceType]::AccessAllowedCallback,
-        [Security.AccessControl.AceType]::AccessAllowedCallbackObject
-    ) -contains $Ace.AceType
-}
 
-function Test-MpwRawAccessDeniedAce {
-    param([Parameter(Mandatory = $true)][Security.AccessControl.GenericAce]$Ace)
 
-    return @(
-        [Security.AccessControl.AceType]::AccessDenied,
-        [Security.AccessControl.AceType]::AccessDeniedObject,
-        [Security.AccessControl.AceType]::AccessDeniedCallback,
-        [Security.AccessControl.AceType]::AccessDeniedCallbackObject
-    ) -contains $Ace.AceType
-}
 
-function Test-MpwRawBroadWriteAce {
-    param([Parameter(Mandatory = $true)][Security.AccessControl.GenericAce]$Ace)
 
-    if (-not (Test-MpwRawAccessAllowedAce -Ace $Ace) -or -not ($Ace -is [Security.AccessControl.KnownAce])) { return $false }
-    $broadSids = @('S-1-1-0', 'S-1-5-11', 'S-1-5-32-545')
-    return $broadSids -contains [string]$Ace.SecurityIdentifier.Value -and
-        (Test-MpwWriteCapableAccessMask -AccessMask ([int]$Ace.AccessMask))
-}
-
-function New-MpwCanonicalDirectorySecurityResult {
-    param(
-        [Parameter(Mandatory = $true)]$Acl,
-        [bool]$ProtectAccessRules = [bool]$Acl.AreAccessRulesProtected,
-        [bool]$IncludeInheritedRules = [bool]$Acl.AreAccessRulesProtected,
-        [bool]$RemoveBroadWriteRules = $false
-    )
-
-    try {
-        $sourceSddl = $Acl.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access)
-        $raw = [Security.AccessControl.RawSecurityDescriptor]::new($sourceSddl)
-        if ($null -eq $raw.DiscretionaryAcl) {
-            Throw-MpwFailure -Code 'FTP_ACL_UNSUPPORTED_ACE' -Message 'The FTP directory uses a null DACL that cannot be tightened automatically without replacing its security boundary.' -Command 'RawSecurityDescriptor/RawAcl' -Details ([ordered]@{
-                nullDacl = $true
-                recommendation = 'Keep the existing null DACL without tightening, or assign an explicit Windows directory ACL before retrying the confirmed tightening operation.'
-            })
-        }
-        $deniedAces = [Collections.Generic.List[object]]::new()
-        $allowedAces = [Collections.Generic.List[object]]::new()
-        $removed = [Collections.Generic.List[object]]::new()
-        $convertedInherited = $false
-        $sourceRuleCount = 0
-        if ($null -ne $raw.DiscretionaryAcl) {
-            foreach ($ace in $raw.DiscretionaryAcl) {
-                $sourceRuleCount++
-                $isInherited = ([int]$ace.AceFlags -band [int][Security.AccessControl.AceFlags]::Inherited) -ne 0
-                if ($isInherited -and -not $IncludeInheritedRules) { continue }
-                if (-not (Test-MpwRawAccessAllowedAce -Ace $ace) -and -not (Test-MpwRawAccessDeniedAce -Ace $ace)) {
-                    Throw-MpwFailure -Code 'FTP_ACL_UNSUPPORTED_ACE' -Message 'The FTP directory ACL contains an unsupported DACL entry.' -Command 'RawAcl' -Details ([ordered]@{
-                        aceType = [string]$ace.AceType
-                        aceFlags = [string]$ace.AceFlags
-                    })
-                }
-                if ($RemoveBroadWriteRules -and (Test-MpwRawBroadWriteAce -Ace $ace)) {
-                    [void]$removed.Add([ordered]@{
-                        identity = [string]$ace.SecurityIdentifier.Value
-                        accessMask = [int]$ace.AccessMask
-                        rights = "raw:$([int]$ace.AccessMask)"
-                        inherited = $isInherited
-                    })
-                    continue
-                }
-                $copy = Copy-MpwRawAce -Ace $ace -ClearInheritedFlag ($ProtectAccessRules -and $isInherited)
-                if ($ProtectAccessRules -and $isInherited) { $convertedInherited = $true }
-                if (Test-MpwRawAccessDeniedAce -Ace $copy) {
-                    [void]$deniedAces.Add($copy)
-                }
-                else {
-                    [void]$allowedAces.Add($copy)
-                }
-            }
-        }
-
-        # Do not use Sort-Object against OrderedDictionary entries here.
-        # Windows PowerShell 5.1 does not reliably resolve their `order` key as
-        # a sortable property and can leave Allow ACEs before Deny ACEs. Build
-        # the canonical explicit DACL directly while preserving the raw bytes
-        # and the stable source order within each qualifier group.
-        $newDacl = [Security.AccessControl.RawAcl]::new(
-            $raw.DiscretionaryAcl.Revision,
-            $deniedAces.Count + $allowedAces.Count
-        )
-        $insertIndex = 0
-        foreach ($ace in @($deniedAces)) {
-            $newDacl.InsertAce($insertIndex, [Security.AccessControl.GenericAce]$ace)
-            $insertIndex++
-        }
-        foreach ($ace in @($allowedAces)) {
-            $newDacl.InsertAce($insertIndex, [Security.AccessControl.GenericAce]$ace)
-            $insertIndex++
-        }
-        $raw.DiscretionaryAcl = $newDacl
-        $flags = [int]$raw.ControlFlags
-        $protectedFlag = [int][Security.AccessControl.ControlFlags]::DiscretionaryAclProtected
-        if ($ProtectAccessRules) { $flags = $flags -bor $protectedFlag }
-        else { $flags = $flags -band (-bnot $protectedFlag) }
-        $raw.SetFlags([Security.AccessControl.ControlFlags]$flags)
-
-        $canonical = [Security.AccessControl.DirectorySecurity]::new()
-        $canonical.SetSecurityDescriptorSddlForm($raw.GetSddlForm([Security.AccessControl.AccessControlSections]::Access), [Security.AccessControl.AccessControlSections]::Access)
-        if (-not $canonical.AreAccessRulesCanonical) {
-            Throw-MpwFailure -Code 'FTP_ACL_FAILED' -Message 'The FTP directory ACL could not be converted to canonical order.' -Command 'RawSecurityDescriptor/RawAcl' -Details ([ordered]@{
-                technicalMessage = 'The rebuilt raw DACL is still reported as non-canonical.'
-                sourceRuleCount = $sourceRuleCount
-            })
-        }
-        return [ordered]@{
-            security = $canonical
-            removedRules = @($removed)
-            inheritedRulesConverted = $convertedInherited
-        }
-    }
-    catch {
-        if ($null -ne $_.Exception.Data -and $_.Exception.Data.Contains('MpwCode')) { throw }
-        Throw-MpwFailure -Code 'FTP_ACL_UNSUPPORTED_ACE' -Message 'The FTP directory ACL could not be rebuilt without changing raw access masks.' -Command 'RawSecurityDescriptor/RawAcl' -Details ([ordered]@{
-            technicalMessage = [string]$_.Exception.Message
-            sourceExceptionType = [string]$_.Exception.GetType().FullName
-        })
-    }
-}
-
-function ConvertTo-MpwCanonicalDirectorySecurity {
-    param(
-        [Parameter(Mandatory = $true)]$Acl,
-        [bool]$ProtectAccessRules = [bool]$Acl.AreAccessRulesProtected,
-        [bool]$IncludeInheritedRules = [bool]$Acl.AreAccessRulesProtected
-    )
-
-    return (New-MpwCanonicalDirectorySecurityResult -Acl $Acl -ProtectAccessRules $ProtectAccessRules -IncludeInheritedRules $IncludeInheritedRules).security
-}
-
-function Grant-MpwDirectoryAccess {
-    param(
-        [Parameter(Mandatory = $true)][string]$PhysicalPath,
-        [Parameter(Mandatory = $true)][string]$Username
-    )
-
-    $path = Assert-MpwPhysicalPath -PhysicalPath $PhysicalPath -Create
-    $sid = Get-MpwAccountSid -Username $Username
-    $aclStage = 'read_acl'
-    try {
-        $acl = [IO.Directory]::GetAccessControl($path)
-        $rawAcl = [Security.AccessControl.RawSecurityDescriptor]::new(
-            $acl.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access)
-        )
-        if ($null -eq $rawAcl.DiscretionaryAcl) {
-            # A null DACL already grants the managed account access. Do not
-            # silently replace that broad security boundary while performing a
-            # routine grant; the separate tightening confirmation owns that
-            # decision.
-            return [ordered]@{
-                path = $path
-                accountSid = [string]$sid.Value
-                canonicalized = $false
-                canonical = $true
-                readWriteAllowed = $true
-                nullDacl = $true
-            }
-        }
-        $canonicalized = -not [bool]$acl.AreAccessRulesCanonical
-        if ($canonicalized) {
-            $aclStage = 'canonicalize_acl'
-            $acl = ConvertTo-MpwCanonicalDirectorySecurity -Acl $acl
-        }
-        $aclStage = 'remove_existing_account_rules'
-        $explicit = @($acl.GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier]) | Where-Object { $_.IdentityReference -eq $sid })
-        foreach ($rule in $explicit) {
-            [void]$acl.RemoveAccessRuleSpecific($rule)
-        }
-        $aclStage = 'add_account_rule'
-        $rule = [Security.AccessControl.FileSystemAccessRule]::new(
-            $sid,
-            [Security.AccessControl.FileSystemRights]::Modify,
-            [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit,
-            [Security.AccessControl.PropagationFlags]::None,
-            [Security.AccessControl.AccessControlType]::Allow
-        )
-        $acl.AddAccessRule($rule)
-        $aclStage = 'write_acl'
-        [IO.Directory]::SetAccessControl($path, $acl)
-        $aclStage = 'verify_acl'
-        $after = Get-MpwDirectoryAclStatus -PhysicalPath $path -Username $Username
-        if ($after.readWriteAllowed -ne $true -or $after.correct -ne $true) {
-            Throw-MpwFailure -Code 'FTP_ACL_EFFECTIVE_ACCESS_DENIED' -Message 'The FTP account still lacks effective read/write access after the ACL update.' -Command 'Directory.GetAccessControl' -Details ([ordered]@{
-                path = $path
-                username = $Username
-                accountSid = [string]$sid.Value
-                technicalMessage = 'A Deny ACE or another effective-permission conflict still overrides the managed FTP account rights.'
-                acl = Get-MpwDirectoryAclDiagnostics -PhysicalPath $path
-            })
-        }
-        return [ordered]@{
-            path = $path
-            accountSid = [string]$sid.Value
-            canonicalized = $canonicalized
-            canonical = [bool](Get-MpwDirectoryAclDiagnostics -PhysicalPath $path).canonical
-            readWriteAllowed = $true
-        }
-    }
-    catch {
-        if ($null -ne $_.Exception.Data -and $_.Exception.Data.Contains('MpwCode')) { throw }
-        $diagnostic = Get-MpwExceptionDiagnosticDetails -ErrorRecord $_
-        Throw-MpwFailure -Code 'FTP_ACL_FAILED' -Message 'Read/write ACL access could not be granted to the managed FTP account.' -Command 'DirectorySecurity/Directory.SetAccessControl' -Details ([ordered]@{
-            path = $path
-            username = $Username
-            accountSid = [string]$sid.Value
-            aclStage = $aclStage
-            technicalMessage = [string]$diagnostic.technicalMessage
-            sourceExceptionType = [string]$diagnostic.sourceExceptionType
-            hresult = [string]$diagnostic.hresult
-            acl = Get-MpwDirectoryAclDiagnostics -PhysicalPath $path
-        })
-    }
-}
 
 function Test-MpwWriteCapableFileSystemRights {
     param([Parameter(Mandatory = $true)][Security.AccessControl.FileSystemRights]$Rights)
@@ -1501,117 +1007,7 @@ function Get-MpwBroadDirectoryWriteRules {
     })
 }
 
-function Remove-MpwBroadDirectoryWriteAccess {
-    param([Parameter(Mandatory = $true)][string]$PhysicalPath)
 
-    $path = Assert-MpwPhysicalPath -PhysicalPath $PhysicalPath -Create
-    try {
-        $acl = [IO.Directory]::GetAccessControl($path)
-        $rawAcl = [Security.AccessControl.RawSecurityDescriptor]::new(
-            $acl.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access)
-        )
-        if ($null -eq $rawAcl.DiscretionaryAcl) {
-            Throw-MpwFailure -Code 'FTP_ACL_UNSUPPORTED_ACE' -Message 'The FTP directory uses a null DACL and cannot be tightened automatically.' -Command 'RawSecurityDescriptor/RawAcl' -Details ([ordered]@{
-                path = $path
-                nullDacl = $true
-                recommendation = 'Assign an explicit ACL that preserves the workbench user, Administrators, SYSTEM, and the managed FTP account before retrying ACL tightening.'
-            })
-        }
-        $candidates = @(Get-MpwBroadDirectoryWriteRules -Acl $acl)
-        if ($candidates.Count -eq 0) {
-            return [ordered]@{
-                path = $path
-                changed = $false
-                removedRuleCount = 0
-                removedRules = @()
-                inheritedRulesConverted = $false
-                currentUserAccessAdded = $false
-            }
-        }
-
-        # Rebuild from raw ACE bytes. FileSystemAccessRule rejects valid
-        # GENERIC_ALL/GENERIC_WRITE masks such as 268435456 and negative
-        # combinations exposed by inherited Windows ACLs.
-        $rebuild = New-MpwCanonicalDirectorySecurityResult -Acl $acl -ProtectAccessRules $true -IncludeInheritedRules $true -RemoveBroadWriteRules $true
-        $acl = $rebuild.security
-        $inheritedRulesConverted = [bool]$rebuild.inheritedRulesConverted
-
-        $currentUserAccessAdded = $false
-        $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User
-        if ($null -ne $currentSid) {
-            $currentRules = @($acl.GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier]) | Where-Object {
-                $_.IdentityReference -eq $currentSid -and
-                $_.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow
-            })
-            $hasCurrentModify = @($currentRules | Where-Object {
-                (($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::Modify) -eq [Security.AccessControl.FileSystemRights]::Modify)
-            }).Count -gt 0
-            if (-not $hasCurrentModify) {
-                $currentRule = [Security.AccessControl.FileSystemAccessRule]::new(
-                    $currentSid,
-                    [Security.AccessControl.FileSystemRights]::Modify,
-                    [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit,
-                    [Security.AccessControl.PropagationFlags]::None,
-                    [Security.AccessControl.AccessControlType]::Allow
-                )
-                [void]$acl.AddAccessRule($currentRule)
-                $currentUserAccessAdded = $true
-            }
-        }
-
-        $removedRules = @($rebuild.removedRules)
-        [IO.Directory]::SetAccessControl($path, $acl)
-        $after = [IO.Directory]::GetAccessControl($path)
-        if (-not $after.AreAccessRulesCanonical) {
-            Throw-MpwFailure -Code 'FTP_ACL_TIGHTEN_FAILED' -Message 'The confirmed ACL update produced a non-canonical DACL.' -Command 'Directory.GetAccessControl' -Details ([ordered]@{
-                path = $path
-                technicalMessage = 'The post-update directory DACL is not in canonical order.'
-            })
-        }
-        return [ordered]@{
-            path = $path
-            changed = @($removedRules).Count -gt 0 -or $currentUserAccessAdded -or $inheritedRulesConverted
-            removedRuleCount = @($removedRules).Count
-            removedRules = @($removedRules)
-            inheritedRulesConverted = $inheritedRulesConverted
-            currentUserAccessAdded = $currentUserAccessAdded
-        }
-    }
-    catch {
-        if ($null -ne $_.Exception.Data -and $_.Exception.Data.Contains('MpwCode')) { throw }
-        $diagnostic = Get-MpwExceptionDiagnosticDetails -ErrorRecord $_
-        Throw-MpwFailure -Code 'FTP_ACL_TIGHTEN_FAILED' -Message 'Confirmed broad write-capable directory ACL rules could not be removed.' -Command 'DirectorySecurity.SetAccessRuleProtection/RemoveAccessRuleSpecific' -Details ([ordered]@{
-            path = $path
-            technicalMessage = [string]$diagnostic.technicalMessage
-            sourceExceptionType = [string]$diagnostic.sourceExceptionType
-            hresult = [string]$diagnostic.hresult
-            acl = Get-MpwDirectoryAclDiagnostics -PhysicalPath $path
-        })
-    }
-}
-
-function Remove-MpwExplicitDirectoryAccess {
-    param(
-        [Parameter(Mandatory = $true)][string]$PhysicalPath,
-        [Parameter(Mandatory = $true)][string]$Username
-    )
-
-    if (-not [IO.Directory]::Exists($PhysicalPath)) {
-        return
-    }
-    try {
-        $sid = Get-MpwAccountSid -Username $Username
-        $acl = [IO.Directory]::GetAccessControl($PhysicalPath)
-        $explicit = @($acl.GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier]) | Where-Object { $_.IdentityReference -eq $sid })
-        foreach ($rule in $explicit) {
-            [void]$acl.RemoveAccessRuleSpecific($rule)
-        }
-        [IO.Directory]::SetAccessControl($PhysicalPath, $acl)
-    }
-    catch {
-        Throw-MpwFailure -Code 'FTP_ACL_FAILED' -Message 'The previous managed FTP account ACL could not be removed.'
-    }
-}
 
 function Get-MpwDirectoryAclStatus {
     param(
@@ -1625,6 +1021,7 @@ function Get-MpwDirectoryAclStatus {
             path = $PhysicalPath
             exists = $false
             readWriteAllowed = $false
+            inheritedModifyAllowed = $false
             read = $false
             write = $false
             correct = $false
@@ -1652,6 +1049,13 @@ function Get-MpwDirectoryAclStatus {
         else {
             [ordered]@{ allowed = $false; allowMask = [uint64]0; denyMask = [uint64]0; principalSids = @() }
         }
+        $inheritedAccess = if (-not $acl.AreAccessRulesProtected -and $principalSids.Count -gt 0) {
+            Get-MpwAclModifyAccessForSids -Acl $acl -PrincipalSids $principalSids -InheritedOnly
+        }
+        else {
+            [ordered]@{ allowed = $false }
+        }
+        $inheritedModifyAllowed = [bool]($effectiveAccess.allowed -and $inheritedAccess.allowed)
         $broad = @(Get-MpwBroadDirectoryWriteRules -Acl $acl)
         return [ordered]@{
             detection = 'available'
@@ -1660,9 +1064,10 @@ function Get-MpwDirectoryAclStatus {
             owner = [string]$acl.Owner
             protected = [bool]$acl.AreAccessRulesProtected
             readWriteAllowed = [bool]$effectiveAccess.allowed
+            inheritedModifyAllowed = $inheritedModifyAllowed
             read = [bool]$effectiveAccess.allowed
             write = [bool]$effectiveAccess.allowed
-            correct = [bool]$effectiveAccess.allowed
+            correct = $inheritedModifyAllowed
             broadInheritedAccess = [bool]($nullDacl -or $broad.Count -gt 0)
             nullDacl = [bool]$nullDacl
             effectivePrincipalSids = @($effectiveAccess.principalSids)
@@ -1683,6 +1088,7 @@ function Get-MpwDirectoryAclStatus {
             path = $PhysicalPath
             exists = $true
             readWriteAllowed = $null
+            inheritedModifyAllowed = $null
             read = $null
             write = $null
             correct = $null
@@ -1826,6 +1232,7 @@ function Get-MpwIisSiteIdentityModel {
         name = [string]$Site.Name
         id = [long]$Site.Id
         state = Get-MpwFtpSiteRuntimeState -Site $Site
+        serverAutoStart = Get-MpwFtpSiteAutoStart -Site $Site
         physicalPath = if ($null -ne $rootVirtualDirectory) { [Environment]::ExpandEnvironmentVariables([string]$rootVirtualDirectory.PhysicalPath) } else { $null }
         bindings = $bindings
         hasFtpBinding = @($bindings | Where-Object { $_.protocol -eq 'ftp' }).Count -gt 0
@@ -2113,64 +1520,7 @@ function Find-MpwPortSites {
     return @($matches)
 }
 
-function Set-MpwFtpBindings {
-    param(
-        [Parameter(Mandatory = $true)]$Site,
-        [Parameter(Mandatory = $true)][string]$Binding
-    )
 
-    $existing = @($Site.Bindings | Where-Object { $_.Protocol -eq 'ftp' })
-    foreach ($item in $existing) {
-        [void]$Site.Bindings.Remove($item)
-    }
-    [void]$Site.Bindings.Add($Binding, 'ftp')
-}
-
-function Set-MpwFtpSiteConfiguration {
-    param(
-        [Parameter(Mandatory = $true)]$Manager,
-        [Parameter(Mandatory = $true)]$Site,
-        [Parameter(Mandatory = $true)][string]$PhysicalPath,
-        [Parameter(Mandatory = $true)][string]$Username,
-        [Parameter(Mandatory = $true)][string]$Binding
-    )
-
-    $rootApplication = $Site.Applications['/']
-    if ($null -eq $rootApplication) {
-        Throw-MpwFailure -Code 'IIS_CONFIG_FAILED' -Message 'The IIS FTP site has no root application.'
-    }
-    $rootVirtualDirectory = $rootApplication.VirtualDirectories['/']
-    if ($null -eq $rootVirtualDirectory) {
-        Throw-MpwFailure -Code 'IIS_CONFIG_FAILED' -Message 'The IIS FTP site has no root virtual directory.'
-    }
-
-    Set-MpwFtpBindings -Site $Site -Binding $Binding
-    $rootVirtualDirectory.PhysicalPath = $PhysicalPath
-    $ftpServer = Get-MpwFtpSiteElement -Site $Site
-    $security = $ftpServer.GetChildElement('security')
-    $authentication = $security.GetChildElement('authentication')
-    $authentication.GetChildElement('anonymousAuthentication')['enabled'] = $false
-    $authentication.GetChildElement('basicAuthentication')['enabled'] = $true
-    $ssl = $security.GetChildElement('ssl')
-    $ssl['controlChannelPolicy'] = 'SslAllow'
-    $ssl['dataChannelPolicy'] = 'SslAllow'
-    $authorization = Get-MpwFtpAuthorizationSection -Manager $Manager -SiteName ([string]$Site.Name)
-    $authorizationCollection = $authorization.GetCollection()
-    # Never clear unrelated authorization rules on an explicitly adopted
-    # site. Only replace rules for the managed username; rollback still keeps
-    # an exact snapshot of the full collection.
-    foreach ($existingRule in @($authorizationCollection | Where-Object { [string]$_['users'] -eq $Username })) {
-        [void]$authorizationCollection.Remove($existingRule)
-    }
-    $rule = $authorizationCollection.CreateElement('add')
-    $rule['accessType'] = 'Allow'
-    $rule['users'] = $Username
-    $rule['roles'] = ''
-    $rule['permissions'] = 'Read, Write'
-    [void]$authorizationCollection.Add($rule)
-    $ftpServer.GetChildElement('firewallSupport')['externalIp4Address'] = ''
-    $ftpServer['serverAutoStart'] = $true
-}
 
 function Get-MpwSiteSnapshot {
     param(
@@ -2188,7 +1538,8 @@ function Test-MpwSiteManagedByAccount {
         [Parameter(Mandatory = $true)][long]$ManagedSiteId
     )
 
-    if ($ManagedSiteId -le 0 -or [long]$Site.Id -ne $ManagedSiteId) { return $false }
+    if ($ManagedSiteId -gt 0 -and [long]$Site.Id -ne $ManagedSiteId) { return $false }
+    if ($ManagedSiteId -le 0 -and [string]$Site.Name -ne $SiteName) { return $false }
     # Site ID is the persisted identity. A user may rename a site in IIS, so
     # name drift alone must be repairable instead of turning the managed site
     # into an unrelated/adoptable resource.
@@ -2198,41 +1549,6 @@ function Test-MpwSiteManagedByAccount {
     return $true
 }
 
-function Restore-MpwSiteSnapshot {
-    param(
-        [Parameter(Mandatory = $true)]$Manager,
-        [Parameter(Mandatory = $true)]$Site,
-        [Parameter(Mandatory = $true)]$Snapshot
-    )
-
-    $allFtpBindings = @($Site.Bindings | Where-Object { $_.Protocol -eq 'ftp' })
-    foreach ($binding in $allFtpBindings) { [void]$Site.Bindings.Remove($binding) }
-    foreach ($binding in @($Snapshot.bindings | Where-Object { $_.protocol -eq 'ftp' })) {
-        [void]$Site.Bindings.Add([string]$binding.bindingInformation, 'ftp')
-    }
-    $Site.Applications['/'].VirtualDirectories['/'].PhysicalPath = [string]$Snapshot.physicalPath
-    $ftpServer = Get-MpwFtpSiteElement -Site $Site
-    $security = $ftpServer.GetChildElement('security')
-    $authentication = $security.GetChildElement('authentication')
-    $authentication.GetChildElement('anonymousAuthentication')['enabled'] = [bool]$Snapshot.authentication.anonymousEnabled
-    $authentication.GetChildElement('basicAuthentication')['enabled'] = [bool]$Snapshot.authentication.basicEnabled
-    $ssl = $security.GetChildElement('ssl')
-    $ssl['controlChannelPolicy'] = [string]$Snapshot.ssl.controlChannelPolicy
-    $ssl['dataChannelPolicy'] = [string]$Snapshot.ssl.dataChannelPolicy
-    $authorization = Get-MpwFtpAuthorizationSection -Manager $Manager -SiteName ([string]$Site.Name)
-    $authorizationCollection = $authorization.GetCollection()
-    $authorizationCollection.Clear()
-    foreach ($oldRule in @($Snapshot.authorization)) {
-        $rule = $authorizationCollection.CreateElement('add')
-        $rule['accessType'] = [string]$oldRule.accessType
-        $rule['users'] = [string]$oldRule.users
-        $rule['roles'] = [string]$oldRule.roles
-        $rule['permissions'] = [string]$oldRule.permissions
-        [void]$authorizationCollection.Add($rule)
-    }
-    $ftpServer.GetChildElement('firewallSupport')['externalIp4Address'] = [string]$Snapshot.externalIp4Address
-    $ftpServer['serverAutoStart'] = [bool]$Snapshot.serverAutoStart
-}
 
 function Get-MpwGlobalPassivePorts {
     param([Parameter(Mandatory = $true)]$Manager)
@@ -2244,17 +1560,6 @@ function Get-MpwGlobalPassivePorts {
     }
 }
 
-function Set-MpwGlobalPassivePorts {
-    param(
-        [Parameter(Mandatory = $true)]$Manager,
-        [Parameter(Mandatory = $true)][int]$Start,
-        [Parameter(Mandatory = $true)][int]$End
-    )
-
-    $section = $Manager.GetApplicationHostConfiguration().GetSection('system.ftpServer/firewallSupport')
-    $section['lowDataChannelPort'] = $Start
-    $section['highDataChannelPort'] = $End
-}
 
 function Get-MpwServiceStartType {
     param([Parameter(Mandatory = $true)][string]$Name)
@@ -2377,32 +1682,7 @@ function Get-MpwFtpServiceMutationSnapshot {
     return $root
 }
 
-function Add-MpwFlattenedServiceDependencySnapshots {
-    param(
-        [AllowNull()]$Dependencies,
-        [Parameter(Mandatory = $true)][AllowEmptyCollection()][Collections.Generic.HashSet[string]]$Visited,
-        [Parameter(Mandatory = $true)][AllowEmptyCollection()][Collections.Generic.List[object]]$Result
-    )
 
-    foreach ($dependency in @($Dependencies)) {
-        $name = [string](Get-MpwInputValue -InputObject $dependency -Name 'name' -DefaultValue '')
-        if ([string]::IsNullOrWhiteSpace($name) -or -not $Visited.Add($name)) { continue }
-        [void]$Result.Add($dependency)
-        Add-MpwFlattenedServiceDependencySnapshots `
-            -Dependencies (Get-MpwInputValue -InputObject $dependency -Name 'dependencies' -DefaultValue @()) `
-            -Visited $Visited `
-            -Result $Result
-    }
-}
-
-function Get-MpwFlattenedServiceDependencySnapshots {
-    param([AllowNull()]$Dependencies)
-
-    $visited = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-    $result = [Collections.Generic.List[object]]::new()
-    Add-MpwFlattenedServiceDependencySnapshots -Dependencies $Dependencies -Visited $visited -Result $result
-    return @($result)
-}
 
 function Get-MpwServiceFailureDiagnostics {
     param([Parameter(Mandatory = $true)][string[]]$ServiceNames)
@@ -2454,128 +1734,8 @@ function Wait-MpwServiceStableState {
     })
 }
 
-function Start-MpwServiceDependencyGraph {
-    param(
-        [Parameter(Mandatory = $true)][string]$Name,
-        [Parameter(Mandatory = $true)][AllowEmptyCollection()][Collections.Generic.HashSet[string]]$Visited,
-        [Parameter(Mandatory = $true)][AllowEmptyCollection()][Collections.Generic.List[object]]$Changes,
-        [bool]$RootService = $false
-    )
 
-    if (-not $Visited.Add($Name)) { return }
-    $service = Wait-MpwServiceStableState -Name $Name
-    if ($null -eq $service) {
-        $code = if ($RootService) { 'IIS_SERVICE_NOT_FOUND' } else { 'IIS_DEPENDENCY_SERVICE_START_FAILED' }
-        Throw-MpwFailure -Code $code -Message "The required Windows service $Name was not found." -Details ([ordered]@{ serviceName = $Name })
-    }
 
-    foreach ($dependency in @($service.ServicesDependedOn)) {
-        Start-MpwServiceDependencyGraph -Name ([string]$dependency.Name) -Visited $Visited -Changes $Changes -RootService $false
-    }
-
-    $before = Get-MpwServiceModel -Name $Name -IncludeDependencies $false
-    $desiredStartupType = if ($RootService) { 'Automatic' } else { 'Manual' }
-    if ([string]$before.startType -eq 'Disabled') {
-        $isWin32Service = [string]::IsNullOrWhiteSpace([string]$before.serviceType) -or [string]$before.serviceType -match '(?i)Win32'
-        if (-not $isWin32Service) {
-            Throw-MpwFailure -Code 'IIS_DEPENDENCY_SERVICE_START_FAILED' -Message "The required dependency $Name is disabled and cannot be safely reconfigured." -Details ([ordered]@{
-                serviceName = $Name
-                serviceType = [string]$before.serviceType
-            })
-        }
-        Set-Service -Name $Name -StartupType $desiredStartupType -ErrorAction Stop
-        [void]$Changes.Add([ordered]@{ name = $Name; previousStartType = [string]$before.startType; nextStartType = $desiredStartupType; started = $false })
-    }
-    elseif ($RootService -and [string]$before.startType -ne 'Auto') {
-        Set-Service -Name $Name -StartupType Automatic -ErrorAction Stop
-        [void]$Changes.Add([ordered]@{ name = $Name; previousStartType = [string]$before.startType; nextStartType = 'Automatic'; started = $false })
-    }
-
-    $service = Wait-MpwServiceStableState -Name $Name
-    if ($service.Status -ne [ServiceProcess.ServiceControllerStatus]::Running) {
-        try {
-            Start-Service -Name $Name -ErrorAction Stop
-            $service = Get-Service -Name $Name -ErrorAction Stop
-            $service.WaitForStatus(
-                [ServiceProcess.ServiceControllerStatus]::Running,
-                [TimeSpan]::FromMilliseconds($script:MpwServiceStartTimeoutMilliseconds)
-            )
-            $service.Refresh()
-            $change = $Changes | Where-Object { $_.name -eq $Name } | Select-Object -Last 1
-            if ($null -ne $change) { $change.started = $true }
-            else { [void]$Changes.Add([ordered]@{ name = $Name; previousStartType = [string]$before.startType; nextStartType = [string]$before.startType; started = $true }) }
-        }
-        catch {
-            $code = if ($RootService) { 'IIS_FTP_SERVICE_START_FAILED' } else { 'IIS_DEPENDENCY_SERVICE_START_FAILED' }
-            Throw-MpwFailure -Code $code -Message "The Windows service $Name could not be started." -Command "Start-Service $Name" -Details ([ordered]@{
-                serviceName = $Name
-                technicalMessage = [string]$_.Exception.Message
-                diagnostics = Get-MpwServiceFailureDiagnostics -ServiceNames @($Name, 'FTPSVC')
-            })
-        }
-    }
-}
-
-function Start-MpwFtpServiceDependencies {
-    $service = Wait-MpwServiceStableState -Name 'FTPSVC'
-    if ($null -eq $service) { return [ordered]@{ changes = @(); serviceRegistered = $false } }
-    $visited = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-    $changes = [Collections.Generic.List[object]]::new()
-    foreach ($dependency in @($service.ServicesDependedOn)) {
-        Start-MpwServiceDependencyGraph -Name ([string]$dependency.Name) -Visited $visited -Changes $changes -RootService $false
-    }
-    return [ordered]@{ changes = @($changes); serviceRegistered = $true }
-}
-
-function Start-MpwFtpService {
-    $before = Get-MpwFtpServiceStatus
-    if ($before.exists -eq $false) {
-        $restartPending = Get-MpwWindowsRestartPendingStatus
-        Throw-MpwFailure -Code 'IIS_COMPONENT_INSTALL_INCOMPLETE' -Message 'Microsoft FTP Service is enabled as a Windows feature but the FTPSVC service is not registered.' -Details ([ordered]@{
-            serviceName = 'FTPSVC'
-            restartPending = $restartPending
-            restartRecommended = [bool]$restartPending.systemPending
-            recommendation = if ($restartPending.systemPending) { 'Windows has a pending restart advisory and FTPSVC is still missing. Restart may be appropriate after confirming IIS feature installation completed.' } else { 'Repair the incomplete IIS FTP component installation before retrying.' }
-        })
-    }
-    $builtInServiceIdentity = [string]::IsNullOrWhiteSpace([string]$before.startName) -or
-        [string]$before.startName -match '^(?i:LocalSystem|NT AUTHORITY\\(?:LocalService|NetworkService|SYSTEM))$'
-    if (-not $builtInServiceIdentity) {
-        Throw-MpwFailure -Code 'IIS_SYSTEM_CONFIGURATION_DAMAGED' -Message 'Microsoft FTP Service uses a non-system logon identity and will not be reset automatically.' -Details ([ordered]@{
-            serviceName = 'FTPSVC'
-            startName = [string]$before.startName
-        })
-    }
-    if ($before.running -eq $true -and [string]$before.startType -in @('Auto', 'Automatic')) {
-        # A healthy FTPSVC already proves its dependency chain is running.
-        # Avoid issuing redundant service-control calls during idempotent repair.
-        return [ordered]@{ service = $before; changes = @() }
-    }
-    try {
-        $visited = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-        $changes = [Collections.Generic.List[object]]::new()
-        Start-MpwServiceDependencyGraph -Name 'FTPSVC' -Visited $visited -Changes $changes -RootService $true
-        $service = Get-Service -Name FTPSVC -ErrorAction Stop
-        if ($service.Status -ne [ServiceProcess.ServiceControllerStatus]::Running) {
-            Throw-MpwFailure -Code 'IIS_FTP_SERVICE_START_FAILED' -Message 'Microsoft FTP Service did not reach the Running state.'
-        }
-        return [ordered]@{ service = Get-MpwFtpServiceStatus; changes = @($changes) }
-    }
-    catch {
-        if ($_.Exception.Data.Contains('MpwCode')) { throw }
-        $diagnostic = Get-MpwExceptionDiagnosticDetails -ErrorRecord $_
-        $serviceAfter = Get-MpwFtpServiceStatus
-        Throw-MpwFailure -Code 'IIS_FTP_SERVICE_START_FAILED' -Message 'Microsoft FTP Service could not be started.' -Command 'Start-Service FTPSVC' -Details ([ordered]@{
-            serviceName = 'FTPSVC'
-            serviceState = [string]$serviceAfter.state
-            serviceStartType = [string]$serviceAfter.startType
-            technicalMessage = [string]$diagnostic.technicalMessage
-            innerTechnicalMessage = [string]$diagnostic.innerTechnicalMessage
-            sourceExceptionType = [string]$diagnostic.sourceExceptionType
-            hresult = [string]$diagnostic.hresult
-        })
-    }
-}
 
 function ConvertTo-MpwServiceStartupType {
     param([AllowNull()][string]$StartType)
@@ -2638,185 +1798,6 @@ function Get-MpwFtpServiceRollbackDecision {
     }
 }
 
-function Restore-MpwFtpServiceSnapshot {
-    param(
-        [AllowNull()]$Snapshot,
-        [AllowNull()]$Manager = $null,
-        [long]$TargetSiteId = 0,
-        [AllowNull()][string]$TargetSiteName = $null
-    )
-
-    $warnings = [Collections.Generic.List[object]]::new()
-    $otherStartedSites = @()
-    $siteInspectionSucceeded = $true
-    try {
-        if ($null -eq $Manager) {
-            $siteInspectionSucceeded = $false
-        }
-        else {
-            $otherFtpSites = @(Get-MpwFtpSites -Manager $Manager | Where-Object {
-                -not ($TargetSiteId -gt 0 -and [long]$_.id -eq $TargetSiteId) -and
-                -not ($TargetSiteId -le 0 -and -not [string]::IsNullOrWhiteSpace($TargetSiteName) -and [string]$_.name -eq $TargetSiteName)
-            })
-            $unknownStateSites = @($otherFtpSites | Where-Object { [string]$_.state -ne 'Started' -and [string]$_.state -ne 'Stopped' })
-            if ($unknownStateSites.Count -gt 0) {
-                $siteInspectionSucceeded = $false
-                [void]$warnings.Add([ordered]@{
-                    code = 'FTPSVC_ROLLBACK_SITE_STATE_UNKNOWN'
-                    message = 'At least one unrelated IIS FTP site has an unknown runtime state, so FTPSVC will not be stopped during rollback.'
-                    sites = @($unknownStateSites | ForEach-Object { [ordered]@{ id = [long]$_.id; name = [string]$_.name; state = [string]$_.state } })
-                })
-            }
-            $otherStartedSites = @($otherFtpSites | Where-Object { [string]$_.state -eq 'Started' } | ForEach-Object {
-                [ordered]@{ id = [long]$_.id; name = [string]$_.name; state = [string]$_.state }
-            })
-        }
-    }
-    catch {
-        $siteInspectionSucceeded = $false
-        [void]$warnings.Add([ordered]@{
-            code = 'FTPSVC_ROLLBACK_SITE_INSPECTION_FAILED'
-            message = 'Other IIS FTP sites could not be inspected, so FTPSVC will not be stopped during rollback.'
-            technicalMessage = [string]$_.Exception.Message
-        })
-    }
-
-    $currentStatus = Get-MpwFtpServiceStatus
-    $decision = Get-MpwFtpServiceRollbackDecision -Snapshot $Snapshot -CurrentStatus $currentStatus -OtherStartedSites $otherStartedSites -SiteInspectionSucceeded $siteInspectionSucceeded
-    $startupTypeRestored = $false
-    $runningStateRestored = $false
-
-    if ($decision.startupTypeRestorable) {
-        try {
-            Set-Service -Name FTPSVC -StartupType ([string]$decision.startupType) -ErrorAction Stop
-            $startupTypeRestored = $true
-        }
-        catch {
-            [void]$warnings.Add([ordered]@{
-                code = 'FTPSVC_STARTUP_TYPE_ROLLBACK_FAILED'
-                message = 'The original Microsoft FTP Service startup type could not be restored.'
-                technicalMessage = [string]$_.Exception.Message
-            })
-        }
-    }
-    else {
-        [void]$warnings.Add([ordered]@{
-            code = 'FTPSVC_STARTUP_TYPE_SNAPSHOT_UNAVAILABLE'
-            message = 'The original Microsoft FTP Service startup type was unavailable and could not be restored.'
-        })
-    }
-
-    switch ([string]$decision.runningStateAction) {
-        'not_required' { $runningStateRestored = $true }
-        'start' {
-            try {
-                Start-Service -Name FTPSVC -ErrorAction Stop
-                $controller = Get-Service -Name FTPSVC -ErrorAction Stop
-                if ($controller.Status -ne [ServiceProcess.ServiceControllerStatus]::Running) {
-                    $controller.WaitForStatus(
-                        [ServiceProcess.ServiceControllerStatus]::Running,
-                        [TimeSpan]::FromMilliseconds($script:MpwServiceStartTimeoutMilliseconds)
-                    )
-                    $controller.Refresh()
-                }
-                $runningStateRestored = $controller.Status -eq [ServiceProcess.ServiceControllerStatus]::Running
-                if (-not $runningStateRestored) { throw 'FTPSVC did not reach its original Running state.' }
-            }
-            catch {
-                [void]$warnings.Add([ordered]@{
-                    code = 'FTPSVC_RUNNING_STATE_ROLLBACK_FAILED'
-                    message = 'Microsoft FTP Service could not be returned to its original Running state.'
-                    technicalMessage = [string]$_.Exception.Message
-                })
-            }
-        }
-        'stop' {
-            try {
-                Stop-Service -Name FTPSVC -ErrorAction Stop
-                $controller = Get-Service -Name FTPSVC -ErrorAction Stop
-                if ($controller.Status -ne [ServiceProcess.ServiceControllerStatus]::Stopped) {
-                    $controller.WaitForStatus(
-                        [ServiceProcess.ServiceControllerStatus]::Stopped,
-                        [TimeSpan]::FromMilliseconds($script:MpwServiceStartTimeoutMilliseconds)
-                    )
-                    $controller.Refresh()
-                }
-                $runningStateRestored = $controller.Status -eq [ServiceProcess.ServiceControllerStatus]::Stopped
-                if (-not $runningStateRestored) { throw 'FTPSVC did not reach its original Stopped state.' }
-            }
-            catch {
-                [void]$warnings.Add([ordered]@{
-                    code = 'FTPSVC_RUNNING_STATE_ROLLBACK_FAILED'
-                    message = 'Microsoft FTP Service could not be returned to its original Stopped state.'
-                    technicalMessage = [string]$_.Exception.Message
-                })
-            }
-        }
-        default {
-            [void]$warnings.Add([ordered]@{
-                code = 'FTPSVC_RUNNING_STATE_ROLLBACK_SKIPPED'
-                message = if ($decision.runningStateReason -eq 'OTHER_FTP_SITES_RUNNING') { 'FTPSVC remains running because another IIS FTP site is currently started.' } else { 'FTPSVC running-state rollback was skipped because it could not be proven safe.' }
-                reason = [string]$decision.runningStateReason
-                otherStartedSites = @($decision.otherStartedSites)
-            })
-        }
-    }
-
-    $dependencyRollback = [Collections.Generic.List[object]]::new()
-    $dependencySnapshots = Get-MpwFlattenedServiceDependencySnapshots -Dependencies (
-        Get-MpwInputValue -InputObject $Snapshot -Name 'dependencies' -DefaultValue @()
-    )
-    foreach ($dependencySnapshot in @($dependencySnapshots)) {
-        $dependencyName = [string](Get-MpwInputValue -InputObject $dependencySnapshot -Name 'name' -DefaultValue '')
-        if ([string]::IsNullOrWhiteSpace($dependencyName)) { continue }
-        $dependencyCurrent = Get-MpwServiceModel -Name $dependencyName -IncludeDependencies $false
-        if ($dependencyCurrent.exists -ne $true) {
-            [void]$warnings.Add([ordered]@{ code = 'IIS_DEPENDENCY_ROLLBACK_FAILED'; message = "Dependency $dependencyName no longer exists and could not be restored." })
-            continue
-        }
-        $dependencyStartType = ConvertTo-MpwServiceStartupType -StartType ([string](Get-MpwInputValue -InputObject $dependencySnapshot -Name 'startType' -DefaultValue ''))
-        $startTypeRestoredForDependency = $null -eq $dependencyStartType
-        if ($null -ne $dependencyStartType -and [string]$dependencyCurrent.startType -ne [string](Get-MpwInputValue -InputObject $dependencySnapshot -Name 'startType' -DefaultValue '')) {
-            try {
-                Set-Service -Name $dependencyName -StartupType $dependencyStartType -ErrorAction Stop
-                $startTypeRestoredForDependency = $true
-            }
-            catch {
-                [void]$warnings.Add([ordered]@{ code = 'IIS_DEPENDENCY_STARTUP_TYPE_ROLLBACK_FAILED'; message = "Dependency $dependencyName startup type could not be restored."; technicalMessage = [string]$_.Exception.Message })
-            }
-        }
-        $originalRunning = Get-MpwInputValue -InputObject $dependencySnapshot -Name 'running' -DefaultValue $null
-        $runningStateAction = 'not_required'
-        if ($originalRunning -eq $true -and $dependencyCurrent.running -eq $false) {
-            $runningStateAction = 'start'
-            try { Start-Service -Name $dependencyName -ErrorAction Stop }
-            catch { [void]$warnings.Add([ordered]@{ code = 'IIS_DEPENDENCY_RUNNING_STATE_ROLLBACK_FAILED'; message = "Dependency $dependencyName could not be restarted."; technicalMessage = [string]$_.Exception.Message }) }
-        }
-        elseif ($originalRunning -eq $false -and $dependencyCurrent.running -eq $true) {
-            # Dependency services can be shared by unrelated IIS workloads.
-            # Never stop them merely to make rollback look exact.
-            $runningStateAction = 'leave_running_shared_service'
-            [void]$warnings.Add([ordered]@{ code = 'IIS_DEPENDENCY_RUNNING_STATE_ROLLBACK_SKIPPED'; message = "Dependency $dependencyName remains running because shared-service usage cannot be proven safe to stop." })
-        }
-        [void]$dependencyRollback.Add([ordered]@{
-            name = $dependencyName
-            startupTypeRestored = $startTypeRestoredForDependency
-            runningStateAction = $runningStateAction
-        })
-    }
-
-    return [ordered]@{
-        attempted = $true
-        startupTypeRestored = $startupTypeRestored
-        runningStateRestored = $runningStateRestored
-        runningStateAction = [string]$decision.runningStateAction
-        runningStateReason = [string]$decision.runningStateReason
-        otherStartedSites = @($decision.otherStartedSites)
-        dependencies = @($dependencyRollback)
-        warnings = @($warnings)
-        succeeded = $warnings.Count -eq 0
-    }
-}
 
 function Get-MpwExcludedTcpPortRanges {
     $ranges = @()
@@ -3124,232 +2105,12 @@ function Get-MpwFirewallRuleSnapshot {
     }
 }
 
-function Test-MpwFirewallValue {
-    param(
-        [AllowNull()]$Actual,
-        [Parameter(Mandatory = $true)][string]$Expected
-    )
-    $values = @($Actual | ForEach-Object { [string]$_ })
-    return $values.Count -eq 1 -and $values[0] -ieq $Expected
-}
 
-function Test-MpwFirewallRuleMatchesTarget {
-    param(
-        [Parameter(Mandatory = $true)]$Snapshot,
-        [Parameter(Mandatory = $true)][string]$DisplayName,
-        [Parameter(Mandatory = $true)][string]$LocalPort
-    )
-    return [bool](
-        [string]$Snapshot.displayName -eq $DisplayName -and
-        [bool]$Snapshot.enabled -and
-        [string]$Snapshot.direction -eq 'Inbound' -and
-        [string]$Snapshot.action -eq 'Allow' -and
-        [string]$Snapshot.profile -eq 'Any' -and
-        (Test-MpwFirewallValue -Actual $Snapshot.protocol -Expected 'TCP') -and
-        (Test-MpwFirewallValue -Actual $Snapshot.localPort -Expected $LocalPort) -and
-        (Test-MpwFirewallValue -Actual $Snapshot.remotePort -Expected 'Any') -and
-        (Test-MpwFirewallValue -Actual $Snapshot.localAddress -Expected 'Any') -and
-        (Test-MpwFirewallValue -Actual $Snapshot.remoteAddress -Expected 'LocalSubnet')
-    )
-}
 
-function New-MpwFirewallRuleChangeModel {
-    param(
-        [Parameter(Mandatory = $true)][ValidateSet('control', 'passive')][string]$Kind,
-        [Parameter(Mandatory = $true)]$Snapshot,
-        [Parameter(Mandatory = $true)][string]$DisplayName,
-        [Parameter(Mandatory = $true)][string]$LocalPort
-    )
-    return [ordered]@{
-        kind = $Kind
-        internalName = [string]$Snapshot.internalName
-        policyStoreSourceType = [string]$Snapshot.policyStoreSourceType
-        current = [ordered]@{
-            displayName = [string]$Snapshot.displayName
-            enabled = [bool]$Snapshot.enabled
-            direction = [string]$Snapshot.direction
-            action = [string]$Snapshot.action
-            profile = [string]$Snapshot.profile
-            protocol = [string]$Snapshot.protocol
-            localPort = @($Snapshot.localPort) -join ','
-            localAddress = @($Snapshot.localAddress) -join ','
-            remoteAddress = @($Snapshot.remoteAddress) -join ','
-        }
-        target = [ordered]@{
-            displayName = $DisplayName
-            enabled = $true
-            direction = 'Inbound'
-            action = 'Allow'
-            profile = 'Any'
-            protocol = 'TCP'
-            localPort = $LocalPort
-            localAddress = 'Any'
-            remoteAddress = 'LocalSubnet'
-        }
-    }
-}
 
-function Assert-MpwFirewallRuleUpdatesAllowed {
-    param([Parameter(Mandatory = $true)]$Options)
 
-    $changes = [Collections.Generic.List[object]]::new()
-    foreach ($spec in @(
-        [ordered]@{ kind = 'control'; displayName = $Options.FirewallControlRuleName; localPort = [string]$Options.ControlPort },
-        [ordered]@{ kind = 'passive'; displayName = $Options.FirewallPassiveRuleName; localPort = "$($Options.PassivePortStart)-$($Options.PassivePortEnd)" }
-    )) {
-        $selection = Get-MpwFirewallRuleSelection -Kind $spec.kind -DisplayName $spec.displayName
-        if ($null -eq $selection.rule) { continue }
-        $snapshot = Get-MpwFirewallRuleSnapshot -Rule $selection.rule
-        if (Test-MpwFirewallRuleMatchesTarget -Snapshot $snapshot -DisplayName $spec.displayName -LocalPort $spec.localPort) { continue }
 
-        if ([string]$snapshot.policyStoreSourceType -ne 'Local') {
-            Throw-MpwFailure -Code 'FIREWALL_RULE_POLICY_BLOCKED' -Message 'An FTP firewall rule is controlled by Windows policy and cannot be changed by Media Photo Workbench.' -Details ([ordered]@{
-                source = 'policyFirewallRule'
-                kind = $spec.kind
-                internalName = [string]$snapshot.internalName
-                displayName = [string]$snapshot.displayName
-                policyStoreSourceType = [string]$snapshot.policyStoreSourceType
-                recommendation = 'Ask the Windows administrator to update the policy-owned rule or create a dedicated local rule.'
-            })
-        }
-        if (-not [bool]$selection.managed) {
-            [void]$changes.Add((New-MpwFirewallRuleChangeModel -Kind $spec.kind -Snapshot $snapshot -DisplayName $spec.displayName -LocalPort $spec.localPort))
-        }
-    }
 
-    if ($changes.Count -gt 0 -and -not [bool]$Options.AllowLegacyFirewallRuleUpdate) {
-        Throw-MpwFailure -Code 'FIREWALL_RULE_UPDATE_CONFIRMATION_REQUIRED' -Message 'Legacy local FTP firewall rules require explicit confirmation before they can be updated.' -Details ([ordered]@{
-            source = 'legacyFirewallRules'
-            riskLevel = 'high'
-            canConfirm = $true
-            changes = @($changes)
-            recommendation = 'Review the exact local firewall rule changes and confirm them in Media Photo Workbench.'
-        })
-    }
-}
-
-function Restore-MpwFirewallRuleSnapshot {
-    param([Parameter(Mandatory = $true)]$Snapshot)
-
-    $parameters = @{
-        Name = [string]$Snapshot.internalName
-        NewDisplayName = [string]$Snapshot.displayName
-        # Set-NetFirewallRule binds Enabled to the NetSecurity.Enabled enum.
-        # A Boolean from the JSON snapshot is not accepted on some Windows 11
-        # builds, while the enum names are stable across those builds.
-        Enabled = if ([bool]$Snapshot.enabled) { 'True' } else { 'False' }
-        Direction = [string]$Snapshot.direction
-        Action = [string]$Snapshot.action
-        Profile = [string]$Snapshot.profile
-        Protocol = [string]$Snapshot.protocol
-        LocalPort = @($Snapshot.localPort)
-        RemotePort = @($Snapshot.remotePort)
-        LocalAddress = @($Snapshot.localAddress)
-        RemoteAddress = @($Snapshot.remoteAddress)
-        ErrorAction = 'Stop'
-    }
-    [void](Set-NetFirewallRule @parameters)
-
-    $restoredRule = Get-NetFirewallRule -Name ([string]$Snapshot.internalName) -ErrorAction Stop
-    $restored = Get-MpwFirewallRuleSnapshot -Rule $restoredRule
-    $mismatches = [Collections.Generic.List[string]]::new()
-    foreach ($field in @('displayName', 'enabled', 'direction', 'action', 'profile', 'protocol', 'localPort', 'remotePort', 'localAddress', 'remoteAddress')) {
-        $expectedValues = @((Get-MpwInputValue -InputObject $Snapshot -Name $field -DefaultValue $null) | ForEach-Object { [string]$_ } | Sort-Object)
-        $actualValues = @((Get-MpwInputValue -InputObject $restored -Name $field -DefaultValue $null) | ForEach-Object { [string]$_ } | Sort-Object)
-        if ([string]::Join('|', $expectedValues) -ine [string]::Join('|', $actualValues)) {
-            [void]$mismatches.Add($field)
-        }
-    }
-    if ($mismatches.Count -gt 0) {
-        Throw-MpwFailure -Code 'FIREWALL_ROLLBACK_VERIFY_FAILED' -Message 'The Windows Firewall FTP rule snapshot was applied but did not pass rollback verification.' -Command 'Set-NetFirewallRule/Get-NetFirewallRule' -Details ([ordered]@{
-            internalName = [string]$Snapshot.internalName
-            failedFields = @($mismatches)
-            expected = $Snapshot
-            actual = $restored
-            technicalMessage = "Firewall rollback verification mismatched: $([string]::Join(', ', @($mismatches)))."
-        })
-    }
-    return [ordered]@{ succeeded = $true; internalName = [string]$Snapshot.internalName; verifiedFields = @('displayName', 'enabled', 'direction', 'action', 'profile', 'protocol', 'localPort', 'remotePort', 'localAddress', 'remoteAddress') }
-}
-
-function Ensure-MpwFirewallRule {
-    param(
-        [Parameter(Mandatory = $true)][ValidateSet('control', 'passive')][string]$Kind,
-        [Parameter(Mandatory = $true)][string]$DisplayName,
-        [Parameter(Mandatory = $true)][string]$LocalPort,
-        [bool]$AllowLegacyRuleUpdate = $false
-    )
-
-    $internalName = if ($Kind -eq 'control') { $script:MpwControlFirewallInternalName } else { $script:MpwPassiveFirewallInternalName }
-    $selection = Get-MpwFirewallRuleSelection -Kind $Kind -DisplayName $DisplayName
-    if ($null -eq $selection.rule) {
-        try {
-            [void](New-NetFirewallRule -Name $internalName -DisplayName $DisplayName -Direction Inbound -Action Allow -Enabled True -Profile Any -Protocol TCP -LocalPort $LocalPort -LocalAddress Any -RemoteAddress LocalSubnet -ErrorAction Stop)
-            return [ordered]@{ internalName = $internalName; created = $true; modified = $false }
-        }
-        catch {
-            Throw-MpwFailure -Code 'FIREWALL_CONFIG_FAILED' -Message 'The dedicated Windows Firewall FTP rule could not be created.' -Command 'New-NetFirewallRule' -Details ([ordered]@{
-                kind = $Kind
-                internalName = $internalName
-                localPort = $LocalPort
-                technicalMessage = [string]$_.Exception.Message
-            })
-        }
-    }
-
-    $ruleName = [string]$selection.rule.Name
-    $snapshot = Get-MpwFirewallRuleSnapshot -Rule $selection.rule
-    if (Test-MpwFirewallRuleMatchesTarget -Snapshot $snapshot -DisplayName $DisplayName -LocalPort $LocalPort) {
-        return [ordered]@{ internalName = $ruleName; created = $false; modified = $false; adoptedLegacy = -not [bool]$selection.managed }
-    }
-    if ([string]$snapshot.policyStoreSourceType -ne 'Local') {
-        Throw-MpwFailure -Code 'FIREWALL_RULE_POLICY_BLOCKED' -Message 'The FTP firewall rule is controlled by Windows policy and cannot be changed automatically.' -Details ([ordered]@{
-            source = 'policyFirewallRule'
-            kind = $Kind
-            internalName = $ruleName
-            displayName = [string]$snapshot.displayName
-            policyStoreSourceType = [string]$snapshot.policyStoreSourceType
-        })
-    }
-    if (-not [bool]$selection.managed -and -not $AllowLegacyRuleUpdate) {
-        Throw-MpwFailure -Code 'FIREWALL_RULE_UPDATE_CONFIRMATION_REQUIRED' -Message 'The legacy local FTP firewall rule requires explicit confirmation before it can be updated.' -Details ([ordered]@{
-            source = 'legacyFirewallRules'
-            riskLevel = 'high'
-            canConfirm = $true
-            changes = @((New-MpwFirewallRuleChangeModel -Kind $Kind -Snapshot $snapshot -DisplayName $DisplayName -LocalPort $LocalPort))
-        })
-    }
-
-    try {
-        [void](Set-NetFirewallRule -Name $ruleName -NewDisplayName $DisplayName -Enabled True -Direction Inbound -Action Allow -Profile Any -Protocol TCP -LocalPort $LocalPort -RemotePort Any -LocalAddress Any -RemoteAddress LocalSubnet -ErrorAction Stop)
-        return [ordered]@{ internalName = $ruleName; created = $false; modified = $true; adoptedLegacy = -not [bool]$selection.managed; previousSnapshot = $snapshot }
-    }
-    catch {
-        $mutationMessage = [string]$_.Exception.Message
-        $restoreMessage = ''
-        try { Restore-MpwFirewallRuleSnapshot -Snapshot $snapshot } catch { $restoreMessage = [string]$_.Exception.Message }
-        Throw-MpwFailure -Code 'FIREWALL_CONFIG_FAILED' -Message 'The Windows Firewall FTP rule could not be updated; the previous rule was restored when possible.' -Command 'Set-NetFirewallRule' -Details ([ordered]@{
-            kind = $Kind
-            internalName = $ruleName
-            localPort = $LocalPort
-            policyStoreSourceType = [string]$snapshot.policyStoreSourceType
-            technicalMessage = $mutationMessage
-            rollbackTechnicalMessage = $restoreMessage
-        })
-    }
-}
-
-function Restore-MpwFirewallRuleChange {
-    param([AllowNull()]$Result)
-    if ($null -eq $Result) { return }
-    if ([bool]$Result.created) {
-        Remove-NetFirewallRule -Name ([string]$Result.internalName) -ErrorAction Stop
-        return
-    }
-    if ([bool]$Result.modified -and $null -ne $Result.previousSnapshot) {
-        Restore-MpwFirewallRuleSnapshot -Snapshot $Result.previousSnapshot
-    }
-}
 
 function Get-MpwRequiredWindowsFeatureNames {
     return @('IIS-FTPServer', 'IIS-FTPSvc', 'IIS-FTPExtensibility', 'IIS-ManagementScriptingTools')
@@ -3371,7 +2132,7 @@ function Resolve-MpwWindowsRestartPendingStatus {
         # Generic Windows restart markers are advisory only. They are often
         # created by unrelated applications and must not block a healthy IIS
         # FTP runtime. Required IIS restarts are derived from feature Pending
-        # states or Enable-WindowsOptionalFeature.RestartNeeded instead.
+        # states or the feature enable command's explicit restart result instead.
         pending = $false
         iisRequired = $false
         reasons = @()
@@ -3475,85 +2236,6 @@ function Get-MpwWindowsFeaturesStatus {
     return @($features)
 }
 
-function Enable-MpwRequiredWindowsFeatures {
-    param(
-        [AllowNull()][object[]]$CurrentFeatures = $null
-    )
-
-    $names = @(Get-MpwRequiredWindowsFeatureNames)
-    $enabled = @()
-    $restartRequired = $false
-    $restartFeature = $null
-    $processed = @()
-    $knownFeatures = @{}
-    foreach ($knownFeature in @($CurrentFeatures)) {
-        $knownName = [string](Get-MpwInputValue -InputObject $knownFeature -Name 'featureName' -DefaultValue '')
-        if (-not [string]::IsNullOrWhiteSpace($knownName)) {
-            $knownFeatures[$knownName] = $knownFeature
-        }
-    }
-    foreach ($name in $names) {
-        $knownFeature = if ($knownFeatures.ContainsKey($name)) { $knownFeatures[$name] } else { $null }
-        $knownState = if ($null -ne $knownFeature) {
-            [string](Get-MpwInputValue -InputObject $knownFeature -Name 'state' -DefaultValue 'unknown')
-        }
-        else {
-            'unknown'
-        }
-        if ($knownState -eq 'Enabled') {
-            $processed += $name
-            continue
-        }
-        try {
-            $feature = Get-WindowsOptionalFeature -Online -FeatureName $name -ErrorAction Stop
-            $processed += $name
-            $state = [string]$feature.State
-            if ($state -match 'Pending$') {
-                $restartRequired = $true
-                if ($null -eq $restartFeature) { $restartFeature = $name }
-                continue
-            }
-            if ($state -ne 'Enabled') {
-                $result = Enable-WindowsOptionalFeature -Online -FeatureName $name -All -NoRestart -ErrorAction Stop
-                $enabled += $name
-                if ([bool]$result.RestartNeeded) {
-                    $restartRequired = $true
-                    if ($null -eq $restartFeature) { $restartFeature = $name }
-                }
-            }
-        }
-        catch {
-            $diagnostic = Get-MpwExceptionDiagnosticDetails -ErrorRecord $_
-            $featureUnavailable = [string]$diagnostic.hresult -eq '0x800F080C' -or [string]$diagnostic.technicalMessage -match '(?i)unknown feature|feature name.*not recognized|功能名称.*未知'
-            Throw-MpwFailure -Code $(if ($featureUnavailable) { 'IIS_FTP_FEATURE_UNAVAILABLE' } else { 'IIS_FTP_INSTALL_FAILED' }) -Message $(if ($featureUnavailable) { 'A required IIS FTP feature is not available on this Windows edition.' } else { 'A required Windows IIS FTP feature could not be enabled.' }) -Command "Enable-WindowsOptionalFeature $name" -Details ([ordered]@{
-                featureName = $name
-                technicalMessage = [string]$diagnostic.technicalMessage
-                hresult = [string]$diagnostic.hresult
-            })
-        }
-    }
-    $after = if ($enabled.Count -eq 0 -and $processed.Count -eq $names.Count -and $knownFeatures.Count -eq $names.Count) {
-        @($names | ForEach-Object { $knownFeatures[$_] })
-    }
-    else {
-        @(Get-MpwWindowsFeaturesStatus)
-    }
-    $pendingFeatures = @($after | Where-Object { [string]$_.state -match 'Pending$' } | ForEach-Object { [string]$_.featureName })
-    if ($pendingFeatures.Count -gt 0) {
-        $restartRequired = $true
-        if ($null -eq $restartFeature) { $restartFeature = [string]$pendingFeatures[0] }
-    }
-    $restartPendingStatus = Get-MpwWindowsRestartPendingStatus
-    return [ordered]@{
-        enabledFeatures = @($enabled)
-        processedFeatures = @($processed)
-        remainingFeatures = @($after | Where-Object { [string]$_.state -ne 'Enabled' } | ForEach-Object { [string]$_.featureName })
-        restartRequired = [bool]$restartRequired
-        restartFeature = $restartFeature
-        featureStates = $after
-        restartPending = $restartPendingStatus
-    }
-}
 
 function Resolve-MpwIisInitializationState {
     param(
@@ -3612,45 +2294,6 @@ function Get-MpwIisInitializationReadiness {
     }
 }
 
-function Wait-MpwIisInitializationReady {
-    param(
-        [int]$TimeoutMilliseconds = 30000,
-        [bool]$StartRequiredDependencies = $false
-    )
-
-    $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMilliseconds)
-    $last = $null
-    $dependencyInitialization = [ordered]@{ attempted = $false; changes = @() }
-    do {
-        $last = Get-MpwIisInitializationReadiness
-        if ([string]$last.state -in @('ready', 'service_disabled', 'service_stopped', 'service_pending')) {
-            $last['initializationDependencies'] = $dependencyInitialization
-            return $last
-        }
-        if ([string]$last.state -eq 'restart_pending') {
-            $last['initializationDependencies'] = $dependencyInitialization
-            return $last
-        }
-        if ([string]$last.state -eq 'blocked') {
-            Throw-MpwFailure -Code 'IIS_FTP_FEATURE_UNAVAILABLE' -Message 'One or more IIS FTP features are unavailable on this Windows edition.' -Details $last
-        }
-        if ($StartRequiredDependencies -and -not $dependencyInitialization.attempted -and [string]$last.state -eq 'config_not_ready' -and $last.service.exists -eq $true) {
-            $dependencyResult = Start-MpwFtpServiceDependencies
-            $dependencyInitialization = [ordered]@{ attempted = $true; changes = @($dependencyResult.changes) }
-        }
-        Start-Sleep -Milliseconds 500
-    } while ([DateTime]::UtcNow -lt $deadline)
-
-    $last['initializationDependencies'] = $dependencyInitialization
-    $restartAdvisory = [bool](Get-MpwInputValue -InputObject $last.restartPending -Name 'systemPending' -DefaultValue $false)
-    $last['restartRecommended'] = $restartAdvisory
-    $last['restartRecommendation'] = if ($restartAdvisory) { 'IIS components are still not ready after waiting and Windows also reports a general pending restart. A restart may now be appropriate.' } else { '' }
-    $code = if (-not [bool]$last.managementApi.exists) { 'IIS_MANAGEMENT_API_NOT_READY' }
-        elseif (-not [bool]$last.configuration.exists) { 'IIS_CONFIGURATION_NOT_READY' }
-        elseif ($last.service.exists -eq $false) { 'IIS_COMPONENT_INSTALL_INCOMPLETE' }
-        else { 'IIS_CONFIGURATION_NOT_READY' }
-    Throw-MpwFailure -Code $code -Message 'IIS FTP Windows components did not become ready before the initialization timeout.' -Details $last
-}
 
 function Get-MpwNetworkAddressStatus {
     $addresses = @()
@@ -4037,7 +2680,7 @@ function Get-MpwElevatedSystemStatus {
         }
         $authorizationCorrect = [bool]$authorizationEvaluation.correct
         $siteId = if ($siteExists) { [long]$siteIdentity.id } else { $null }
-        $siteIdMatches = [bool]($siteExists -and $Options.ManagedSiteId -gt 0 -and $siteId -eq $Options.ManagedSiteId)
+        $siteIdMatches = [bool]($siteExists -and (($Options.ManagedSiteId -gt 0 -and $siteId -eq $Options.ManagedSiteId) -or ($Options.ManagedSiteId -eq 0 -and [string]$siteIdentity.name -eq [string]$Options.SiteName)))
         $sameNameIdConflict = [bool]($siteExists -and -not $siteIdMatches)
         # Ownership and configuration health are intentionally independent.
         # A broken authorization rule on the persisted Site ID is repairable;
@@ -4078,14 +2721,14 @@ function Get-MpwElevatedSystemStatus {
         foreach ($otherSite in $otherSites) {
             $otherBinding = $otherSite.bindings | Where-Object { $_.protocol -eq 'ftp' -and $_.port -eq $Options.ControlPort } | Select-Object -First 1
             $verifiedTestSite = [string]$otherSite.name -eq 'MPW-IIS-FTP-Test'
-            [void]$conflictItems.Add([ordered]@{ type = 'site'; code = 'IIS_SITE_PORT_CONFLICT'; message = 'Another IIS FTP site uses the configured control port. Choose another port or explicitly adopt the exact Site ID.'; siteName = [string]$otherSite.name; physicalPath = [string]$otherSite.physicalPath; binding = if ($null -ne $otherBinding) { [string]$otherBinding.bindingInformation } else { '' }; port = $Options.ControlPort; status = [string]$otherSite.state; adoptable = $true; verifiedWithNikon = $verifiedTestSite; canChangePort = $true; availablePorts = @($port.availablePorts); recommendation = 'Choose an available port, or explicitly confirm this exact Site ID for adoption.' })
+            [void]$conflictItems.Add([ordered]@{ type = 'site'; code = 'IIS_SITE_PORT_CONFLICT'; message = 'Another IIS FTP site uses the configured control port. Correct the binding manually without modifying the unrelated site automatically.'; siteName = [string]$otherSite.name; physicalPath = [string]$otherSite.physicalPath; binding = if ($null -ne $otherBinding) { [string]$otherBinding.bindingInformation } else { '' }; port = $Options.ControlPort; status = [string]$otherSite.state; adoptable = $false; verifiedWithNikon = $verifiedTestSite; canChangePort = $true; availablePorts = @($port.availablePorts); recommendation = 'Use the built-in guide to choose an available control port and update the IIS binding manually.' })
         }
         if ($port.reserved) { [void]$conflictItems.Add([ordered]@{ type = 'port'; code = 'FTP_CONTROL_PORT_RESERVED'; message = 'The configured control port is reserved by Windows.'; port = $Options.ControlPort; source = 'windowsReservedPort'; adoptable = $false; canChangePort = $true; availablePorts = @($port.availablePorts); recommendation = 'Choose one of the available control ports.' }) }
         if ($port.conflict) { [void]$conflictItems.Add([ordered]@{ type = 'port'; code = 'PORT_USED_BY_OTHER_PROCESS'; message = 'The configured control port is owned by another process.'; port = $Options.ControlPort; pid = $port.pid; processName = [string]$port.processName; source = 'process'; adoptable = $false; canChangePort = $true; availablePorts = @($port.availablePorts); recommendation = 'Do not stop the other process automatically. Choose another available control port.' }) }
         if ($account.conflict) { [void]$conflictItems.Add([ordered]@{ type = 'user'; code = 'FTP_ACCOUNT_CONFLICT'; message = 'The configured username is not a Media Photo Workbench managed account.'; adoptable = $false }) }
         $warnings = [Collections.Generic.List[string]]::new()
         if ($sameNameOwnershipConflict) {
-            [void]$warnings.Add((if ($sameNameIdConflict) { 'The configured IIS site identity does not match managedSiteId and requires explicit adoption.' } elseif (-not $siteIsFtp) { 'The configured IIS site has no FTP binding and requires explicit adoption.' } else { 'The configured IIS site account marker is not managed and requires explicit adoption.' }))
+            [void]$warnings.Add((if ($sameNameIdConflict) { 'The configured IIS site identity does not match the registered Site ID; verify it manually.' } elseif (-not $siteIsFtp) { 'The configured IIS site has no FTP binding; correct it manually.' } else { 'The configured IIS site account marker is not managed; verify it manually.' }))
         }
         if ($account.conflict -eq $true) { [void]$warnings.Add('The configured username is not marked as a Media Photo Workbench managed account.') }
         if ($acl.broadInheritedAccess -eq $true) { [void]$warnings.Add('The FTP root inherits write-capable access for broad Windows principals.') }

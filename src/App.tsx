@@ -16,6 +16,7 @@ import { OverviewPage } from "./pages/host/Overview";
 import { PhotoWallPage } from "./pages/host/PhotoWall";
 import { RetouchPage } from "./pages/host/Retouch";
 import { SettingsPage } from "./pages/host/Settings";
+import { CameraFtpGuidePage } from "./pages/host/CameraFtpGuide";
 
 export default function App() {
   const isMobileWeb = useMobileWebLayout();
@@ -54,6 +55,7 @@ export default function App() {
         <Route path="retouch" element={<RetouchPage />} />
         <Route path="done" element={<RetouchPage />} />
         <Route path="settings" element={<SettingsPage />} />
+        <Route path="help/camera-ftp" element={<CameraFtpGuidePage />} />
       </Route>
       <Route path="/client" element={<ClientConnectPage />} />
       <Route path="/client/photos" element={<ClientLayout />}>
