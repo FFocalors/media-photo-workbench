@@ -32,11 +32,27 @@
 - **1.2.1**：IIS/FTP 初始化、运行态检测、停止控制与界面反馈修复后的内部测试包
 - **1.2.2**：IIS/FTP 提权长任务、真实阶段进度、等待时间与重启恢复修复
 - **2.1.0**：窗口外壳、已连接客户端、移动端轻量筛片与 IIS/FTP 稳定性整合
+- **2.1.1**：相机 FTP 移除 IIS 自动配置，改为手工配置加内置指导
 - **1.2.0 之后**：压力测试、多设备接入测试与后续功能规划
 
 ---
 
 ## [未发布] (Unreleased)
+
+### v2.1.1 - 相机 FTP 转为手工配置
+
+相机 FTP 不再由工作台自动启用 Windows 功能、创建本地账户、写 ACL 和防火墙规则，改为用户在 IIS 中按内置指导手工完成一次配置；工作台只负责只读检测、站点启停、切换接收活动和导入相机图片。
+
+- 后端退役 `setup`、`repair`、`adopt-site`、`discover-sites`、`credentials`、`provisioning-plan` 和 `pending-provisioning` 接口，统一返回 `410 IIS_AUTOMATION_REMOVED`，并携带 `guidePath` 与 `guideSection` 指向应用内指导的对应分节。
+- 新增 `cameraFtpManualStatus` 模块，集中判定手工配置阻塞项并映射到指导分节，导出 `canRegisterManualCameraFtpSite` 与 `canSwitchCameraFtpEventFromStatus`。
+- 新增 `CameraFtpGuide` 页面（`/host/help/camera-ftp`），按顺序覆盖配置前准备、启用 IIS FTP 组件、检查 Microsoft FTP Service、创建相机 FTP 账户、创建工作台 FTP 站点、绑定控制端口、身份验证与授权、配置可继承的目录权限、被动端口、Windows 防火墙、验证配置和常见问题共 12 节；PowerShell 示例降级为折叠项并区分只读与管理员操作。
+- 删除 `cameraFtpProvisioner`、`CameraFtpProvisioningFeedback`、`CameraFtpDiagnosticErrorCard`、`cameraFtpErrorPresentation` 和 `cameraFtpUiState`。
+- PowerShell 脚本收敛为 `common` / `status` / `control` 三个：`status` 在非管理员下跳过 ServerManager 检测，避免普通轮询长时间阻塞，管理员检测增加分阶段进度回报；`control` 移除 Windows 服务启停、账户密码与 ACL 写入，保留站点启停、运行时重启和 `set-path`，新增 `restore-path` 回滚动作，并在启动前校验活动目录、站点绑定、身份验证与 FTPSVC 状态。
+- 活动切换不再代为修改目标目录 ACL，只校验目标目录是否已继承该账户的 Modify 权限；缺失时返回 `FTP_DIRECTORY_PERMISSION_REQUIRED` 并指向指导的目录权限一节。
+- 相机 FTP 面板与图片导入页改为手工配置边界，错误提示可直接跳转到指导的对应分节。
+- 更新 `package.json` 测试脚本与 `extraResources` 过滤，版本号升至 `2.1.1`；新增 `test-camera-ftp-manual` 覆盖手工模式契约与已退役路由。
+- `.gitignore` 忽略 `.idea/`。
+- README 的相机 FTP 章节与当前版本信息同步到 `v2.1.1`；`v2.1.1` 已打 Tag，并作为 Windows ZIP 便携包发布（`MediaPhotoWorkbench-v2.1.1-x64.zip`）。
 
 ### v2.1.0 - 窗口、客户端与现场传图整合
 

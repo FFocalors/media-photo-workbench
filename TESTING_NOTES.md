@@ -1,5 +1,15 @@
 # Media Photo Workbench / 融媒体图片工作台 - 测试记录
 
+> **v2.1.1 作废说明（2026-09-30）**
+>
+> 本文档按时间倒序记录，早期条目保留原样，但其中涉及 **工作台自动配置 IIS** 的部分自 `v2.1.1` 起不再有效，不能作为当前行为合同：包括 IIS FTP 自动 Provisioning / Plan / Apply、站点接管、`一键修复`、创建或修改 FTP 账户与密码、写接收目录 ACL、自动创建或校正防火墙规则、启用 Windows 功能与启停 FTPSVC 服务。相关条目集中在「v1.1.0-alpha.4 IIS FTP 统一 Provisioning 回归」「v1.1.0-alpha.4 IIS FTP 可配置端口、冲突与自动修复回归」「v1.1.0-alpha.4 非规范 ACL、验证回滚与弹窗适配回归」「v1.1.0-alpha.4 IIS 数值枚举验证与防火墙回滚回归」以及各「历史」小节。
+>
+> 仍然有效、可以继续作为合同的部分：只读状态检测（含 `netstat` 回退与 `ADMIN_REQUIRED`）、站点启停与运行时重启、控制端口冲突检测、活动切换原子性与回滚、watcher 稳定检测与原地导入、提权 IPC 与 TEMP ACL 保护、日志轮转、数据库迁移与活动永久删除的数据安全项、图片导入与衍生图。
+>
+> 现行相机 FTP 边界见 [AGENTS.md](AGENTS.md) §10.1、[README.md](README.md)「相机 FTP 传输（v2.1.1）」和 [API_SPEC.md](API_SPEC.md) 四点五；手工配置指导随应用提供在 `/host/help/camera-ftp`。
+>
+> 本文档尚未补充 `v2.1.1` 手工配置模式的回归记录（`pnpm test:camera-ftp-manual` 等）。
+
 ## v1.2.2 异机 TEMP ACL 兼容性回归
 
 - **复现语义**：提权操作目录尚未创建完成即返回 `TEMP_ACL_FAILED`，因此旧响应缺少真实 stage/子 operationId；路由默认 `rollbackStatus=unknown` 又使前端把它显示为“已尝试回滚”。

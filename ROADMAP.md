@@ -2,23 +2,24 @@
 
 ## 当前阶段状态
 
-当前进入 `v2.1.0` 集成发布阶段，主题为“窗口外壳、已连接客户端、移动端轻量筛片与现场传图稳定性整合”。`v1.2.2` 的 IIS/FTP 修复与 `integration/window-shell-connected-clients` 的界面和客户端能力均已合并到 `main`。
+当前进入 `v2.1.1` 阶段，主题为“相机 FTP 转为手工配置”。`v2.1.0` 已把窗口外壳、已连接客户端、移动端轻量筛片与 `v1.2.2` 的 IIS/FTP 稳定性修复合并到 `main`；`v2.1.1` 在此之上移除相机 FTP 的 IIS 自动配置。
 
-`v2.1.0` 使用 Git Tag 标记源码版本。Windows ZIP 便携包仍需从该 Tag 重新构建并完成异机验证；暂不生成 NSIS 安装包。ZIP 文件名随 `package.json` 版本生成：
+`v2.1.1` 已打 Git Tag，并作为 Windows ZIP 便携包发布。ZIP 文件名随 `package.json` 版本生成：
 
 ```text
-MediaPhotoWorkbench-v2.1.0-x64.zip
+MediaPhotoWorkbench-v2.1.1-x64.zip
 ```
 
-Git Tag 为 `v2.1.0`；GitHub Release 与 ZIP 附件在产物复测通过后单独创建。
+暂不生成 NSIS 安装包，也不提供 Web Installer。
 
 ### 功能冻结范围
 
-`v2.1.0` 纳入窗口外壳、已连接客户端、移动端轻量筛片、相机 FTP 稳定性、提权长任务恢复、数据安全与自动回归测试，仍不纳入以下大范围能力：
+`v2.1.1` 纳入相机 FTP 手工配置边界、应用内配置指导与手工配置阻塞项判定，仍不纳入以下大范围能力：
 
 - 公网远程 FTP、FTPS / SFTP。
 - 相机来源识别、现场接收看板和一键现场模式。
-- 相机品牌 SDK 或相机自动配置。
+- 相机品牌 SDK 或相机端自动配置。
+- 工作台自动启用 Windows 功能、创建账户、写 ACL 或写防火墙规则。
 - RAW / HEIC / 视频支持。
 - AI 自动选片。
 - 多 FTP 账户。
@@ -32,17 +33,18 @@ Git Tag 为 `v2.1.0`；GitHub Release 与 ZIP 附件在产物复测通过后单�
 当前相机 FTP 架构边界：
 
 - 只保留 Windows IIS FTP 单一 provider；旧 Node.js `ftp-srv` 内置 Server 已废弃，不保留 fallback 或双 provider。
+- 工作台不修改 Windows 功能、IIS 配置、服务启动类型、本地账户、ACL 或防火墙规则；只做只读检测、站点启停、运行时重启、切换接收活动和图片导入，提权仅用于这些站点级操作和管理员只读检测。
 - IIS 控制端口默认 `21`，允许在 `1-65535` 范围内配置且不得落入被动端口范围；被动端口默认 `50000-50100`，站点 binding 为 `*:{当前控制端口}:`，不把热点 IP 写死进 binding。
 - 配置使用独立的 `activeEventId` 表示唯一 FTP 接收活动；IIS 上传、原图最终存放和 watcher 目录统一为 `working/{event_slug}/原图/相机FTP/`，与前端当前查看活动相互独立。
 - 同时支持相机和主机连接同一 Wi-Fi，以及相机连接 Windows 移动热点两种局域网方式；热点常见地址为 `192.168.137.1`，但以实时检测结果为准。
-- Electron 普通启动不要求管理员权限；只有启用 Windows 功能、管理 IIS / 服务 / 防火墙 / 本地账户和 ACL 时才通过 UAC 提权。
-- FTP 密码不明文写入 `config.json`、SQLite、日志或 API 响应，页面也不回显或复制密码。
+- 相机 FTP 需要 Windows 11。IIS 配置由用户按应用内指导（`/host/help/camera-ftp`）手工完成一次，工作台按站点名、控制端口、binding、身份验证和账户标记校验配置。
+- FTP 密码由用户自行设置，不明文写入 `config.json`、SQLite、日志或 API 响应；页面不询问、不回显、不复制密码。
 - 继续复用 `camera_ftp` 文件稳定检测和图片导入管线，保留去重、缩略图 / 预览图、EXIF、SQLite、任务与 Socket.IO 行为。
 
 当前 GitHub Release：
 
 ```text
-https://github.com/FFocalors/media-photo-workbench/releases/tag/v1.0.0-rc.1
+https://github.com/FFocalors/media-photo-workbench/releases/tag/v2.1.1
 ```
 
 ## 已完成
@@ -267,6 +269,7 @@ https://github.com/FFocalors/media-photo-workbench/releases/tag/v1.0.0-rc.1
 - **阶段四：相机 FTP 前后端模块化重构**：保留 facade、路由和 API 兼容，每次只抽离一个职责并立即回归。
 - **阶段五：统一状态、颜色、提示和错误展示**：只有真实失败使用红色，集中维护状态和错误语义，保持小窗口确认弹窗可用。
 - **阶段六：重启恢复和数据安全（已完成）**：已补齐配置 schema/严格校验/原子写入、数据库迁移账本与 schema 漂移复核、高风险受控备份、回执生命周期、活动永久删除不可变 journal/隔离回滚/跨进程启动恢复、日志轮转、API/PowerShell 父子 operationId、白名单脱敏诊断和部分失败一致性。
+- **v2.1.1：相机 FTP 手工配置化（已完成）**：退役 IIS 自动配置相关接口与前端模块，改为用户在 IIS 中按应用内指导手工配置一次；工作台只保留只读检测、站点启停、运行时重启、切换接收活动和图片导入，活动切换不再写目标目录 ACL，只校验已继承权限。
 - **下一轮现场验证**：六阶段完成后再执行压力测试和多设备接入测试；本轮不执行，只形成可操作的人工验收清单。
 
 ### 后续任务系统增强
@@ -280,6 +283,7 @@ https://github.com/FFocalors/media-photo-workbench/releases/tag/v1.0.0-rc.1
 - 真正分布式同步。
 - ngrok 或远程隧道强绑定。
 - 复杂账号密码系统。
+- 恢复相机 FTP 的 IIS 自动配置、站点接管或代为修改 Windows 功能、账户、ACL 和防火墙。
 
 ## 开源前检查
 
