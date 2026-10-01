@@ -1,6 +1,8 @@
-# Media Photo Workbench / 融媒体图片工作台：开发要求
+# frameflow / 融媒体图片工作台：开发要求
 
 ## 0. 项目定位
+
+产品名自 2026-10-01 起统一为 **frameflow**，中文名「融媒体图片工作台」继续使用；仓库名、构建产物名、IIS 站点名和用户数据目录仍沿用 `media-photo-workbench` / `MediaPhotoWorkbench` 标识，重命名属于单独排期的兼容性改动，不要顺手改。
 
 本项目是面向校园融媒体中心、新闻中心、影像部门的 Windows 11 桌面端图片工作台。
 

@@ -1,12 +1,14 @@
-# Media Photo Workbench / 融媒体图片工作台
+# frameflow / 融媒体图片工作台
 
 ## 项目简介
 
-Media Photo Workbench / 融媒体图片工作台 是面向校园融媒体中心、新闻中心和影像部门的 Windows 桌面端图片工作台。
+frameflow（中文名：融媒体图片工作台）是面向校园融媒体中心、新闻中心和影像部门的 Windows 桌面端图片工作台。
 
 它用于活动现场图片导入、筛选、修图流转、客户端协作、导出发布和归档管理。系统以一台主机为中心，集中保存图片仓库和 SQLite 数据库，多台客户端设备可在同一局域网内上传图片、查看图片墙、打星、分类、修改状态、下载待修包并回传已修图。
 
 本项目不是云盘，也不是实时传图系统。当前重点是本地主机集中存储和局域网协作。
+
+产品名自 2026-10-01 起统一为 **frameflow**，中文名「融媒体图片工作台」继续使用。仓库名、构建产物名（`MediaPhotoWorkbench-v2.1.1-x64.zip`、`Media Photo Workbench.exe`）、IIS 站点名 `MediaPhotoWorkbenchFTP`、用户数据目录和便携包内部结构本轮不变，避免影响已发布版本与既有安装；改名需要单独排期并处理升级兼容。
 
 ## 当前版本
 
@@ -29,7 +31,7 @@ MediaPhotoWorkbench-v2.1.1-x64.zip
 
 ## 使用方式
 
-1. 下载发布页提供的 Windows ZIP 便携包。
+1. 下载发布页提供的 Windows ZIP 便携包。国内网络下载慢或中断时，改用 GitCode 发行版：<https://gitcode.com/FFocalors/media-photo-workbench/releases>。
 2. 将 ZIP 解压到非系统盘目录，例如 `D:\MediaPhotoWorkbench`。
 3. 双击根目录的 `Media Photo Workbench.exe`。其余运行文件统一位于 `runtime/`，请勿移动或删除该文件夹。
 4. 不要直接在压缩包内运行程序。

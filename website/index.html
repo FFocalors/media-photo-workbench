@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>融媒体图片工作台 — 局域网图片协作工作台</title>
-<meta name="description" content="面向校园媒体、活动摄影和小型融媒体团队的局域网图片协作工作台。从导入、筛选、修图流转，到发布导出与活动归档，一套流程完成。">
+<title>frameflow — 融媒体图片工作台</title>
+<meta name="description" content="frameflow（融媒体图片工作台）：面向校园媒体、活动摄影和小型融媒体团队的局域网图片协作工作台。从导入、筛选、修图流转，到发布导出与活动归档，一套流程完成。">
 <link rel="icon" type="image/png" href="assets/icon.png">
 <style>
 /* ============================================================
@@ -133,6 +133,7 @@ button {
 .brand {
   display: flex;
   align-items: center;
+  flex: none;
   gap: 11px;
   font-weight: 700;
   font-size: var(--step-3);
@@ -146,9 +147,29 @@ button {
   border-radius: 7px;
 }
 
+/* 品牌名 + 中文名锁排：主名用字重压住，中文名退到次要层级 */
+.brand-cn {
+  font-size: var(--step-1);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--ink-3);
+  padding-left: 11px;
+  border-left: 1px solid var(--rule);
+}
+
+.architecture-link {
+  flex: 0 0 auto;
+  padding: 5px 0 5px 18px;
+  border-left: 1px solid var(--rule);
+  color: var(--ink-2);
+  font-size: var(--step-2);
+  white-space: nowrap;
+}
+.architecture-link:hover { color: var(--mark); }
+
 .site-nav {
   display: flex;
-  gap: 26px;
+  gap: 22px;
   margin-left: auto;
   font-size: var(--step-2);
   color: var(--ink-2);
@@ -157,13 +178,82 @@ button {
 .site-nav a {
   padding: 6px 0;
   border-bottom: 1px solid transparent;
+  white-space: nowrap;
   transition: color 0.18s ease, border-color 0.18s ease;
 }
 .site-nav a:hover { color: var(--ink); border-bottom-color: var(--ink); }
 
+/* ---------- 语言切换：长得像导航项，不像控件 ---------- */
+
+/* 「下载」在顶栏由右侧深色按钮承担，只在折叠菜单里补回这一项 */
+.nav-download { display: none; }
+
+.lang { position: relative; }
+
+.lang-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 0;
+  border-bottom: 1px solid transparent;
+  color: var(--ink-2);
+  font-size: var(--step-2);
+  white-space: nowrap;
+  transition: color 0.18s ease, border-color 0.18s ease;
+}
+.lang-trigger:hover { color: var(--ink); border-bottom-color: var(--ink); }
+
+.lang-caret {
+  width: 6px;
+  height: 6px;
+  margin-top: -3px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+  transition: transform 0.18s ease, margin-top 0.18s ease;
+}
+.lang.is-open .lang-caret { transform: rotate(-135deg); margin-top: 2px; }
+
+.lang-menu {
+  position: absolute;
+  top: calc(100% + 15px);
+  /* 贴住触发项的右边：语言项是导航最后一项，居中的浮层会顶出右边界 */
+  right: 0;
+  z-index: 20;
+  min-width: 152px;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  box-shadow: 0 20px 44px rgba(22, 35, 44, 0.13);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.14s ease, visibility 0.14s ease;
+}
+.lang.is-open .lang-menu { opacity: 1; visibility: visible; }
+
+.lang-menu a {
+  display: block;
+  padding: 8px 13px;
+  border-bottom: 0;
+  border-radius: 5px;
+  color: var(--ink-2);
+  font-size: var(--step-2);
+  white-space: nowrap;
+}
+.lang-menu a:hover { background: var(--paper-2); color: var(--ink); border-bottom: 0; }
+/* 当前语言用选片红标记，和导轨上的“当前站点”是同一个语义 */
+.lang-menu a[aria-current="true"] { color: var(--mark); font-weight: 500; }
+
+/* 为中文行宽手工加的换行只对中文成立，英文与日文交给容器自然折行 */
+html.lang-flow [data-br="cjk"] { display: none; }
+
 .head-cta {
   display: inline-flex;
   align-items: center;
+  flex: none;
   height: 38px;
   padding: 0 18px;
   background: var(--ink);
@@ -171,6 +261,7 @@ button {
   border-radius: 7px;
   font-size: var(--step-2);
   font-weight: 500;
+  white-space: nowrap;
   transition: opacity 0.18s ease;
 }
 .head-cta:hover { opacity: 0.86; }
@@ -1004,6 +1095,8 @@ section { scroll-margin-top: 84px; }
   .shot:hover,
   .shot:hover img { transition: none; transform: none; box-shadow: inherit; }
   .flow-track::after { transition: none; }
+  .lang-menu,
+  .lang-caret { transition: none; }
   html { scroll-behavior: auto; }
 }
 
@@ -1012,10 +1105,15 @@ section { scroll-margin-top: 84px; }
 @media (max-width: 1180px) {
   :root { --step-6: 42px; --step-7: 56px; --gut: 26px; }
 
+  /* 中文副标先让位：顶栏这时还剩得下导航，但没剩得下两行品牌名 */
+  .brand-cn { display: none; }
+
   .hero-grid { grid-template-columns: 1fr; gap: 44px; }
   .hero-shot { margin-right: 0; }
   .hero-shot .shot { border-radius: 11px; border-right: 1px solid rgba(22, 35, 44, 0.1); }
-  .hero .tagline, .hero .sub { max-width: 40ch; }
+  /* 汉字约 1em 宽，这里仍按 em 定宽，否则一行只放得下一半字数 */
+  .hero .tagline { max-width: 17em; }
+  .hero .sub { max-width: 28em; }
 
   .pain-head,
   .flow-head,
@@ -1042,8 +1140,11 @@ section { scroll-margin-top: 84px; }
   .download { padding: 88px 0; }
 }
 
-@media (max-width: 820px) {
-  :root { --step-5: 28px; --step-6: 34px; --gut: 20px; }
+/* 顶栏折叠：加入语言项后，英文与日文的导航标签明显更长，
+   1180px 以下已经没有余量，所以顶栏比正文区块更早收成汉堡菜单 */
+@media (max-width: 1020px) {
+  .site-head .bar { gap: 14px; }
+  .architecture-link { padding-left: 12px; font-size: var(--step-1); }
 
   .site-nav,
   .head-cta { display: none; }
@@ -1066,15 +1167,44 @@ section { scroll-margin-top: 84px; }
     padding: 13px 0;
     border-bottom: 1px solid var(--rule);
     font-size: var(--step-3);
+    white-space: normal;
   }
-  .site-head.nav-open .head-cta {
-    display: inline-flex;
-    position: absolute;
-    right: 62px;
-    top: 15px;
-    height: 38px;
-    z-index: 2;
+  /* 折叠后菜单里补回「下载」；深色按钮不再浮动，避免压住品牌与架构入口 */
+  .site-head.nav-open .nav-download { display: block; }
+
+  /* 语言：窄屏里变成一个整行条目，展开就在原位，不再叠一层浮层 */
+  .lang { width: 100%; }
+  .site-head.nav-open .lang-trigger {
+    width: 100%;
+    justify-content: space-between;
+    padding: 13px 0;
+    border-bottom: 1px solid var(--rule);
+    font-size: var(--step-3);
   }
+  .site-head.nav-open .lang-menu {
+    position: static;
+    display: none;
+    min-width: 0;
+    margin: 0;
+    padding: 4px 0 6px 16px;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    transform: none;
+    opacity: 1;
+    visibility: visible;
+  }
+  .site-head.nav-open .lang.is-open .lang-menu { display: block; }
+  .site-head.nav-open .site-nav .lang-menu a {
+    padding: 10px 0;
+    border-bottom: 0;
+    font-size: var(--step-2);
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 820px) {
+  :root { --step-5: 28px; --step-6: 34px; --gut: 20px; }
 
   .pain-list,
   .feature-grid,
@@ -1125,14 +1255,28 @@ section { scroll-margin-top: 84px; }
   <div class="wrap bar">
     <a class="brand" href="#top">
       <img src="assets/icon.png" alt="">
-      <span>融媒体图片工作台</span>
+      <span>frameflow</span>
+      <span class="brand-cn">融媒体图片工作台</span>
     </a>
+    <a class="architecture-link" href="architecture.html">技术架构</a>
     <nav class="site-nav" id="siteNav">
       <a href="#flow">工作流</a>
       <a href="#features">功能</a>
       <a href="#ftp">相机 FTP</a>
       <a href="#collab">协作</a>
-      <a href="#download">下载</a>
+      <a class="nav-download" href="#download">下载</a>
+      <div class="lang" data-lang-switcher>
+        <button class="lang-trigger" type="button" data-lang-trigger aria-expanded="false">
+          <span data-lang-current>简体中文</span>
+          <span class="lang-caret" aria-hidden="true"></span>
+        </button>
+        <ul class="lang-menu" data-lang-menu>
+          <li><a href="?lang=zh-CN" data-lang-option="zh-CN" aria-current="true">简体中文</a></li>
+          <li><a href="?lang=zh-Hant" data-lang-option="zh-Hant">繁體中文</a></li>
+          <li><a href="?lang=en" data-lang-option="en">English</a></li>
+          <li><a href="?lang=ja" data-lang-option="ja">日本語</a></li>
+        </ul>
+      </div>
     </nav>
     <a class="head-cta" href="#download">Windows 下载</a>
     <button class="nav-toggle" id="navToggle" aria-label="展开菜单" aria-expanded="false">
@@ -1149,8 +1293,8 @@ section { scroll-margin-top: 84px; }
       <div class="hero-grid">
         <div>
           <h1 class="reveal">融媒体<br>图片工作台</h1>
-          <p class="tagline reveal reveal-2">面向校园融媒体和活动摄影团队。<br>当天拍的图，当天收拢、选完、发出去。</p>
-          <p class="sub reveal reveal-3">一台主机收拢所有相机和笔记本的图，<br>几台电脑同时选片、修图、出稿，<br>再也不用靠 U 盘和微信群对版本。</p>
+          <p class="tagline reveal reveal-2">面向校园融媒体和活动摄影团队。<br data-br="cjk">当天拍的图，当天收拢、选完、发出去。</p>
+          <p class="sub reveal reveal-3">一台主机收拢所有相机和笔记本的图，<br data-br="cjk">几台电脑同时选片、修图、出稿，<br data-br="cjk">再也不用靠 U 盘和微信群对版本。</p>
           <div class="hero-actions reveal reveal-3">
             <a class="btn btn-primary" href="#download">Windows 下载</a>
             <a class="btn btn-ghost" href="https://github.com/FFocalors/media-photo-workbench" target="_blank" rel="noopener">查看 GitHub</a>
@@ -1185,7 +1329,7 @@ section { scroll-margin-top: 84px; }
           <h2 class="section-title">活动结束后，<br>活儿才刚开始</h2>
         </div>
         <p class="section-lead">
-          一场运动会、一台晚会、一次比赛，拍完只是第一步。<br>真正费时间的，是把散落各处的照片理顺，<br>交到对的人手里，再变成能发的东西。
+          一场运动会、一台晚会、一次比赛，拍完只是第一步。<br data-br="cjk">真正费时间的，是把散落各处的照片理顺，<br data-br="cjk">交到对的人手里，再变成能发的东西。
         </p>
       </div>
 
@@ -1208,7 +1352,7 @@ section { scroll-margin-top: 84px; }
         </div>
       </div>
 
-      <p class="pain-close">融媒体图片工作台，<br>把散落一整天的活收成一条线。</p>
+      <p class="pain-close">融媒体图片工作台，<br data-br="cjk">把散落一整天的活收成一条线。</p>
     </div>
   </section>
 
@@ -1221,7 +1365,7 @@ section { scroll-margin-top: 84px; }
           <h2>从建活动到归档，<br>七步走完一场</h2>
         </div>
         <p>
-          从给活动起名，到把它归档，<br>照片一路往下走，中间不用换工具。
+          从给活动起名，到把它归档，<br data-br="cjk">照片一路往下走，中间不用换工具。
         </p>
       </div>
 
@@ -1355,7 +1499,7 @@ section { scroll-margin-top: 84px; }
           <h2 class="section-title">相机还在拍，<br>图片墙已经在出片</h2>
           <ul class="ftp-points">
             <li>带 FTP 的相机边拍边送，人还没收工，片子已经在墙上。</li>
-            <li>FTP 用 Windows 自带的功能，不用另装服务端。第一次照着应用里的指导配一遍，之后启停、换活动都在工作台里点。</li>
+            <li>FTP 用 Windows 自带的功能，不用另装服务端。第一次配置有应用内的完整指导，往后启停、换活动都在工作台里点两下。</li>
             <li>照片直接归到当前活动里，原图留在原地，不改名、不复制第二份。</li>
             <li>拍一张，墙上就多一张。拔卡、拷文件这些事都省了。</li>
           </ul>
@@ -1406,13 +1550,13 @@ section { scroll-margin-top: 84px; }
           <p class="section-label">局域网里的几个人</p>
           <h2 class="section-title">一台主机，几台电脑<br>同时开工，图只有一份</h2>
           <ul class="collab-list">
-            <li>图从哪儿导进来都行，最后只落在同一台主机上，<br>不会出现两套版本。</li>
+            <li>图从哪儿导进来都行，最后只落在同一台主机上，<br data-br="cjk">不会出现两套版本。</li>
             <li>笔记本扫码就能连上，平板打开网页也能看片。</li>
-            <li>选片、打星、改状态都在同一面墙上做，<br>谁改了什么当场看得见。</li>
+            <li>选片、打星、改状态都在同一面墙上做，<br data-br="cjk">谁改了什么当场看得见。</li>
             <li>不用挨台通知，其他设备自己就更新了。</li>
           </ul>
           <p class="collab-scene">
-            运动会当天、晚会散场、截稿前夜，都靠这一面墙同时开工：<br>有人选片，有人修图，收工时不用再对版本。
+            运动会当天、晚会散场、截稿前夜，都靠这一面墙同时开工：<br data-br="cjk">有人选片，有人修图，收工时不用再对版本。
           </p>
         </div>
 
@@ -1521,11 +1665,11 @@ section { scroll-margin-top: 84px; }
             <span>当前版本</span>
           </div>
           <div class="download-actions">
-            <a class="btn btn-mark" href="https://github.com/FFocalors/media-photo-workbench/releases/latest" target="_blank" rel="noopener">Windows ZIP 便携包</a>
+            <a class="btn btn-mark" href="https://gitcode.com/FFocalors/media-photo-workbench/releases" target="_blank" rel="noopener">Windows ZIP 便携包</a>
             <a class="btn btn-ghost" href="https://github.com/FFocalors/media-photo-workbench/releases" target="_blank" rel="noopener">GitHub Release</a>
           </div>
           <p class="download-note">
-            先把压缩包解开，再打开里面的程序。不往系统目录里写东西，删掉文件夹就等于卸载。
+            绿色免安装。不往系统目录里写东西，删掉文件夹就等于卸载干净。
           </p>
         </div>
 
@@ -1535,12 +1679,12 @@ section { scroll-margin-top: 84px; }
             <dd>Windows 10 / 11（64 位）都能跑；相机直传需要 Windows 11 上的 IIS FTP 组件，部分家庭版没有。</dd>
           </div>
           <div class="dl-row">
-            <dt>交付形式</dt>
-            <dd>绿色免安装，不写注册表。</dd>
-          </div>
-          <div class="dl-row">
             <dt>源码</dt>
             <dd><a href="https://github.com/FFocalors/media-photo-workbench" target="_blank" rel="noopener">源码全在 GitHub 公开，可自行编译和二次开发</a></dd>
+          </div>
+          <div class="dl-row">
+            <dt>国内镜像</dt>
+            <dd><a href="https://gitcode.com/FFocalors/media-photo-workbench" target="_blank" rel="noopener">GitCode 上有同源仓库与发行版，国内网络更稳</a></dd>
           </div>
           <div class="dl-row">
             <dt>更新日志</dt>
@@ -1562,8 +1706,9 @@ section { scroll-margin-top: 84px; }
 
 <footer class="site-foot">
   <div class="wrap row">
-    <span>融媒体图片工作台　Media Photo Workbench</span>
+    <span>frameflow　融媒体图片工作台</span>
     <span class="foot-links">
+      <a href="architecture.html">产品技术架构</a>
       <a href="https://github.com/FFocalors/media-photo-workbench" target="_blank" rel="noopener">GitHub</a>
       <a href="https://github.com/FFocalors/media-photo-workbench/blob/main/AGENTS.md" target="_blank" rel="noopener">开发文档</a>
       <span>MIT License</span>
@@ -1576,15 +1721,22 @@ section { scroll-margin-top: 84px; }
   var head = document.getElementById("siteHead");
   var toggle = document.getElementById("navToggle");
   if (toggle) {
+    var t = function (zh) { return window.frameflowI18n ? window.frameflowI18n.t(zh) : zh; };
+    var syncToggle = function () {
+      var open = head.classList.contains("nav-open");
+      toggle.setAttribute("aria-label", t(open ? "收起菜单" : "展开菜单"));
+    };
     toggle.addEventListener("click", function () {
       var open = head.classList.toggle("nav-open");
       toggle.setAttribute("aria-expanded", open ? "true" : "false");
-      toggle.setAttribute("aria-label", open ? "收起菜单" : "展开菜单");
+      syncToggle();
     });
+    document.addEventListener("frameflow:lang", syncToggle);
     document.getElementById("siteNav").addEventListener("click", function (e) {
       if (e.target.tagName === "A") {
         head.classList.remove("nav-open");
         toggle.setAttribute("aria-expanded", "false");
+        syncToggle();
       }
     });
   }
@@ -1675,5 +1827,6 @@ section { scroll-margin-top: 84px; }
   }
 })();
 </script>
+<script src="assets/i18n.js"></script>
 </body>
 </html>
